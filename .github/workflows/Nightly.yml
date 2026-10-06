@@ -23,7 +23,7 @@ env:
 jobs:
   shaders:
     # Don't run the schedule on forks.
-    if: ${{ github.repository == 'wagrenier/MioPan' }}
+    if: ${{ github.repository == 'Mikompilation/MioPan' }}
     runs-on: windows-latest
     outputs:
       sha: ${{ steps.built.outputs.sha }}
@@ -77,7 +77,7 @@ jobs:
   build:
     needs: shaders
     # Don't run the schedule on forks.
-    if: ${{ github.repository == 'wagrenier/MioPan' }}
+    if: ${{ github.repository == 'Mikompilation/MioPan' }}
     runs-on: ${{ matrix.sys.os }}
     strategy:
       fail-fast: false
@@ -162,7 +162,7 @@ jobs:
   publish:
     needs: [shaders, build]
     # Publish whatever platforms succeeded.
-    if: ${{ !cancelled() && needs.build.result != 'skipped' && github.repository == 'wagrenier/MioPan' }}
+    if: ${{ !cancelled() && needs.build.result != 'skipped' && github.repository == 'Mikompilation/MioPan' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
