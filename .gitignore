@@ -427,3 +427,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# MioPan: the generic rules above also match project sources
+!zero_rom/zero2np/src/debug/
+!extern/ffmpeg/bin/*
