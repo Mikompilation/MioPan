@@ -1,0 +1,182 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_MikuPanUniforms
+{
+    float4x4 model;
+    float4x4 view;
+    float4x4 projection;
+    float4x4 mvp;
+    float4x4 modelView;
+    float4x4 viewProj;
+    float4x4 uShadowMatrix;
+    float4x4 uWorldClipView;
+    float3x3 normalMatrix;
+    float3x3 viewNormalMatrix;
+    float4 uColor;
+    float4 uFog;
+    float4 uFogColor;
+    float4 uShadowSize;
+    float4 uTextureSize;
+    float4 uOutputSize;
+    float4 uPhotoNegativeContentRect;
+    float4 uPhotoNegativeRect;
+    float4 uFramebufferUvOffset;
+    float4 uFramebufferUvScale;
+    float4 uFramebufferContentUvMax;
+    float4 uRenderSize;
+    float4 uParams0;
+    float4 uCrt0;
+    float4 uCrt1;
+    float4 uCrt2;
+    float4 uCrt3;
+    float4 uParams1;
+    float4 uPs2Feedback;
+    float4 uScreenNegative;
+    int4 uFlags0;
+    int4 uFlags1;
+    int4 uFlags2;
+    int4 uPadFlags;
+    float4 uHdrOutput;
+    float4 uAlphaTest;
+    float4 uShadowFilter;
+    float4 uFinderMask;
+    float4 uFinderMask2;
+    float4 uAlphaSharpen;
+    float4 uClipZ;
+};
+
+struct type_LightBlock
+{
+    float4 uAmbient;
+    int4 uParCount;
+    float4 uParDir[3];
+    float4 uParDiffuse[3];
+    float4 uParSpecular[3];
+    float4 uParHalfway[3];
+    int4 uPointCount;
+    float4 uPointPos[3];
+    float4 uPointDiffuse[3];
+    float4 uPointSpecular[3];
+    float4 uPointPower[3];
+    int4 uSpotCount;
+    float4 uSpotPos[3];
+    float4 uSpotDir[3];
+    float4 uSpotDiffuse[3];
+    float4 uSpotSpecular[3];
+    float4 uSpotPower[3];
+    float4 uSpotIntens[3];
+    float4 uMaterialAlpha;
+};
+
+struct type_MaterialBlock
+{
+    float4 uMatAmbient;
+    float4 uMatDiffuse;
+    float4 uMatSpecular;
+    float4 uMatEmission;
+};
+
+struct type_StructuredBuffer_v4float
+{
+    float4 _m0[1];
+};
+
+struct main0_out
+{
+    float2 out_var_TEXCOORD0 [[user(locn0)]];
+    float4 out_var_TEXCOORD1 [[user(locn1)]];
+    float4 out_var_TEXCOORD2 [[user(locn2)]];
+    float4 out_var_TEXCOORD3 [[user(locn3)]];
+    float3 out_var_TEXCOORD4 [[user(locn4)]];
+    float3 out_var_TEXCOORD5 [[user(locn5)]];
+    float4 gl_Position [[position]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[attribute(0)]];
+    float2 in_var_TEXCOORD1 [[attribute(1)]];
+};
+
+vertex main0_out main0(main0_in in [[stage_in]], constant type_MikuPanUniforms& MikuPanUniforms [[buffer(0)]], constant type_LightBlock& LightBlock [[buffer(1)]], const device type_StructuredBuffer_v4float& uPrepassBuffer [[buffer(2)]])
+{
+    main0_out out = {};
+    uint _84 = uint(in.in_var_TEXCOORD0.x + 0.5) * 2u;
+    float4 _95 = MikuPanUniforms.view * uPrepassBuffer._m0[_84];
+    float4 _110 = float4(fast::normalize(uPrepassBuffer._m0[(uint(in.in_var_TEXCOORD0.y + 0.5) * 2u) + 1u].xyz * float3x3(float4(MikuPanUniforms.view[0][0], MikuPanUniforms.view[1][0], MikuPanUniforms.view[2][0], MikuPanUniforms.view[3][0]).xyz, float4(MikuPanUniforms.view[0][1], MikuPanUniforms.view[1][1], MikuPanUniforms.view[2][1], MikuPanUniforms.view[3][1]).xyz, float4(MikuPanUniforms.view[0][2], MikuPanUniforms.view[1][2], MikuPanUniforms.view[2][2], MikuPanUniforms.view[3][2]).xyz)), 1.0);
+    float3 _257;
+    if (MikuPanUniforms.uFlags0.w == 1)
+    {
+        float3 _118 = fast::normalize(_110.xyz);
+        float3 _123;
+        _123 = LightBlock.uAmbient.xyz;
+        for (int _126 = 0; _126 < LightBlock.uParCount.x; )
+        {
+            _123 = (_123 + (LightBlock.uParDiffuse[_126].xyz * precise::max(dot(_118, LightBlock.uParDir[_126].xyz), 0.0))) + (LightBlock.uParSpecular[_126].xyz * powr(precise::max(dot(_118, LightBlock.uParHalfway[_126].xyz), 0.0), 4.0));
+            _126++;
+            continue;
+        }
+        float3 _153;
+        _153 = _123;
+        float3 _154;
+        for (int _156 = 0; _156 < LightBlock.uPointCount.x; _153 = _154, _156++)
+        {
+            float3 _167 = LightBlock.uPointPos[_156].xyz - _95.xyz;
+            float _168 = dot(_167, _167);
+            if (_168 <= 0.0)
+            {
+                _154 = _153;
+                continue;
+            }
+            float _172 = rsqrt(_168);
+            float _180 = precise::min((precise::max(dot(_118, _167 * _172), 0.0) * LightBlock.uPointPower[_156].x) * _172, 1.0);
+            float _186 = _180 * _180;
+            float _187 = _186 * _186;
+            _154 = (_153 + (LightBlock.uPointDiffuse[_156].xyz * _180)) + (LightBlock.uPointSpecular[_156].xyz * (_187 * _187));
+        }
+        float3 _195;
+        _195 = _153;
+        float3 _196;
+        for (int _198 = 0; _198 < LightBlock.uSpotCount.x; _195 = _196, _198++)
+        {
+            float3 _209 = LightBlock.uSpotPos[_198].xyz - _95.xyz;
+            float _210 = dot(_209, _209);
+            if (_210 <= 0.0)
+            {
+                _196 = _195;
+                continue;
+            }
+            float _214 = rsqrt(_210);
+            float3 _215 = _209 * _214;
+            float _222 = precise::max(-dot(_215, fast::normalize(LightBlock.uSpotDir[_198].xyz)), 0.0);
+            float _223 = _222 * _222;
+            float _231 = fast::clamp(precise::max(_223 - LightBlock.uSpotIntens[_198].x, 0.0) * LightBlock.uSpotIntens[_198].y, 0.0, 1.0);
+            if (_223 <= LightBlock.uSpotIntens[_198].x)
+            {
+                _196 = _195;
+                continue;
+            }
+            float _241 = precise::min((precise::max(dot(_118, _215), 0.0) * LightBlock.uSpotPower[_198].x) * _214, 1.0);
+            float _248 = _241 * _241;
+            float _249 = _248 * _248;
+            _196 = (_195 + ((LightBlock.uSpotDiffuse[_198].xyz * _241) * _231)) + ((LightBlock.uSpotSpecular[_198].xyz * (_249 * _249)) * _231);
+        }
+        _257 = _195;
+    }
+    else
+    {
+        _257 = float3(0.0);
+    }
+    out.gl_Position = MikuPanUniforms.projection * _95;
+    out.out_var_TEXCOORD0 = in.in_var_TEXCOORD1;
+    out.out_var_TEXCOORD1 = _110;
+    out.out_var_TEXCOORD2 = _95;
+    out.out_var_TEXCOORD3 = uPrepassBuffer._m0[_84];
+    out.out_var_TEXCOORD4 = float3(0.0);
+    out.out_var_TEXCOORD5 = _257;
+    return out;
+}
+

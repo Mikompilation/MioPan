@@ -1,0 +1,245 @@
+name: Nightly
+
+on:
+  schedule:
+    # 06:00 UTC every day — builds the latest commit on main.
+    - cron: '0 6 * * *'
+  workflow_dispatch:        # allow manual nightly runs too
+    inputs:
+      ref:
+        description: "Branch, tag or commit to build"
+        required: false
+        default: main
+        type: string
+
+# Only one nightly at a time; let an in-flight build finish rather than waste it.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  shaders:
+    # Don't run the schedule on forks.
+    if: ${{ github.repository == 'wagrenier/MioPan' }}
+    runs-on: windows-latest
+    outputs:
+      sha: ${{ steps.built.outputs.sha }}
+
+    steps:
+      # Scheduled runs have no inputs, so the fallback keeps them on main.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          fetch-depth: 0
+
+      # Pin the exact commit so every platform builds (and the tag points at) the same thing.
+      - name: Resolve commit
+        id: built
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up MSYS2 (Windows)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      # Uses the prebuilt CLI committed under extern/shadercross/windows/.
+      # The checked-in bytecode is wiped first so a stale file can't slip through.
+      - name: Build shaders (Windows / MinGW)
+        shell: msys2 {0}
+        run: |
+          git config --global --add safe.directory '*'
+          cmake -E remove_directory resources/shaders/dxil
+          cmake -E remove_directory resources/shaders/msl
+          cmake -E remove_directory resources/shaders/spirv
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DMIKUPAN_COMPILE_SHADERS=ON
+          cmake --build build --target compile_shaders
+
+      - name: Upload compiled shaders
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-shaders
+          if-no-files-found: error
+          path: |
+            resources/shaders/dxil
+            resources/shaders/msl
+            resources/shaders/spirv
+
+  build:
+    needs: shaders
+    # Don't run the schedule on forks.
+    if: ${{ github.repository == 'wagrenier/MioPan' }}
+    runs-on: ${{ matrix.sys.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        sys:
+          - { os: windows-latest, shell: pwsh, name: windows }
+          - { os: ubuntu-latest,  shell: bash, name: linux   }
+    defaults:
+      run:
+        shell: ${{ matrix.sys.shell }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.shaders.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Download compiled shaders
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-shaders
+          path: resources/shaders
+
+      # GCC-only codebase — Windows builds with MinGW via MSYS2, not MSVC.
+      - name: Set up MSYS2 (Windows)
+        if: ${{ matrix.sys.os == 'windows-latest' }}
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Install Dependencies (Linux)
+        if: ${{ matrix.sys.os == 'ubuntu-latest' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip build-essential git make pkg-config cmake ninja-build \
+            libasound2-dev libpulse-dev libaudio-dev libfribidi-dev libjack-dev libsndio-dev \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libdrm-dev libgbm-dev libgl1-mesa-dev libglu1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libusb-1.0-0-dev
+
+      - name: Build (Windows / MinGW)
+        if: ${{ matrix.sys.os == 'windows-latest' }}
+        shell: msys2 {0}
+        run: |
+          git config --global --add safe.directory '*'
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DMIKUPAN_COMPILE_SHADERS=OFF
+          cmake --build build --target MioPan
+
+      - name: Build (Linux)
+        if: ${{ matrix.sys.os == 'ubuntu-latest' }}
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DMIKUPAN_COMPILE_SHADERS=OFF
+          cmake --build build --target MioPan
+
+      - name: Zip Windows App
+        if: ${{ matrix.sys.os == 'windows-latest' }}
+        working-directory: build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path MioPan/* -DestinationPath MioPan_${{ matrix.sys.name }}_nightly.zip
+
+      - name: Zip Linux App
+        if: ${{ matrix.sys.os == 'ubuntu-latest' }}
+        working-directory: build
+        run: |
+          zip -r MioPan_${{ matrix.sys.name }}_nightly.zip MioPan/*
+
+      - name: Upload nightly zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.sys.name }}
+          if-no-files-found: error
+          path: build/MioPan_${{ matrix.sys.name }}_nightly.zip
+
+  publish:
+    needs: [shaders, build]
+    # Publish whatever platforms succeeded.
+    if: ${{ !cancelled() && needs.build.result != 'skipped' && github.repository == 'wagrenier/MioPan' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download nightly zips
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: dist
+
+      # GitHub resets an asset's download_count when it is replaced, so before
+      # clobbering we add each old asset's count to a running total stored in a
+      # hidden marker in the release body, and carry it forward every night.
+      - name: Publish nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: nightly
+          SHA: ${{ needs.shaders.outputs.sha }}
+          REF: ${{ inputs.ref || 'main' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No nightly zips to publish"
+            exit 1
+          fi
+
+          # Move the rolling tag to the commit that was built (assets are left untouched).
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
+          fi
+
+          carried='{}'
+          if release=$(gh api "repos/$REPO/releases/tags/$TAG" 2>/dev/null); then
+            exists=true
+            prev=$(jq -r '.body // ""' <<<"$release" \
+              | sed -n 's/.*<!-- nightly-downloads: \(.*\) -->.*/\1/p' | head -n1)
+            if [ -n "$prev" ] && jq -e 'type == "object"' >/dev/null 2>&1 <<<"$prev"; then
+              carried=$prev
+            fi
+            names=$(printf '%s\n' "${files[@]##*/}" | jq -R . | jq -sc .)
+            # Only the assets about to be replaced lose their counts.
+            carried=$(jq -c --argjson names "$names" --argjson c "$carried" '
+              reduce (.assets[] | select(.name as $n | $names | index($n))) as $a
+                ($c; .[$a.name] = ((.[$a.name] // 0) + $a.download_count))' <<<"$release")
+          else
+            exists=false
+          fi
+
+          total=$(jq '[.[]] | add // 0' <<<"$carried")
+          {
+            echo "Automated nightly build of \`$REF\`."
+            echo
+            echo "Commit: $SHA"
+            echo
+            echo "> Pre-release / unstable — built every day at 06:00 UTC."
+            echo
+            echo "**Downloads of previous nightlies:** $total"
+            echo
+            echo "| Asset | Downloads |"
+            echo "| --- | --- |"
+            jq -r 'to_entries[] | "| `\(.key)` | \(.value) |"' <<<"$carried"
+            echo
+            echo "<!-- nightly-downloads: $carried -->"
+          } > notes.md
+
+          if [ "$exists" = true ]; then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"
+            gh release edit "$TAG" --repo "$REPO" --title "Nightly Build" \
+              --notes-file notes.md --prerelease --latest=false
+          else
+            gh release create "$TAG" "${files[@]}" --repo "$REPO" --verify-tag \
+              --title "Nightly Build" --notes-file notes.md --prerelease --latest=false
+          fi
