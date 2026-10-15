@@ -77,6 +77,10 @@
 #define ABORT_POLL_US       2000
 #define ABORT_WAIT_US       300000
 
+/* PORT: how often StreamReadThread() looks to see whether the voice thread it
+ * has just started has taken its first packet yet. */
+#define HANDOFF_POLL_US     100
+
 STREAM_WRK stream_wrk[STREAM_WRK_NUM];                                       /* data 10   */
 static int sema_Voice_array[STREAM_WRK_NUM];                                 /* bss 1d00  */
 
@@ -712,7 +716,29 @@ static void StreamReadThread(void)
             if (rb_diff > stp->rb_voice_diff)
             {
                 first_read = 0;
-                StartThread(stp->voice_th_idx, 0);
+
+                /* PORT: the read below fills the ring to all RB_NUM slots, so
+                 * it leaves rb_read wrapped round onto rb_voice -- and
+                 * RingBufCalcDiff() reads read == voice as an EMPTY ring.  The
+                 * IOP never saw that state: the voice thread runs at
+                 * PRI_STREAM_VOICE, above this one's PRI_STREAM_READ, so
+                 * StartThread() handed it the CPU and it had taken its first two
+                 * packets long before this read came back from the drive.
+                 * Priority is only a hint here.  A voice thread still waiting
+                 * for the BKL leaves rb_voice at 0, the next pass finds a
+                 * "free" ring, and the reader laps it, writing over all 64
+                 * slots before one of them is played.  The stream then starts
+                 * 5.2 s into the file at 44.1 kHz, which is why a scene's sound
+                 * ran that far ahead of its picture.
+                 *
+                 * So do what the scheduler did and let the voice thread take
+                 * its first packet before going on.  Only wait for a thread that
+                 * actually started, and give up on a stop. */
+                if (StartThread(stp->voice_th_idx, 0) == 0)
+                {
+                    while (stp->rb_voice == 0 && !stp->stop && !stp->voice_end)
+                        DelayThread(HANDOFF_POLL_US);
+                }
             }
         }
         else if (rb_diff >= stp->rb_num - RB_1READ_SLOTS)

@@ -479,8 +479,9 @@ Not modelled: **thread priority**. The ROM leans on it (`PRI_STREAM_VOICE` 11
 must outrun `PRI_MAIN` 19). It is passed to SDL as a hint only — suspect this
 first if audio stutters once there is audio.
 
-**A thread that has signalled completion is not yet dormant.** The one place
-the unmodelled priority actually breaks correctness, not just smoothness.
+**A thread that has signalled completion is not yet dormant.** One of two places
+the unmodelled priority breaks correctness, not just smoothness. The other is the
+stream hand-off below.
 `iopRead()` ends with `SignalSema(read_end_sema); SignalSema(sema_CD);
 ExitThread();` — on the IOP it runs at `PRI_IOP_READ`, above its waiters, so it
 always reached `ExitThread()` (dormant) before anyone could relaunch it. With
@@ -507,6 +508,21 @@ since that is where the IOP used to be parked.
 `StartThread()` still gives a busy-looking thread a 10 ms grace period before
 answering "already running" — the ring-buffer reader and the two stream threads
 are relaunched the same way.
+
+**A higher-priority thread you start does not run first.** `StreamReadThread()`
+starts the voice thread on the read that fills the ring to all 64 slots, which
+wraps `rb_read` back onto `rb_voice`, and `RingBufCalcDiff()` reads equal
+indices as an *empty* ring. On the IOP the voice thread (`PRI_STREAM_VOICE` 11)
+preempted the reader (`PRI_STREAM_READ` 15) and had taken two packets before the
+drive answered. Here it can still be waiting for the BKL, so the reader laps the
+ring and overwrites all 64 slots before any is played. The stream then starts
+64 slots in, 5.2 s at 44.1 kHz, so a scene's audio runs that far ahead of its
+FOD clock and a voice line ends 5 s early. It is intermittent: one of ten
+naturally-ended wrapping streams across four logs, and every time once the voice
+thread is held off the lock for 20 ms. The port's reader now polls (`DelayThread`) after
+that `StartThread()` until `rb_voice` moves, a `PORT:` block. Any other place
+where a caller depends on a higher-priority thread it starts or wakes doing its
+first steps before the caller continues needs the same treatment.
 
 **Reading the release log:** `VoiceThreadExit()` and `ReadThreadExit()` each
 raise their own bit and whichever finishes *second* calls `StreamReleaseSub()`.
@@ -869,16 +885,26 @@ far enough to pick the first thing to look at:
 | every interior sounds anechoic | reverb: `SD_C_EFFECT_ENABLE`, EVOL, or the `SD_S_VMIXEL` send |
 | a metallic ring that never decays | reverb IIR: a wrong `vIIR`/`vWALL`, or taps outside the work area |
 | flanging / "helicopter", or the same audio twice | **was** per-voice audio streams drifting; the mixer rules it out, so look elsewhere |
+| a stream starts seconds in: scene audio ahead of the picture, a voice line ending ~5 s early | the reader lapped the ring at the voice-thread hand-off; see "A higher-priority thread you start does not run first" |
 
 But do not stop at the adjective. Two mis-attributions in one session came from
 reasoning forward from a description; both were settled in one run by a probe.
 With the tracing gone the probe has to be written each time -- the shapes worth
 reaching for are a per-voice line keyed on `nax` jumping backwards (printing a
 block `peak`, so "running but silent" is obvious) and a wet-return peak in
-`MixReverb()`. There is also a `TEMP PROBE` stall dump in
-`stream_auto.c`'s `StreamAutoIsPreload()` wait branch printing every play slot's
-`disable` / `IsUse` / `ST_STREAM_*` and the wait-queue head. That dump is what
-identified the `WAIT_END` deadlock; read it before theorising.
+`MixReverb()`. The `WAIT_END` deadlock was identified by a stall dump in
+`stream_auto.c`'s `StreamAutoIsPreload()` wait branch, printing every play slot's
+`disable` / `IsUse` / `ST_STREAM_*` and the wait-queue head. That dump has since
+been removed. Its helper, `MioPan_SndStreamStatusName()` in `snd_stream.c`, is
+still there if you need to put it back.
+
+Old logs can answer timing questions without a run. A stream's true length is in
+`IMG_BD.BIN`: the body is the `.hxd`'s file number + 1, with `cd_dat_tbl`'s
+`size` bytes at 16 bytes and 28 samples per block per channel, played at the HXD
+`pitch` (0x1000 = 48 kHz). Compare that length with key-on (`id[N]>>> channel`) to
+`PRESTREAM VOICE END RELEASE N` on a stream that ended by itself (no
+`Voice Thread Already Started` just before). That comparison found the hand-off
+lap above, from logs alone.
 
 ## Whole-module verification
 
