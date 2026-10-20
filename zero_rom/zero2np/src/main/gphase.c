@@ -673,3 +673,32 @@ void SetNextGPhase(GPHASE_ID_ENUM id)
         }
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// PORT-ONLY: read access for the host overlay.  See gphase.h.
+
+int GPhaseIsActive(GPHASE_ID_ENUM id)
+{
+    if ((int)id < 0 || (int)id >= (int)(sizeof(gphase_tbl) / sizeof(gphase_tbl[0])))
+    {
+        return 0;
+    }
+
+    return gphase_sys.now[gphase_tbl[id].layer] == id;
+}
+
+// The overlay runs from after_super(), inside DoJobPhase(0): a transition a
+// phase queued this frame is already in next[] there, and one the overlay
+// queued on top of it would silently replace it.
+int GPhaseIsSettled(void)
+{
+    for (int i = 0; i < layer_num; i++)
+    {
+        if (gphase_sys.next[i] != gphase_sys.now[i])
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}

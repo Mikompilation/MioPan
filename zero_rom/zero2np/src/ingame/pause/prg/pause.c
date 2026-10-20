@@ -34,6 +34,7 @@
 #include "../../../system/eeiop/stream_auto.h"      // StreamAutoAllPause
 #include "../../../system/os/system.h"              // SystemBankPlay / SND_3D_SET
 #include "../../../system/pad/pad.h"                // paddat / pad / VibrateRequest
+#include "../../../miopan/miopan_config.h"          // MioPan_ConfigDebugMenuEnabled (port)
 
 /* Rows of the pause menu: continue / return to title / vibration toggle. */
 #define PAUSE_MENU_COUNT 3
@@ -157,9 +158,14 @@ static int PausePad(void)
         /* key_now[12] is pad[0].cnt[12], the START hold counter: the button
          * that opened the pause screen also closes it. */
         ret = 1;                                                        /* 248 */
-    } else if (*key_now[0xd] == 1) {                                    /* 252 */
+    } else if (*key_now[0xd] == 1 &&
+               MioPan_ConfigDebugMenuEnabled() != 0) {                  /* 252 */
         /* key_now[13] is SELECT -- the same debug-menu shortcut ingame.c
-         * honours during normal play. */
+         * honours during normal play.
+         *
+         * PORT DEVIATION: gated on [developer] debug_menu like that one (see
+         * one_Story_Normal() in ingame.c for why).  This is the screen's last
+         * test, so with the setting off SELECT simply does nothing here. */
         ret = 3;                                                        /* 253 */
     }
 
