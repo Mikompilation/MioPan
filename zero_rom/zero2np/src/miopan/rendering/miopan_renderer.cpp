@@ -3689,6 +3689,10 @@ void PumpEvents()
     {
         MioPanUi::ProcessEvent(&event);
 
+        /* Mouse buttons, the wheel and finder mouse look.  Every event, not
+         * just the mouse ones: focus loss is what lets go of held buttons. */
+        MioPan_InputProcessEvent(&event);
+
         if (event.type == SDL_EVENT_QUIT)
         {
             std::exit(0);
@@ -3742,6 +3746,12 @@ void PumpEvents()
             }
         }
     }
+
+    /* After the batch, so the capture decision already reflects an F1 or a
+     * focus change this pump delivered.  Here rather than in the pad update
+     * because this is where the window is, and because an overlay that opens
+     * should get its cursor back on this frame, not on the next game tick. */
+    MioPan_InputUpdateMouse(g_window);
 }
 
 void InitDefaultUniforms()

@@ -8,8 +8,11 @@
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_log.h>
+#include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_timer.h>
+#include <SDL3/SDL_touch.h>
 
 #include <string.h>
 
@@ -96,6 +99,64 @@ static int s_suppressed;
 static char s_preferred_guid[MIOPAN_GAMEPAD_GUID_LEN];
 static int  s_devices_dirty = 1;
 
+// ---------------------------------------------------------------------------
+//  Mouse state.  See the header for the shape of it.
+// ---------------------------------------------------------------------------
+
+// SDL numbers mouse buttons from 1 and its button mask covers 32 of them.
+#define MIOPAN_MOUSE_BUTTON_MAX 32
+
+// Notches banked per wheel direction.  A notch costs two pad updates (press,
+// release), so a fast flick of the wheel would otherwise queue presses that
+// play out for a second after the hand has stopped.
+#define MIOPAN_WHEEL_QUEUE_MAX 4
+
+// How long the free cursor may sit still before it is hidden.
+#define MIOPAN_CURSOR_IDLE_MS 3000
+
+// Settings.  Defaults are mirrored in MioPan_InputResetMouseSettings().
+static int   s_mouse_look = 1;
+static float s_mouse_sensitivity = 1.0f;
+static int   s_mouse_invert_x;
+static int   s_mouse_invert_y;
+
+// The game's requests, for the update now running and the one before.  Both
+// count, so the capture neither drops in the gap between an update starting
+// and the game asking again, nor outlives the finder by more than an update.
+static int s_look_request;
+static int s_look_request_prev;
+static int s_captured;
+static int s_capture_failure_logged;
+
+// Relative motion since the last update, and the last update's share of it.
+static float s_motion_x;
+static float s_motion_y;
+static float s_look_x;
+static float s_look_y;
+
+// What the overlay last reported.
+static int s_ui_wants_mouse;
+static int s_pointer_over_ui;
+
+// Mouse buttons, one bit per SDL button (SDL_BUTTON_MASK).  `down` is what is
+// physically held and was pressed where the game may have it; `latch` keeps a
+// click whose press and release land between two updates from being missed;
+// `held` is what the current update reads.
+static Uint32 s_button_down;
+static Uint32 s_button_latch;
+static Uint32 s_button_held;
+
+// Wheel: fractional travel (x, y) from high-resolution wheels and touchpads,
+// whole notches waiting per direction, and which direction is pressed now.
+static float s_wheel_travel[2];
+static int   s_wheel_queue[4];
+static int   s_wheel_active[4];
+
+// SDL_GetTicks() of the last real mouse movement, button or wheel event.  0
+// reads as long idle, which is what both a fresh start and leaving the finder
+// want: the cursor stays out of sight until the mouse is actually moved.
+static Uint64 s_last_mouse_activity;
+
 static void EnsureBindings(void)
 {
     if (s_bindings_ready == 0)
@@ -152,6 +213,27 @@ static int SourceMagnitude(const MioPan_InputSource *src, const bool *keys)
             return 0;
         }
         return value > MIOPAN_SRC_FULL ? MIOPAN_SRC_FULL : value;
+
+    // Both answer the state latched at the last update rather than SDL's live
+    // state, so a click shorter than one update still reads as a press and a
+    // button pressed on the overlay never reaches the game at all.
+    case MIOPAN_SRC_MOUSE_BUTTON:
+        if (src->code < 1 || src->code > MIOPAN_MOUSE_BUTTON_MAX)
+        {
+            return 0;
+        }
+        return (s_button_held & SDL_BUTTON_MASK(src->code)) != 0
+                   ? MIOPAN_SRC_FULL
+                   : 0;
+
+    case MIOPAN_SRC_MOUSE_WHEEL:
+        if (src->code < MIOPAN_WHEEL_UP || src->code > MIOPAN_WHEEL_RIGHT)
+        {
+            return 0;
+        }
+        return s_wheel_active[src->code - MIOPAN_WHEEL_UP] != 0
+                   ? MIOPAN_SRC_FULL
+                   : 0;
 
     default:
         return 0;
@@ -402,6 +484,131 @@ static void AdvanceStickRamps(void)
     }
 }
 
+// ---------------------------------------------------------------------------
+//  Mouse
+// ---------------------------------------------------------------------------
+
+// Whether a press or a notch arriving now belongs to the game.  While captured
+// it always does -- the overlay has been told to ignore the mouse -- and while
+// free only if the overlay is neither holding the mouse nor under the cursor.
+static int GameOwnsMouse(void)
+{
+    return s_captured != 0 ||
+           (s_ui_wants_mouse == 0 && s_pointer_over_ui == 0);
+}
+
+static void NoteMouseActivity(void)
+{
+    s_last_mouse_activity = SDL_GetTicks();
+    if (s_last_mouse_activity == 0)
+    {
+        s_last_mouse_activity = 1;
+    }
+}
+
+// Drop everything a press or a notch has queued up.  Physically held buttons
+// are let go of too: their release may never be seen (focus lost mid-press),
+// and a button the game still thinks is down is worse than one press lost.
+static void ClearMouseButtons(void)
+{
+    s_button_down = 0;
+    s_button_latch = 0;
+    s_button_held = 0;
+    memset(s_wheel_travel, 0, sizeof(s_wheel_travel));
+    memset(s_wheel_queue, 0, sizeof(s_wheel_queue));
+    memset(s_wheel_active, 0, sizeof(s_wheel_active));
+}
+
+static void BankWheelNotch(int dir)
+{
+    int *queue = &s_wheel_queue[dir - MIOPAN_WHEEL_UP];
+    if (*queue < MIOPAN_WHEEL_QUEUE_MAX)
+    {
+        (*queue)++;
+    }
+}
+
+// Whole notches out of a wheel event.  High-resolution wheels and touchpads
+// report fractions, so travel is carried over until it adds up to one.
+static void QueueWheel(const SDL_MouseWheelEvent *wheel)
+{
+    float x = wheel->x;
+    float y = wheel->y;
+
+    // A flipped ("natural") wheel reports the content's direction; the
+    // binding names the finger's.
+    if (wheel->direction == SDL_MOUSEWHEEL_FLIPPED)
+    {
+        x = -x;
+        y = -y;
+    }
+
+    s_wheel_travel[0] += x;
+    s_wheel_travel[1] += y;
+
+    while (s_wheel_travel[1] >= 1.0f)
+    {
+        BankWheelNotch(MIOPAN_WHEEL_UP);
+        s_wheel_travel[1] -= 1.0f;
+    }
+    while (s_wheel_travel[1] <= -1.0f)
+    {
+        BankWheelNotch(MIOPAN_WHEEL_DOWN);
+        s_wheel_travel[1] += 1.0f;
+    }
+    while (s_wheel_travel[0] >= 1.0f)
+    {
+        BankWheelNotch(MIOPAN_WHEEL_RIGHT);
+        s_wheel_travel[0] -= 1.0f;
+    }
+    while (s_wheel_travel[0] <= -1.0f)
+    {
+        BankWheelNotch(MIOPAN_WHEEL_LEFT);
+        s_wheel_travel[0] += 1.0f;
+    }
+}
+
+// Once per pad update: hand over the motion gathered since the last one, roll
+// the request window, latch the buttons, and step the wheel.
+static void AdvanceMouse(void)
+{
+    int d;
+
+    if (s_captured != 0)
+    {
+        s_look_x = s_motion_x;
+        s_look_y = s_motion_y;
+    }
+    else
+    {
+        s_look_x = 0.0f;
+        s_look_y = 0.0f;
+    }
+    s_motion_x = 0.0f;
+    s_motion_y = 0.0f;
+
+    s_look_request_prev = s_look_request;
+    s_look_request = 0;
+
+    s_button_held = s_button_down | s_button_latch;
+    s_button_latch = 0;
+
+    // Press for one update, release for the next, so two notches in a row are
+    // two edges rather than one long hold.
+    for (d = 0; d < 4; d++)
+    {
+        if (s_wheel_active[d] != 0)
+        {
+            s_wheel_active[d] = 0;
+        }
+        else if (s_wheel_queue[d] > 0)
+        {
+            s_wheel_queue[d]--;
+            s_wheel_active[d] = 1;
+        }
+    }
+}
+
 extern "C" {
 
 int MioPan_InputInit(void)
@@ -432,6 +639,7 @@ void MioPan_InputUpdate(void)
     }
     SDL_PumpEvents();
     SelectGamepad();
+    AdvanceMouse();
     AdvanceStickRamps();
 }
 
@@ -651,9 +859,11 @@ void MioPan_InputSetSuppressed(int suppressed)
 
     // Drop whatever deflection the digital keys had built up, so releasing
     // suppression does not hand the game a stick that is still pushed over.
+    // The same for a click or a notch banked while the player was choosing.
     if (s_suppressed != 0)
     {
         memset(s_stick_ramp, 0, sizeof(s_stick_ramp));
+        ClearMouseButtons();
     }
 }
 
@@ -681,6 +891,18 @@ int MioPan_InputBindingsAreDefault(void)
 //  Text form
 // ---------------------------------------------------------------------------
 
+// SDL has no names for these, so the file uses its own.  Indexed by SDL button
+// number and by MIOPAN_WHEEL_*; slot 0 is unused in both.
+static const char *const s_mouse_button_names[] = {
+    0, "left", "middle", "right", "x1", "x2"
+};
+static const char *const s_wheel_names[] = {
+    0, "up", "down", "left", "right"
+};
+
+#define MIOPAN_NAMED_MOUSE_BUTTONS \
+    ((int)(sizeof(s_mouse_button_names) / sizeof(s_mouse_button_names[0])))
+
 int MioPan_InputSourceToString(const MioPan_InputSource *src, char *buf, int len)
 {
     const char *name;
@@ -694,6 +916,33 @@ int MioPan_InputSourceToString(const MioPan_InputSource *src, char *buf, int len
 
     switch (src->kind)
     {
+    case MIOPAN_SRC_MOUSE_BUTTON:
+        if (src->code >= 1 && src->code < MIOPAN_NAMED_MOUSE_BUTTONS)
+        {
+            written = SDL_snprintf(buf, (size_t)len, "mouse:%s",
+                                   s_mouse_button_names[src->code]);
+        }
+        else if (src->code >= 1 && src->code <= MIOPAN_MOUSE_BUTTON_MAX)
+        {
+            written = SDL_snprintf(buf, (size_t)len, "mouse:%d", src->code);
+        }
+        else
+        {
+            buf[0] = 0;
+            return 0;
+        }
+        return (written > 0 && written < len) ? written : 0;
+
+    case MIOPAN_SRC_MOUSE_WHEEL:
+        if (src->code < MIOPAN_WHEEL_UP || src->code > MIOPAN_WHEEL_RIGHT)
+        {
+            buf[0] = 0;
+            return 0;
+        }
+        written = SDL_snprintf(buf, (size_t)len, "wheel:%s",
+                               s_wheel_names[src->code]);
+        return (written > 0 && written < len) ? written : 0;
+
     case MIOPAN_SRC_KEY:
         name = SDL_GetScancodeName((SDL_Scancode)src->code);
         prefix = "key:";
@@ -748,6 +997,58 @@ int MioPan_InputSourceFromString(const char *text, MioPan_InputSource *out)
     }
 
     memset(&parsed, 0, sizeof(parsed));
+
+    // The mouse has no threshold and no SDL name lookup, so it is settled
+    // here rather than in the shared path below.
+    if (SDL_strncmp(text, "mouse:", 6) == 0)
+    {
+        int b;
+
+        body = text + 6;
+        for (b = 1; b < MIOPAN_NAMED_MOUSE_BUTTONS; b++)
+        {
+            if (SDL_strcasecmp(body, s_mouse_button_names[b]) == 0)
+            {
+                break;
+            }
+        }
+        if (b == MIOPAN_NAMED_MOUSE_BUTTONS)
+        {
+            // "mouse:<n>", for a button past the five SDL names.
+            char *end = 0;
+            long  number = SDL_strtol(body, &end, 10);
+            if (body[0] < '0' || body[0] > '9' || end == 0 || *end != 0 ||
+                number < 1 || number > MIOPAN_MOUSE_BUTTON_MAX)
+            {
+                return 0;
+            }
+            b = (int)number;
+        }
+        out->kind = MIOPAN_SRC_MOUSE_BUTTON;
+        out->code = b;
+        out->dir = 0;
+        out->threshold = 0;
+        return 1;
+    }
+
+    if (SDL_strncmp(text, "wheel:", 6) == 0)
+    {
+        int d;
+
+        body = text + 6;
+        for (d = MIOPAN_WHEEL_UP; d <= MIOPAN_WHEEL_RIGHT; d++)
+        {
+            if (SDL_strcasecmp(body, s_wheel_names[d]) == 0)
+            {
+                out->kind = MIOPAN_SRC_MOUSE_WHEEL;
+                out->code = d;
+                out->dir = 0;
+                out->threshold = 0;
+                return 1;
+            }
+        }
+        return 0;
+    }
 
     if (SDL_strncmp(text, "key:", 4) == 0)
     {
@@ -852,6 +1153,279 @@ int MioPan_InputSourceFromString(const char *text, MioPan_InputSource *out)
 
     *out = parsed;
     return 1;
+}
+
+// ---------------------------------------------------------------------------
+//  Mouse
+// ---------------------------------------------------------------------------
+
+void MioPan_InputProcessEvent(const SDL_Event *event)
+{
+    Uint32 mask;
+
+    if (event == 0)
+    {
+        return;
+    }
+
+    switch (event->type)
+    {
+    case SDL_EVENT_MOUSE_MOTION:
+        // A touchscreen's synthesized mouse is not a mouse: it would aim the
+        // finder with a fingertip and fire bindings on every tap.
+        if (event->motion.which == SDL_TOUCH_MOUSEID)
+        {
+            break;
+        }
+        // Zero-length motion is SDL restoring the cursor on leaving relative
+        // mode, not the player; counting it would show the cursor again.
+        if (event->motion.xrel == 0.0f && event->motion.yrel == 0.0f)
+        {
+            break;
+        }
+        NoteMouseActivity();
+        if (s_captured != 0)
+        {
+            s_motion_x += event->motion.xrel;
+            s_motion_y += event->motion.yrel;
+        }
+        break;
+
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (event->button.which == SDL_TOUCH_MOUSEID ||
+            event->button.button < 1 ||
+            event->button.button > MIOPAN_MOUSE_BUTTON_MAX)
+        {
+            break;
+        }
+        NoteMouseActivity();
+        if (GameOwnsMouse() && s_suppressed == 0)
+        {
+            mask = SDL_BUTTON_MASK(event->button.button);
+            s_button_down |= mask;
+            s_button_latch |= mask;
+        }
+        break;
+
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (event->button.which == SDL_TOUCH_MOUSEID ||
+            event->button.button < 1 ||
+            event->button.button > MIOPAN_MOUSE_BUTTON_MAX)
+        {
+            break;
+        }
+        NoteMouseActivity();
+        s_button_down &= ~SDL_BUTTON_MASK(event->button.button);
+        break;
+
+    case SDL_EVENT_MOUSE_WHEEL:
+        if (event->wheel.which == SDL_TOUCH_MOUSEID)
+        {
+            break;
+        }
+        NoteMouseActivity();
+        if (GameOwnsMouse() && s_suppressed == 0)
+        {
+            QueueWheel(&event->wheel);
+        }
+        break;
+
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        ClearMouseButtons();
+        break;
+
+    default:
+        break;
+    }
+}
+
+void MioPan_InputUpdateMouse(SDL_Window *window)
+{
+    int want;
+
+    if (window == 0)
+    {
+        return;
+    }
+
+    // Capture is never *started* under the cursor's own overlay item -- the
+    // player is pointing at it -- but once captured the cursor is not really
+    // anywhere, and its virtual position wandering under the menu bar must not
+    // let go of it.
+    want = s_mouse_look != 0 &&
+           (s_look_request != 0 || s_look_request_prev != 0) &&
+           s_ui_wants_mouse == 0 &&
+           (s_captured != 0 || s_pointer_over_ui == 0) &&
+           s_suppressed == 0;
+
+    if (want == s_captured)
+    {
+        return;
+    }
+
+    if (!SDL_SetWindowRelativeMouseMode(window, want != 0))
+    {
+        if (s_capture_failure_logged == 0)
+        {
+            s_capture_failure_logged = 1;
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "MioPan: could not %s the mouse: %s",
+                        want != 0 ? "capture" : "release", SDL_GetError());
+        }
+        if (want != 0)
+        {
+            return; // stay free and try again next time
+        }
+    }
+
+    s_captured = want;
+
+    // Motion from before the switch belongs to a free cursor, and spending it
+    // on the first captured update would jerk the camera.
+    s_motion_x = 0.0f;
+    s_motion_y = 0.0f;
+    s_look_x = 0.0f;
+    s_look_y = 0.0f;
+
+    if (want == 0)
+    {
+        s_last_mouse_activity = 0;
+    }
+}
+
+void MioPan_InputSetUiMouse(int ui_wants_mouse, int pointer_over_ui)
+{
+    s_ui_wants_mouse = ui_wants_mouse != 0 ? 1 : 0;
+    s_pointer_over_ui = pointer_over_ui != 0 ? 1 : 0;
+}
+
+int MioPan_InputMouseCaptured(void)
+{
+    return s_captured;
+}
+
+int MioPan_InputMouseLookRequested(void)
+{
+    return (s_look_request != 0 || s_look_request_prev != 0) ? 1 : 0;
+}
+
+int MioPan_InputCursorIdle(void)
+{
+    if (s_captured != 0)
+    {
+        return 0;
+    }
+    if (s_last_mouse_activity == 0)
+    {
+        return 1;
+    }
+    return SDL_GetTicks() - s_last_mouse_activity >= MIOPAN_CURSOR_IDLE_MS
+               ? 1
+               : 0;
+}
+
+void MioPan_InputRequestMouseLook(void)
+{
+    s_look_request = 1;
+}
+
+int MioPan_InputMouseLook(float *yaw, float *pitch)
+{
+    float x = 0.0f;
+    float y = 0.0f;
+
+    if (s_captured != 0 && s_suppressed == 0)
+    {
+        const float scale = s_mouse_sensitivity *
+                            (MIOPAN_MOUSE_LOOK_DEG_PER_COUNT * SDL_PI_F / 180.0f);
+
+        // Screen y grows downward, so moving the mouse away from you is a
+        // negative yrel -- and should look up.
+        x = s_look_x * scale;
+        y = -s_look_y * scale;
+
+        if (s_mouse_invert_x != 0)
+        {
+            x = -x;
+        }
+        if (s_mouse_invert_y != 0)
+        {
+            y = -y;
+        }
+    }
+
+    if (yaw != 0)
+    {
+        *yaw = x;
+    }
+    if (pitch != 0)
+    {
+        *pitch = y;
+    }
+    return (x != 0.0f || y != 0.0f) ? 1 : 0;
+}
+
+int MioPan_InputGetMouseLook(void)
+{
+    return s_mouse_look;
+}
+
+void MioPan_InputSetMouseLook(int enabled)
+{
+    s_mouse_look = enabled != 0 ? 1 : 0;
+}
+
+float MioPan_InputGetMouseSensitivity(void)
+{
+    return s_mouse_sensitivity;
+}
+
+void MioPan_InputSetMouseSensitivity(float sensitivity)
+{
+    // Written so a NaN from a hand-edited file lands on the floor too.
+    if (!(sensitivity >= MIOPAN_MOUSE_SENSITIVITY_MIN))
+    {
+        sensitivity = MIOPAN_MOUSE_SENSITIVITY_MIN;
+    }
+    else if (sensitivity > MIOPAN_MOUSE_SENSITIVITY_MAX)
+    {
+        sensitivity = MIOPAN_MOUSE_SENSITIVITY_MAX;
+    }
+    s_mouse_sensitivity = sensitivity;
+}
+
+int MioPan_InputGetMouseInvertX(void)
+{
+    return s_mouse_invert_x;
+}
+
+void MioPan_InputSetMouseInvertX(int invert)
+{
+    s_mouse_invert_x = invert != 0 ? 1 : 0;
+}
+
+int MioPan_InputGetMouseInvertY(void)
+{
+    return s_mouse_invert_y;
+}
+
+void MioPan_InputSetMouseInvertY(int invert)
+{
+    s_mouse_invert_y = invert != 0 ? 1 : 0;
+}
+
+int MioPan_InputMouseSettingsAreDefault(void)
+{
+    return s_mouse_look == 1 && s_mouse_sensitivity == 1.0f &&
+           s_mouse_invert_x == 0 && s_mouse_invert_y == 0;
+}
+
+void MioPan_InputResetMouseSettings(void)
+{
+    s_mouse_look = 1;
+    s_mouse_sensitivity = 1.0f;
+    s_mouse_invert_x = 0;
+    s_mouse_invert_y = 0;
 }
 
 }

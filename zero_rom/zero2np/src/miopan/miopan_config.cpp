@@ -420,7 +420,7 @@ const char *const kInputStickNames[MIOPAN_PAD_STICK_COUNT] = {
 std::vector<std::string> SplitSources(const std::string &value)
 {
     static const char *const kPrefixes[] = {
-        "key:", "pad:", "axis+:", "axis-:", "none"
+        "key:", "pad:", "axis+:", "axis-:", "mouse:", "wheel:", "none"
     };
 
     std::vector<size_t> starts;
@@ -600,6 +600,29 @@ void LoadInputBindings()
 
         MioPan_InputSetStickBinding(i, &binding);
     }
+
+    /* Finder mouse look.  Each starts from the live value, so a file written
+     * before these existed -- or one missing a line -- keeps the default. */
+    int look = MioPan_InputGetMouseLook();
+    ReadInt("input", "mouse_look", &look);
+    MioPan_InputSetMouseLook(look);
+
+    /* A sensitivity that does not parse reads as 0 through atof; keeping the
+     * default beats clamping a typo to the floor and leaving the mouse dead. */
+    float sensitivity = 0.0f;
+    ReadFloat("input", "mouse_sensitivity", &sensitivity);
+    if (sensitivity > 0.0f)
+    {
+        MioPan_InputSetMouseSensitivity(sensitivity);
+    }
+
+    int invert = MioPan_InputGetMouseInvertX();
+    ReadInt("input", "mouse_invert_x", &invert);
+    MioPan_InputSetMouseInvertX(invert);
+
+    invert = MioPan_InputGetMouseInvertY();
+    ReadInt("input", "mouse_invert_y", &invert);
+    MioPan_InputSetMouseInvertY(invert);
 }
 
 /* One source as text, or "none" for an empty slot. */
@@ -627,6 +650,10 @@ std::string BuildInputSection()
         ";   pad:<name>     a gamepad button: \"a\", \"leftshoulder\", \"start\"\n"
         ";   axis+:<name>   a gamepad axis, positive half: \"lefttrigger\"\n"
         ";   axis-:<name>   the negative half of one\n"
+        ";   mouse:<name>   a mouse button: \"left\", \"right\", \"middle\",\n"
+        ";                  \"x1\", \"x2\", or a number for one past those\n"
+        ";   wheel:<dir>    the wheel: \"up\", \"down\", \"left\", \"right\";\n"
+        ";                  each notch is one press\n"
         ";   none           an empty slot -- how you deliberately unbind\n"
         ";\n"
         ";   An axis counts as pressed past 8000 of its 0..32767 travel;\n"
@@ -734,6 +761,31 @@ std::string BuildInputSection()
 
         SDL_snprintf(line, sizeof(line), "%s.ramp_frames = %d\n",
                      kInputStickNames[i], binding.ramp_frames);
+        out += line;
+    }
+
+    {
+        char line[256];
+
+        out +=
+            "\n"
+            "; Mouse look.  While the Camera Obscura is raised the cursor is\n"
+            ";   captured and the mouse aims it; it is let go when the camera\n"
+            ";   comes down, and F1 while aiming hands it to the overlay.\n"
+            ";   mouse_sensitivity scales the turn: 1.0 is 0.05 degrees per\n"
+            ";   count of mouse travel, from 0.05 to 10.  The invert flags\n"
+            ";   flip one axis each; the game's own vertical-camera option\n"
+            ";   applies to the stick, not to the mouse.\n";
+
+        SDL_snprintf(line, sizeof(line),
+                     "mouse_look = %d\n"
+                     "mouse_sensitivity = %.3f\n"
+                     "mouse_invert_x = %d\n"
+                     "mouse_invert_y = %d\n",
+                     MioPan_InputGetMouseLook(),
+                     (double)MioPan_InputGetMouseSensitivity(),
+                     MioPan_InputGetMouseInvertX(),
+                     MioPan_InputGetMouseInvertY());
         out += line;
     }
 
