@@ -65,9 +65,19 @@ Call chain: `main()` → `GPhaseSysMain()` → phase callbacks → `after_super(
 
 ### Presentation is not a limiter
 
-The swapchain asks for `SDL_GPU_PRESENTMODE_IMMEDIATE` first (MAILBOX, then
-VSYNC as fallbacks). `g_present_interval` is 1, so `ShouldPresentFrame()`
-always returns true.
+The present mode is the player's `[window] vsync` setting
+(`MioPan_RendererSetVsync()`): `on` (VSYNC, the default), `off` (IMMEDIATE,
+falling back to MAILBOX then VSYNC — what the port hard-coded before the
+setting existed) or `mailbox`. None of them paces the game: with VSYNC a
+present can wait up to one refresh, and that wait comes out of the field wait
+the tick does anyway, exactly as the smoothing presents' waits do.
+`g_present_interval` is 1, so `ShouldPresentFrame()` always returns true.
+
+The background pause (`[window] pause_in_background`) is the one other thing
+that stops the loop: it holds the game thread at the end of
+`MioPan_RendererEndFrame()` and stops the V-blank thread with
+`MioPan_PacingSetHostHold()`, which restarts its schedule from "now" on release
+so no fields bank across the pause.
 
 ### Nothing else blocks
 

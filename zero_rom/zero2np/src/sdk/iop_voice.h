@@ -101,6 +101,36 @@ void  MioPan_VoiceAutoDmaStop(int core);
 u_int MioPan_VoiceAutoDmaGetOffset(int core);
 void  MioPan_VoiceAutoDmaSetVolume(int core, u_short voll, u_short volr);
 
+/* ---- host output controls ---------------------------------------------
+ *
+ * The player's volume and the window's background behaviours.  None of these
+ * is an SPU2 register: they act on the SDL stream after the mix, so nothing the
+ * ROM can read back -- NAX, ENDX, the auto-DMA offset -- ever sees them.
+ *
+ * Volume and mute are gain only.  The mixer keeps running at full rate, so a
+ * muted game is still a game whose voices, streams and movie audio advance in
+ * step with it; pausing the device instead would freeze the SPU2's clock under
+ * a game that was still running, and the ROM's waits on a voice ending would
+ * stall until it came back.
+ *
+ * Paused is the other case, for when the game itself has stopped: the device
+ * stops pulling, the mixer finds its queue full and mixes nothing, and every
+ * voice, stream refill and movie audio offset stands still with the game. */
+
+/* Master volume as a slider position, 0..1.  The gain applied is its square,
+ * which spreads the audible range across the slider: 0.5 is about -12 dB rather
+ * than the -6 dB a linear slider gives, which barely sounds quieter.  May be
+ * called before MioPan_VoiceInit(); it is applied once the stream exists. */
+void  MioPan_VoiceSetOutputVolume(float volume);
+float MioPan_VoiceGetOutputVolume(void);
+
+/* Silence the output without stopping it, for the window's mute-in-background
+ * behaviour.  Independent of the volume, which it does not disturb. */
+void  MioPan_VoiceSetOutputMuted(int muted);
+
+/* Stop and restart the audio device, for the renderer's background pause. */
+void  MioPan_VoiceSetOutputPaused(int paused);
+
 #ifdef __cplusplus
 }
 #endif

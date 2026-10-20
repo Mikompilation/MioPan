@@ -9,6 +9,7 @@
 #include "../os/miopan_pacing.h"
 #include "../miopan_ui/miopan_ui.h"
 #include "miopan_video.h"
+#include "iop_voice.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -2168,7 +2169,24 @@ int g_present_rect[4];
 int g_hdr_mode = MIOPAN_HDR_OFF;
 SDL_GPUSwapchainComposition g_hdr_composition =
     SDL_GPU_SWAPCHAINCOMPOSITION_SDR;
+/* g_vsync_mode is the player's MIOPAN_VSYNC_* choice; g_present_mode is what
+ * the swapchain was actually given, which differs wherever the driver lacks
+ * the mode asked for.  See ResolvePresentMode(). */
+int g_vsync_mode = MIOPAN_VSYNC_ON;
 SDL_GPUPresentMode g_present_mode = SDL_GPU_PRESENTMODE_VSYNC;
+/* A mode SDL_SetGPUSwapchainParameters() turned down, or -1.  Cleared by the
+ * next vsync change, so asking again is how to retry it. */
+int g_present_mode_refused = -1;
+
+/* The background behaviours, and what the window was doing at the last pump.
+ * g_background_muted is what was last handed to the voice engine, so the
+ * mute is only pushed when it changes. */
+bool g_mute_in_background = true;
+bool g_pause_in_background;
+bool g_in_background;
+bool g_background_muted;
+/* Inside HoldWhileInBackground()'s loop.  See PumpEvents(). */
+bool g_holding_in_background;
 /* Chosen at startup and never changed: whether the pipelines were built
  * against the 10-bit scene target HDR wants. */
 bool g_hdr_full_precision;
@@ -3681,13 +3699,52 @@ void SnapshotFragmentLights(DrawCommand &command,
     g_fragment_light_states.push_back(*source);
 }
 
+/*
+ * Whether the window is in the background, and the mute that follows from it.
+ *
+ * Read off the window flags after the pump rather than tracked from the focus
+ * events, so a missed or coalesced event cannot leave the game muted in the
+ * foreground.  Minimised counts on its own: a minimised window normally loses
+ * the focus too, but not on every platform, and nobody is watching it either
+ * way.
+ */
+void UpdateBackgroundState()
+{
+    g_in_background = false;
+    if (g_window != nullptr)
+    {
+        const SDL_WindowFlags flags = SDL_GetWindowFlags(g_window);
+        g_in_background = (flags & SDL_WINDOW_MINIMIZED) != 0 ||
+                          (flags & SDL_WINDOW_INPUT_FOCUS) == 0;
+    }
+
+    const bool mute = g_mute_in_background && g_in_background;
+    if (mute != g_background_muted)
+    {
+        g_background_muted = mute;
+        MioPan_VoiceSetOutputMuted(mute ? 1 : 0);
+        /* Logged because a silent game is the first thing a bug report
+         * about it will describe. */
+        SDL_Log("MioPan: audio %s", mute ? "muted (window in the background)"
+                                         : "unmuted");
+    }
+}
+
 void PumpEvents()
 {
     SDL_Event event;
 
     while (SDL_PollEvent(&event))
     {
-        MioPanUi::ProcessEvent(&event);
+        /* While the game is held in the background no ImGui frame runs to
+         * drain its input queue, and a cursor crossing the window -- on a
+         * second monitor, say -- would add to it for as long as the pause
+         * lasts.  Motion is the one event worth nothing by then: the next
+         * one after the resume says where the mouse is. */
+        if (!g_holding_in_background || event.type != SDL_EVENT_MOUSE_MOTION)
+        {
+            MioPanUi::ProcessEvent(&event);
+        }
 
         if (event.type == SDL_EVENT_QUIT)
         {
@@ -3742,6 +3799,63 @@ void PumpEvents()
             }
         }
     }
+
+    UpdateBackgroundState();
+}
+
+void RestartFrameStatistics()
+{
+    g_fps_window_start_counter = 0;
+    g_fps_game_frames = 0;
+    g_fps_present_frames = 0;
+    MioPan_ProfilerReset();
+}
+
+/*
+ * The background pause: hold the game thread here, between two frames, until
+ * the window comes back.
+ *
+ * Why here, and not by stopping the V-blank thread and letting vfunc() wait:
+ * this thread is the one that pumps the window's events, so a game parked in
+ * vfunc()'s WaitSema() could never see the focus return -- the pause would be
+ * permanent.  Holding at the end of MioPan_RendererEndFrame() is outside every
+ * ROM function that could care: the frame has been presented, SendDMAMain()
+ * has nothing left but InitGraph2dEFrame(), and the next thing the game does is
+ * start a new tick.  The V-blank thread is stopped as well, but as a clock
+ * rather than as the hold -- see MioPan_PacingSetHostHold().
+ *
+ * The overlay is not drawn while held.  The pause only lasts while the window
+ * has no focus, and the first click on it ends the pause, so there is never a
+ * moment where the menu could be used.  The screen keeps the last frame.
+ */
+void HoldWhileInBackground()
+{
+    if (!g_pause_in_background || !g_in_background)
+    {
+        return;
+    }
+
+    SDL_Log("MioPan: window in the background; game paused");
+    MioPan_PacingSetHostHold(1);
+    MioPan_VoiceSetOutputPaused(1);
+    g_holding_in_background = true;
+
+    while (g_pause_in_background && g_in_background)
+    {
+        /* Sleeps until there is an event to pump, but no longer than a tenth
+         * of a second, so a state change that arrives without one -- the
+         * window flags are what is tested -- is still noticed. */
+        SDL_WaitEventTimeout(nullptr, 100);
+        PumpEvents();
+    }
+
+    g_holding_in_background = false;
+    MioPan_VoiceSetOutputPaused(0);
+    MioPan_PacingSetHostHold(0);
+    /* The pause would otherwise be one enormous frame in the FPS window and
+     * the profiler, and the stutter log would report it as a hitch. */
+    RestartFrameStatistics();
+    SDL_Log("MioPan: window back in the foreground; game resumed");
 }
 
 void InitDefaultUniforms()
@@ -4036,6 +4150,75 @@ const char *PresentModeName(SDL_GPUPresentMode mode)
     default:
         return "unknown";
     }
+}
+
+/*
+ * The present mode the player's vsync setting asks for, given what this
+ * window and driver offer.  Each list ends at VSYNC, which SDL guarantees.
+ *
+ * OFF tries MAILBOX before giving up on its way to VSYNC: what OFF is chosen
+ * for is never waiting on the display, and MAILBOX keeps that half of it even
+ * where it cannot keep the tearing.
+ */
+SDL_GPUPresentMode ResolvePresentMode()
+{
+    SDL_GPUPresentMode candidates[2];
+    int count = 0;
+
+    if (g_vsync_mode == MIOPAN_VSYNC_OFF)
+    {
+        candidates[count++] = SDL_GPU_PRESENTMODE_IMMEDIATE;
+        candidates[count++] = SDL_GPU_PRESENTMODE_MAILBOX;
+    }
+    else if (g_vsync_mode == MIOPAN_VSYNC_MAILBOX)
+    {
+        candidates[count++] = SDL_GPU_PRESENTMODE_MAILBOX;
+    }
+
+    for (int i = 0; i < count; i++)
+    {
+        if (SDL_WindowSupportsGPUPresentMode(g_device, g_window,
+                                             candidates[i]))
+        {
+            return candidates[i];
+        }
+    }
+    return SDL_GPU_PRESENTMODE_VSYNC;
+}
+
+/*
+ * Follow a vsync change made since the last frame.  Same shape and same call
+ * site as ApplyHdrComposition(): a no-op unless something changed, and called
+ * from BeginFrame before anything acquires a swapchain texture, because the
+ * swapchain is rebuilt underneath it.  The composition is passed through
+ * unchanged -- this call only ever moves the present mode.
+ */
+void ApplyPresentMode()
+{
+    if (g_device == nullptr || g_window == nullptr)
+    {
+        return;
+    }
+
+    const SDL_GPUPresentMode wanted = ResolvePresentMode();
+    if (wanted == g_present_mode || (int)wanted == g_present_mode_refused)
+    {
+        return;
+    }
+
+    if (!SDL_SetGPUSwapchainParameters(g_device, g_window, g_hdr_composition,
+                                       wanted))
+    {
+        /* The old mode is still in force and g_present_mode still says so.
+         * Remember the refusal rather than retrying it every frame; the
+         * player's choice is left as it was, so it is what gets saved. */
+        LogSdlError("SDL_SetGPUSwapchainParameters(present mode)");
+        g_present_mode_refused = (int)wanted;
+        return;
+    }
+    g_present_mode_refused = -1;
+    g_present_mode = wanted;
+    SDL_Log("MioPan SDL_GPU: present mode %s", PresentModeName(wanted));
 }
 
 /*
@@ -7977,16 +8160,11 @@ bool EnsureRenderer()
         return false;
     }
 
-    SDL_GPUPresentMode present_mode = SDL_GPU_PRESENTMODE_IMMEDIATE;
-    if (!SDL_WindowSupportsGPUPresentMode(g_device, g_window, present_mode))
-    {
-        present_mode = SDL_GPU_PRESENTMODE_MAILBOX;
-        if (!SDL_WindowSupportsGPUPresentMode(g_device, g_window,
-                                              present_mode))
-        {
-            present_mode = SDL_GPU_PRESENTMODE_VSYNC;
-        }
-    }
+    /* The player's vsync setting.  This used to be IMMEDIATE unconditionally,
+     * falling back through MAILBOX to VSYNC -- which is still exactly what
+     * MIOPAN_VSYNC_OFF resolves to -- and so tore on every display that
+     * granted it. */
+    const SDL_GPUPresentMode present_mode = ResolvePresentMode();
     g_present_mode = present_mode;
 
     if (!SDL_SetGPUSwapchainParameters(g_device, g_window,
@@ -10609,10 +10787,58 @@ void MioPan_RendererSetPresentInterval(int interval)
 {
     g_present_interval = interval < 1 ? 1 : interval;
     g_present_counter = 0;
-    g_fps_window_start_counter = 0;
-    g_fps_game_frames = 0;
-    g_fps_present_frames = 0;
-    MioPan_ProfilerReset();
+    RestartFrameStatistics();
+}
+
+void MioPan_RendererSetVsync(int mode)
+{
+    g_vsync_mode = (mode == MIOPAN_VSYNC_OFF || mode == MIOPAN_VSYNC_MAILBOX)
+                       ? mode
+                       : MIOPAN_VSYNC_ON;
+    /* A fresh choice is a fresh attempt, including at a mode refused before. */
+    g_present_mode_refused = -1;
+}
+
+int MioPan_RendererGetVsync(void)
+{
+    return g_vsync_mode;
+}
+
+int MioPan_RendererGetVsyncActive(void)
+{
+    switch (g_present_mode)
+    {
+    case SDL_GPU_PRESENTMODE_IMMEDIATE:
+        return MIOPAN_VSYNC_OFF;
+    case SDL_GPU_PRESENTMODE_MAILBOX:
+        return MIOPAN_VSYNC_MAILBOX;
+    case SDL_GPU_PRESENTMODE_VSYNC:
+    default:
+        return MIOPAN_VSYNC_ON;
+    }
+}
+
+void MioPan_RendererSetMuteInBackground(int enable)
+{
+    g_mute_in_background = enable != 0;
+    /* Applied now rather than at the next pump, so unticking it while the
+     * window happens to be muted does not wait for an event. */
+    UpdateBackgroundState();
+}
+
+int MioPan_RendererGetMuteInBackground(void)
+{
+    return g_mute_in_background ? 1 : 0;
+}
+
+void MioPan_RendererSetPauseInBackground(int enable)
+{
+    g_pause_in_background = enable != 0;
+}
+
+int MioPan_RendererGetPauseInBackground(void)
+{
+    return g_pause_in_background ? 1 : 0;
 }
 
 void MioPan_RendererSetRenderResolution(int mode, float scale)
@@ -11194,6 +11420,8 @@ void MioPan_RendererBeginFrame(void)
      * this frame, and before anything acquires a swapchain texture -- the
      * composition cannot be re-negotiated with one in flight. */
     ApplyHdrComposition();
+    /* Same constraint, same place: a vsync change rebuilds the swapchain. */
+    ApplyPresentMode();
     UpdateViewExtend();
     MioPanUi::BeginFrame();
     /* Drop last frame's pins before trimming the persistent cache. */
@@ -11329,6 +11557,10 @@ void MioPan_RendererEndFrame(void)
     MioPan_ProfilerEndFrame();
     UpdatePerformanceStats(presented);
     MioPan_GsResetFrameMetrics();
+
+    /* Last, so the frame the player comes back to is the one already on
+     * screen and every per-frame book above has been closed. */
+    HoldWhileInBackground();
 }
 
 /*

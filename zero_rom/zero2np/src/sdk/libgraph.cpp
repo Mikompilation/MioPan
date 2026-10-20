@@ -141,6 +141,20 @@ static void VblankThreadMain(void *data)
     {
         sceGsVCallbackFunc callback;
 
+        /* The window is in the background and the game is paused: no field
+         * goes by, so none banks for vfunc() to drain on resume and the
+         * renderer's field wait stays quiet.  The schedule restarts from now
+         * instead of catching up, or the first field after a long pause would
+         * fire at once.  See MioPan_PacingSetHostHold(). */
+        if (MioPan_PacingHostHeld())
+        {
+            while (MioPan_PacingHostHeld())
+            {
+                MioPan_Sleep(5);
+            }
+            s_vblank_thread_limiter.next_counter = MioPan_GetPerformanceCounter();
+        }
+
         WaitForVblank(&s_vblank_thread_limiter);
 
         /* The host's own copy of the field edge.  The game's semaphore is

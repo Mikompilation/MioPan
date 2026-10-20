@@ -81,7 +81,39 @@ typedef struct MioPan_ConfigRenderer
     /* Model textures resolved once, their GS uploads then skipped.  See
      * MioPan_RendererSetResidentTextures(). */
     int   resident_textures;     /* 0 off, 1 on                              */
+
+    /* Presentation sync.  See the block above MioPan_RendererSetVsync() in
+     * rendering/miopan_renderer.h. */
+    int   vsync;                 /* MIOPAN_VSYNC_*                           */
+    /* Hold the game while the window is in the background.  See the block
+     * above MioPan_RendererSetMuteInBackground(). */
+    int   pause_in_background;   /* 0 off, 1 on                              */
 } MioPan_ConfigRenderer;
+
+/*
+ * The output side of the sound.  Host gain only: see the block above
+ * MioPan_VoiceSetOutputVolume() in sdk/iop_voice.h for why none of it reaches
+ * the SPU2 model the ROM reads back.
+ *
+ * There is deliberately no music / effects / voice split.  The ROM's mixer
+ * does have groups -- SndCalcValue() scales every voice by a per-group volume
+ * -- but only two of its five slots are ever named (effects and BGM), there is
+ * no group for speech at all, a sound's group is a 3-bit field read out of the
+ * sound data rather than decided by the code, and the ROM's own option screen
+ * writes the same value into both.  A bus slider built on that would have to
+ * guess which sounds are which.
+ */
+typedef struct MioPan_ConfigAudio
+{
+    float volume;                /* master, 0..1 slider position; gain is its square */
+    int   mute_in_background;    /* 0 off, 1 on                              */
+} MioPan_ConfigAudio;
+
+/* The F1 overlay. */
+typedef struct MioPan_ConfigUi
+{
+    float scale;                 /* 0 follows the display; else a fixed factor */
+} MioPan_ConfigUi;
 
 /*
  * Where the game's own files are.
@@ -101,6 +133,8 @@ typedef struct MioPan_ConfigPaths
 typedef struct MioPan_Config
 {
     MioPan_ConfigRenderer renderer;
+    MioPan_ConfigAudio    audio;
+    MioPan_ConfigUi       ui;
     MioPan_ConfigPaths    paths;
 } MioPan_Config;
 

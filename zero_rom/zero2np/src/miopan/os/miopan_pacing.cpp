@@ -21,6 +21,9 @@ static int s_last_resolved_wait;
 static MioPan_Sema *const s_field_sema = MioPan_SemaCreate(0);
 static std::atomic<uint64_t> s_field_signals{0};
 
+/* Set by the game thread, polled by the V-blank and IOP timer threads. */
+static std::atomic<int> s_host_hold{0};
+
 extern "C" {
 
 void MioPan_SetVBlankWaitOverride(int fields)
@@ -85,6 +88,16 @@ void MioPan_PacingWaitField(void)
     {
     }
     MioPan_SemaWait(s_field_sema);
+}
+
+void MioPan_PacingSetHostHold(int held)
+{
+    s_host_hold.store(held != 0 ? 1 : 0, std::memory_order_release);
+}
+
+int MioPan_PacingHostHeld(void)
+{
+    return s_host_hold.load(std::memory_order_acquire);
 }
 
 }

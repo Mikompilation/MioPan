@@ -812,6 +812,30 @@ would pass through core 1's master volume as well and land 6 dB below core 1's
 own voices; reproducing that would rebalance every sound in the game, which is a
 separate question from whether reverb exists.
 
+### Host output controls (player volume, mute, pause)
+
+The player's master volume and the window's background behaviours act on the
+one output stream, **after** the mix, never on a register the ROM can read back
+(`MioPan_VoiceSetOutputVolume/Muted/Paused()`, `iop_voice.h`).
+
+- **Volume and mute are `SDL_SetAudioStreamGain()` only.** The gain is the
+  slider position squared. SDL applies it as the device pulls, so it reaches the
+  ~42 ms already queued. Mute must stay a gain: pausing the device would freeze
+  the SPU2's clock under a game that is still running -- NAX stops, the stream
+  refill IRQs stop, the movie's auto-DMA offset stops -- and every ROM wait on a
+  voice ending would stall until the window came back.
+- **Pause is `SDL_PauseAudioDevice()`**, used only by the renderer's background
+  pause, when the EE is held too. The device stops pulling, the mixer finds its
+  queue full and mixes nothing, so every voice, stream and movie offset stands
+  still in step with the game. The IOP's hard timer (iopSndMain's volume ramps)
+  is stopped alongside it via `MioPan_PacingSetHostHold()`.
+- **There is no music / effects / voice split, on purpose.** `SndCalcValue()`
+  (`system/eeiop/snd.c`) does scale every voice by a per-group volume, but only
+  groups 0 (effects) and 1 (BGM) of five are named, speech has no group, a
+  sound's group is a 3-bit `attr.type` read from the sound data rather than
+  chosen by code, and the ROM's own option screen writes one value into both.
+  Splitting buses on it would mean guessing which data is which.
+
 ### Reverb
 
 `iop_reverb.cpp`. The PlayStation reverb network, unchanged on SPU2 apart from

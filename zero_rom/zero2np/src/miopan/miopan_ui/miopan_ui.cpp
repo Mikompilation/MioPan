@@ -4,6 +4,7 @@
 #include "../miopan_config.h"
 #include "../io/miopan_input.h"
 #include "../io/miopan_paths.h"
+#include "iop_voice.h"
 
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -48,6 +49,42 @@ bool g_show_data_folder;
 bool g_pause_performance_history;
 bool g_follow_performance_history = true;
 MioPanUi::PerformanceStats g_performance_stats{};
+
+/*
+ * Overlay scale.
+ *
+ * SDL reports two numbers and only their ratio is wanted here.  The display
+ * scale is how big a pixel of this window is meant to look, against the
+ * platform's reference size; the pixel density is how many framebuffer pixels
+ * the window's own coordinates already cover, which ImGui folds in by itself
+ * through DisplayFramebufferScale.  On Windows the density is 1 and the scale
+ * is the 150% / 200% setting; on a Retina Mac both are 2 and nothing more is
+ * wanted.  Dividing one by the other is right on both.
+ *
+ * The style is rebuilt from defaults whenever the factor changes, because
+ * ScaleAllSizes() multiplies whatever is there and cannot be undone exactly.
+ * Fonts follow through FontScaleDpi: 1.92's atlas bakes glyphs at the size
+ * asked for, so text stays sharp rather than being magnified.
+ */
+constexpr float kUiScaleMin = 0.5f;
+constexpr float kUiScaleMax = 4.0f;
+float g_ui_scale_override;          /* 0 follows the display */
+float g_ui_scale = 1.0f;            /* what the style is built at now */
+float g_ui_display_scale = 1.0f;    /* what the display asked for last frame */
+bool g_ui_scale_applied;
+
+/* A literal pixel size in this file, at the current scale.  ScaleAllSizes()
+ * covers the style; widths and heights written out in calls do not go through
+ * it and would stay at 1x on a 4K panel. */
+float Px(float size)
+{
+    return size * g_ui_scale;
+}
+
+ImVec2 Px(float w, float h)
+{
+    return ImVec2(Px(w), Px(h));
+}
 
 constexpr int kProfilerHistoryCapacity = 120;
 
@@ -515,7 +552,7 @@ void DrawHitchGraphs()
     ImGui::TextDisabled(
         "Worst logical frame in each ~1 s window. Inclusive phases overlap.");
     if (ImPlot::BeginPlot("Game/transition max##MioPanHitchGame",
-                          ImVec2(-1.0f, 255.0f)))
+                          ImVec2(-1.0f, Px(255.0f))))
     {
         SetupProfilerHistoryAxes();
         PlotProfilerHistory("Frame", &ProfilerHistorySample::frame_max_ms);
@@ -544,7 +581,7 @@ void DrawHitchGraphs()
     }
 
     if (ImPlot::BeginPlot("Renderer max##MioPanHitchRenderer",
-                          ImVec2(-1.0f, 190.0f)))
+                          ImVec2(-1.0f, Px(190.0f))))
     {
         SetupProfilerHistoryAxes();
         PlotProfilerHistory("Renderer",
@@ -568,7 +605,7 @@ void DrawWorldObjectsGraphs()
     ImGui::TextDisabled(
         "CPU phases are inclusive and may overlap; do not add the curves.");
     if (ImPlot::BeginPlot("CPU timings##MioPanWorldObjectTiming",
-                          ImVec2(-1.0f, 165.0f)))
+                          ImVec2(-1.0f, Px(165.0f))))
     {
         SetupProfilerHistoryAxes();
         PlotProfilerHistory("Billboard packet avg",
@@ -596,7 +633,7 @@ void DrawWorldObjectsGraphs()
     }
 
     if (ImPlot::BeginPlot("Activity##MioPanWorldObjectActivity",
-                          ImVec2(-1.0f, 165.0f)))
+                          ImVec2(-1.0f, Px(165.0f))))
     {
         SetupProfilerHistoryAxes("Objects or commands / frame");
         PlotProfilerHistory("Billboard commands",
@@ -619,7 +656,7 @@ void DrawWorldObjectsGraphs()
     ImGui::TextDisabled(
         "Ideal draws = commands - compatible adjacent joins.");
     if (ImPlot::BeginPlot("MapPut sort work##MioPanMapPutComparisons",
-                          ImVec2(-1.0f, 120.0f)))
+                          ImVec2(-1.0f, Px(120.0f))))
     {
         SetupProfilerHistoryAxes("Comparisons / frame");
         PlotProfilerHistory("MapPut comparisons",
@@ -627,7 +664,7 @@ void DrawWorldObjectsGraphs()
         ImPlot::EndPlot();
     }
     if (ImPlot::BeginPlot("Queued stream payload##MioPanWorldObjectUpload",
-                          ImVec2(-1.0f, 165.0f)))
+                          ImVec2(-1.0f, Px(165.0f))))
     {
         SetupProfilerHistoryAxes("KiB / frame");
         PlotProfilerHistory("Billboards",
@@ -808,7 +845,7 @@ void DrawEffectsMenu()
     ImGui::TextDisabled("Cut-out edges");
 
     float sharpen = MioPan_RendererGetAlphaSharpen();
-    ImGui::SetNextItemWidth(180.0f);
+    ImGui::SetNextItemWidth(Px(180.0f));
     if (ImGui::SliderFloat("Sharpen", &sharpen, 0.0f, 1.0f, "%.2f"))
     {
         MioPan_RendererSetAlphaSharpen(sharpen);
@@ -819,7 +856,7 @@ void DrawEffectsMenu()
     ImGui::TextDisabled("  or below native resolution whatever it is set to");
 
     float cutoff = MioPan_RendererGetAlphaCutoff();
-    ImGui::SetNextItemWidth(180.0f);
+    ImGui::SetNextItemWidth(Px(180.0f));
     if (ImGui::SliderFloat("Hard cutoff", &cutoff, 0.0f, 1.0f, "%.2f"))
     {
         MioPan_RendererSetAlphaCutoff(cutoff);
@@ -872,17 +909,17 @@ void DrawFinderMenu()
      * does not move the next row under the cursor. */
     ImGui::BeginDisabled(enable == 0);
     {
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Blur", &blur, 0.0f, 1.0f, "%.2f");
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Darken", &darken, 0.0f, 1.0f, "%.2f");
         ImGui::TextDisabled("  darken 1.00 with blur 0.00 is a black");
         ImGui::TextDisabled("  surround rather than a defocused one");
 
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Crimson", &tint, 0.0f, 1.0f, "%.2f");
 
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Frame size", &scale, 0.25f, 2.0f,
                                       "%.2f");
         ImGui::TextDisabled("  1.00 is the original 640x448 frame; below");
@@ -980,7 +1017,7 @@ void DrawHdrMenu()
          * "follow OS" reads as a number rather than as a blank. */
         float paper_value = paper_auto ? effective_paper : paper;
         ImGui::BeginDisabled(paper_auto);
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         if (ImGui::SliderFloat("Paper white", &paper_value, 50.0f, 1000.0f,
                                "%.0f nits") &&
             !paper_auto)
@@ -1003,7 +1040,7 @@ void DrawHdrMenu()
 
         float peak_value = peak_auto ? effective_peak : peak;
         ImGui::BeginDisabled(peak_auto);
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         if (ImGui::SliderFloat("Peak", &peak_value, 100.0f, 4000.0f,
                                "%.0f nits") &&
             !peak_auto)
@@ -1027,12 +1064,12 @@ void DrawHdrMenu()
         float knee = 0.0f;
         MioPan_RendererGetHdrExpansion(&strength, &knee);
 
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         if (ImGui::SliderFloat("Expansion", &strength, 0.0f, 1.0f, "%.2f"))
         {
             MioPan_RendererSetHdrExpansion(strength, knee);
         }
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         if (ImGui::SliderFloat("Knee", &knee, 0.5f, 1.0f, "%.2f"))
         {
             MioPan_RendererSetHdrExpansion(strength, knee);
@@ -1052,15 +1089,15 @@ void DrawHdrMenu()
         MioPan_RendererGetGrade(&brightness, &contrast, &gamma, &saturation);
 
         bool changed = false;
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Brightness", &brightness, 0.25f, 2.0f,
                                       "%.2f");
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Contrast", &contrast, 0.5f, 2.0f,
                                       "%.2f");
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Gamma", &gamma, 0.5f, 2.5f, "%.2f");
-        ImGui::SetNextItemWidth(180.0f);
+        ImGui::SetNextItemWidth(Px(180.0f));
         changed |= ImGui::SliderFloat("Saturation", &saturation, 0.0f, 2.0f,
                                       "%.2f");
         if (changed)
@@ -1079,6 +1116,139 @@ void DrawHdrMenu()
 }
 
 /*
+ * Presentation sync.  Inline beside the window mode rather than a submenu: it
+ * is a property of the same window, and three rows do not need a level of
+ * their own.  The read-out is what the swapchain runs, which differs from the
+ * choice wherever the driver lacks the mode asked for.
+ */
+void DrawVsyncMenu()
+{
+    struct VsyncChoice
+    {
+        const char *label;
+        int mode;
+        const char *tooltip;
+    };
+    static const VsyncChoice kChoices[] = {
+        {"Vsync on", MIOPAN_VSYNC_ON,
+         "No tearing, and available everywhere. A frame may wait for the\n"
+         "display's next refresh before it is shown."},
+        {"Vsync off (tears)", MIOPAN_VSYNC_OFF,
+         "Each frame is shown the moment it is finished, mid-scan if need\n"
+         "be. Never waits; tears whenever the camera moves."},
+        {"Mailbox (no tearing, no wait)", MIOPAN_VSYNC_MAILBOX,
+         "The newest finished frame replaces any not yet shown. Not every\n"
+         "driver offers it; vsync is used where it is missing."},
+    };
+
+    ImGui::TextDisabled("Presentation");
+    const int mode = MioPan_RendererGetVsync();
+    for (const VsyncChoice &choice : kChoices)
+    {
+        if (ImGui::MenuItem(choice.label, nullptr, mode == choice.mode))
+        {
+            MioPan_RendererSetVsync(choice.mode);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s", choice.tooltip);
+        }
+    }
+
+    const int active = MioPan_RendererGetVsyncActive();
+    ImGui::TextDisabled("  presenting with %s",
+                        active == MIOPAN_VSYNC_OFF       ? "immediate"
+                        : active == MIOPAN_VSYNC_MAILBOX ? "mailbox"
+                                                         : "vsync");
+    ImGui::TextDisabled("  game speed is its own timer either way");
+}
+
+/* The Audio menu: the one level the port adds, and the background mute. */
+void DrawAudioMenu()
+{
+    float percent = MioPan_VoiceGetOutputVolume() * 100.0f;
+    ImGui::SetNextItemWidth(Px(180.0f));
+    if (ImGui::SliderFloat("Master volume", &percent, 0.0f, 100.0f, "%.0f%%"))
+    {
+        MioPan_VoiceSetOutputVolume(percent / 100.0f);
+    }
+
+    bool mute = MioPan_RendererGetMuteInBackground() != 0;
+    if (ImGui::MenuItem("Mute when in the background", nullptr, &mute))
+    {
+        MioPan_RendererSetMuteInBackground(mute ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Silence the game while the window is minimised or another\n"
+            "window has the focus. The game itself keeps running; to stop\n"
+            "it, see Settings > Pause when in the background.");
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Applies to everything, movies included, on top of");
+    ImGui::TextDisabled("the game's own Sound option.  There is no separate");
+    ImGui::TextDisabled("music or voice level: the game does not keep its");
+    ImGui::TextDisabled("speech apart from its other sounds.");
+}
+
+/*
+ * Interface scale.  The slider applies on release rather than while dragged:
+ * the scale is the size of the slider itself, so a live one would move out
+ * from under the cursor with every step.
+ */
+void DrawInterfaceScaleMenu()
+{
+    if (!ImGui::BeginMenu("Interface scale"))
+    {
+        return;
+    }
+
+    const bool follow = g_ui_scale_override <= 0.0f;
+    if (ImGui::MenuItem("Follow the display", nullptr, follow))
+    {
+        /* Leaving "follow" pins the size already on screen, so unticking it
+         * changes nothing until a size is picked. */
+        MioPanUi::SetScaleOverride(follow ? g_ui_scale : 0.0f);
+    }
+    ImGui::TextDisabled("  the display asks for %.0f%%",
+                        (double)(g_ui_display_scale * 100.0f));
+    ImGui::Separator();
+
+    static const float kPresets[] = {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f};
+    for (float preset : kPresets)
+    {
+        char label[16];
+        SDL_snprintf(label, sizeof(label), "%.0f%%", (double)(preset * 100.0f));
+        if (ImGui::MenuItem(label, nullptr,
+                            !follow && g_ui_scale_override == preset))
+        {
+            MioPanUi::SetScaleOverride(preset);
+        }
+    }
+
+    static float s_dragging;   /* percent while the slider is held, else 0 */
+    float percent = s_dragging > 0.0f ? s_dragging : g_ui_scale * 100.0f;
+    ImGui::SetNextItemWidth(Px(180.0f));
+    if (ImGui::SliderFloat("Custom", &percent, kUiScaleMin * 100.0f,
+                           kUiScaleMax * 100.0f, "%.0f%%"))
+    {
+        s_dragging = percent;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit() && s_dragging > 0.0f)
+    {
+        MioPanUi::SetScaleOverride(s_dragging / 100.0f);
+        s_dragging = 0.0f;
+    }
+    else if (!ImGui::IsItemActive())
+    {
+        s_dragging = 0.0f;
+    }
+    ImGui::EndMenu();
+}
+
+/*
  * Persist settings that changed, wherever they changed.
  *
  * Comparing the captured struct rather than hooking each menu item means one
@@ -1092,8 +1262,8 @@ void DrawHdrMenu()
 constexpr Uint64 kSettingsSettleMs = 500;
 Uint64 g_settings_dirty_since;
 
-/* Arm the debounce by hand.  The compare below only watches
- * MioPan_ConfigRenderer, and the control bindings deliberately do not live
+/* Arm the debounce by hand.  The compare below only watches the settings
+ * structs in MioPan_Config, and the control bindings deliberately do not live
  * there -- miopan_input owns them -- so a rebinding has to say so itself. */
 void MarkSettingsDirty()
 {
@@ -1106,14 +1276,23 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 35 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 37 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
+    static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
+                  "MioPan_ConfigAudio gained padding; compare by field");
+    static_assert(sizeof(MioPan_ConfigUi) == 1 * sizeof(int),
+                  "MioPan_ConfigUi gained padding; compare by field");
 
-    MioPan_ConfigRenderer before = miopan_config.renderer;
+    const MioPan_ConfigRenderer before = miopan_config.renderer;
+    const MioPan_ConfigAudio audio_before = miopan_config.audio;
+    const MioPan_ConfigUi ui_before = miopan_config.ui;
     MioPan_ConfigCapture();
 
     const Uint64 now = SDL_GetTicks();
-    if (std::memcmp(&before, &miopan_config.renderer, sizeof(before)) != 0)
+    if (std::memcmp(&before, &miopan_config.renderer, sizeof(before)) != 0 ||
+        std::memcmp(&audio_before, &miopan_config.audio,
+                    sizeof(audio_before)) != 0 ||
+        std::memcmp(&ui_before, &miopan_config.ui, sizeof(ui_before)) != 0)
     {
         g_settings_dirty_since = now != 0 ? now : 1;
         return;
@@ -1387,7 +1566,7 @@ void DrawControlsWindow()
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(640.0f, 560.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(Px(640.0f, 560.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("MioPan Controls", &g_show_controls))
     {
         ImGui::TextWrapped(
@@ -1448,7 +1627,7 @@ void DrawControlsWindow()
                              have_active ? active_name : "(not connected)");
             }
 
-            ImGui::SetNextItemWidth(320.0f);
+            ImGui::SetNextItemWidth(Px(320.0f));
             if (ImGui::BeginCombo("Gamepad", preview))
             {
                 if (ImGui::Selectable("Automatic (first connected)", autopick))
@@ -1503,7 +1682,7 @@ void DrawControlsWindow()
                               1 + MIOPAN_INPUT_MAX_SOURCES, kTableFlags))
         {
             ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed,
-                                    104.0f);
+                                    Px(104.0f));
             for (int s = 0; s < MIOPAN_INPUT_MAX_SOURCES; s++)
             {
                 char head[24];
@@ -1553,12 +1732,12 @@ void DrawControlsWindow()
         if (ImGui::BeginTable("##controls_sticks", 5, kTableFlags))
         {
             ImGui::TableSetupColumn("Stick", ImGuiTableColumnFlags_WidthFixed,
-                                    104.0f);
+                                    Px(104.0f));
             ImGui::TableSetupColumn("Analog");
             ImGui::TableSetupColumn("Key toward 0");
             ImGui::TableSetupColumn("Key toward 255");
             ImGui::TableSetupColumn("Ramp", ImGuiTableColumnFlags_WidthFixed,
-                                    72.0f);
+                                    Px(72.0f));
             ImGui::TableHeadersRow();
 
             for (int i = 0; i < MIOPAN_PAD_STICK_COUNT; i++)
@@ -1730,7 +1909,7 @@ void DrawDataFolderWindow()
         g_data_folder_save_failed = false;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(660.0f, 0.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(Px(660.0f, 0.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("MioPan Game Data", &g_show_data_folder))
     {
         ImGui::TextWrapped(
@@ -1755,7 +1934,7 @@ void DrawDataFolderWindow()
         ImGui::Separator();
         ImGui::TextDisabled("Folder");
 
-        const float browse_width = 100.0f;
+        const float browse_width = Px(100.0f);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - browse_width -
                                 ImGui::GetStyle().ItemSpacing.x);
         if (ImGui::InputText("##data_folder", g_data_folder_edit,
@@ -1922,6 +2101,9 @@ void DrawMainMenuBar()
         }
         ImGui::Separator();
 
+        DrawVsyncMenu();
+        ImGui::Separator();
+
         ImGui::TextDisabled("Aspect ratio");
         {
             int aspect_mode = MIOPAN_ASPECT_AUTO;
@@ -1950,7 +2132,7 @@ void DrawMainMenuBar()
                 }
             }
 
-            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SetNextItemWidth(Px(180.0f));
             if (ImGui::SliderFloat("Custom ratio", &custom, 0.5f, 5.0f, "%.3f"))
             {
                 MioPan_RendererSetAspectMode(MIOPAN_ASPECT_CUSTOM, custom);
@@ -1987,7 +2169,7 @@ void DrawMainMenuBar()
                     MIOPAN_RENDER_RES_WINDOW_SCALE, scale);
             }
 
-            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SetNextItemWidth(Px(180.0f));
             if (ImGui::SliderFloat("Scale", &scale, 0.25f, 4.0f, "%.2fx"))
             {
                 MioPan_RendererSetRenderResolution(mode, scale);
@@ -2169,9 +2351,28 @@ void DrawMainMenuBar()
         }
         ImGui::EndMenu();
     }
+    if (ImGui::BeginMenu("Audio"))
+    {
+        DrawAudioMenu();
+        ImGui::EndMenu();
+    }
     if (ImGui::BeginMenu("Settings"))
     {
         ImGui::MenuItem("Game data folder...", nullptr, &g_show_data_folder);
+        ImGui::Separator();
+        bool pause = MioPan_RendererGetPauseInBackground() != 0;
+        if (ImGui::MenuItem("Pause when in the background", nullptr, &pause))
+        {
+            MioPan_RendererSetPauseInBackground(pause ? 1 : 0);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Hold the game -- audio and movies included -- while the\n"
+                "window is minimised or another window has the focus, and\n"
+                "carry on from the same frame when it comes back.");
+        }
+        DrawInterfaceScaleMenu();
         ImGui::Separator();
         if (ImGui::MenuItem("Open user data folder"))
         {
@@ -2403,7 +2604,7 @@ void DrawProfilerGraphs()
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(860.0f, 520.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(Px(860.0f, 520.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("MioPan Profiler Graphs", &g_show_performance_graphs))
     {
         if (ImGui::Checkbox("Pause history", &g_pause_performance_history) &&
@@ -2688,6 +2889,79 @@ void ApplyCrimsonButterflyPlotStyle()
     style.Colormap = colormap;
 }
 
+/* The display's content scale for this window -- see the block above
+ * g_ui_scale_override. */
+float QueryDisplayScale()
+{
+    if (g_window == nullptr)
+    {
+        return 1.0f;
+    }
+    const float display = SDL_GetWindowDisplayScale(g_window);
+    float density = SDL_GetWindowPixelDensity(g_window);
+    if (!(display > 0.0f))
+    {
+        return 1.0f;      /* SDL reports 0 on failure */
+    }
+    if (!(density > 0.0f))
+    {
+        density = 1.0f;
+    }
+    return std::clamp(display / density, kUiScaleMin, kUiScaleMax);
+}
+
+/* Rebuild both styles at `scale`, from their defaults. */
+void ApplyUiScale(float scale)
+{
+    ImGuiStyle &style = ImGui::GetStyle();
+    style = ImGuiStyle();
+    ApplyCrimsonButterflyStyle();
+    style.ScaleAllSizes(scale);
+    style.FontScaleDpi = scale;
+
+    /* ImPlot has no ScaleAllSizes, so its pixel fields are scaled here; the
+     * alphas and the fit padding, which is a fraction, are left alone. */
+    ImPlotStyle &plot = ImPlot::GetStyle();
+    plot = ImPlotStyle();
+    ApplyCrimsonButterflyPlotStyle();
+    ImVec2 *const kPlotSizes[] = {
+        &plot.PlotDefaultSize, &plot.PlotMinSize,
+        &plot.MajorTickLen,    &plot.MinorTickLen,
+        &plot.MajorTickSize,   &plot.MinorTickSize,
+        &plot.MajorGridSize,   &plot.MinorGridSize,
+        &plot.PlotPadding,     &plot.LabelPadding,
+        &plot.LegendPadding,   &plot.LegendInnerPadding,
+        &plot.LegendSpacing,   &plot.MousePosPadding,
+        &plot.AnnotationPadding,
+    };
+    for (ImVec2 *size : kPlotSizes)
+    {
+        size->x *= scale;
+        size->y *= scale;
+    }
+    plot.PlotBorderSize *= scale;
+    plot.DigitalPadding *= scale;
+    plot.DigitalSpacing *= scale;
+
+    g_ui_scale = scale;
+    g_ui_scale_applied = true;
+}
+
+/* Once per frame, before NewFrame(): cheap when nothing moved, and polling
+ * rather than waiting for SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED means a
+ * window dragged to another monitor is caught whichever event announced it. */
+void UpdateUiScale()
+{
+    g_ui_display_scale = QueryDisplayScale();
+    const float wanted = g_ui_scale_override > 0.0f ? g_ui_scale_override
+                                                    : g_ui_display_scale;
+    if (g_ui_scale_applied && wanted == g_ui_scale)
+    {
+        return;
+    }
+    ApplyUiScale(wanted);
+}
+
 }
 
 namespace MioPanUi
@@ -2730,8 +3004,12 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device,
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard |
                       ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = nullptr;
+    /* Both styles are built by UpdateUiScale() on the first frame, once the
+     * scale is known; this is only so nothing before then sees the stock
+     * ones. */
     ApplyCrimsonButterflyStyle();
     ApplyCrimsonButterflyPlotStyle();
+    g_ui_scale_applied = false;
 
     g_platform_initialized = ImGui_ImplSDL3_InitForSDLGPU(window);
     if (!g_platform_initialized)
@@ -2843,6 +3121,7 @@ void BeginFrame()
     }
 
     ImGui::SetCurrentContext(g_context);
+    UpdateUiScale();
     ImGui_ImplSDLGPU3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     RemapGamepadWindowingTrigger();
@@ -2980,5 +3259,21 @@ void RenderDrawData(SDL_GPUCommandBuffer *command_buffer,
      * presented more than once -- a reprojected in-between -- carries the
      * overlay on each present instead of flashing it at the logical rate.
      * BeginFrame() is what clears the latch, once per logical frame. */
+}
+
+void SetScaleOverride(float scale)
+{
+    /* Zero, negative and NaN all mean "follow the display". */
+    if (!(scale > 0.0f))
+    {
+        g_ui_scale_override = 0.0f;
+        return;
+    }
+    g_ui_scale_override = std::clamp(scale, kUiScaleMin, kUiScaleMax);
+}
+
+float GetScaleOverride()
+{
+    return g_ui_scale_override;
 }
 }

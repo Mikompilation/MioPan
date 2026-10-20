@@ -54,6 +54,7 @@
 #include <SDL3/SDL_thread.h>
 #include <SDL3/SDL_timer.h>
 
+#include <atomic>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -156,6 +157,13 @@ static int             voice_ready;
 static u_short         master_voll[IOP_VOICE_CORES];
 static u_short         master_volr[IOP_VOICE_CORES];
 
+/* Host output controls -- see iop_voice.h.  Atomic because the settings are
+ * applied from the game thread, possibly while sceSdInit() is still bringing
+ * the device up on an IOP thread and before the voice lock even exists; the
+ * stream itself is only touched under that lock. */
+static std::atomic<float> output_volume{1.0f};
+static std::atomic<int>   output_muted{0};
+
 /* SD_S_VMIXL / VMIXR / VMIXEL / VMIXER, one bit per voice.
  *
  * The dry pair defaults to every voice on.  iopSndInit() sets exactly that and
@@ -180,6 +188,19 @@ static s16 out_block[MIX_BLOCK_FRAMES * 2];
 
 static void LockVoices(void)   { if (voice_mutex) SDL_LockMutex(voice_mutex); }
 static void UnlockVoices(void) { if (voice_mutex) SDL_UnlockMutex(voice_mutex); }
+
+/* Push the host volume and mute onto the stream.  SDL applies a stream's gain
+ * as the device pulls from it, so a change reaches what is already queued too
+ * rather than waiting out the ~42 ms lead.  Called with the voice lock held. */
+static void ApplyOutputGain(void)
+{
+    if (out_stream == NULL)
+        return;
+
+    const float volume = output_volume.load();
+    const float gain   = output_muted.load() ? 0.0f : volume * volume;
+    SDL_SetAudioStreamGain(out_stream, gain);
+}
 
 static int VoiceCore(const IopVoice *v)  { return v->index / IOP_VOICE_PER_CORE; }
 static int VoiceNumber(const IopVoice *v){ return v->index % IOP_VOICE_PER_CORE; }
@@ -1025,6 +1046,12 @@ void MioPan_VoiceInit(void)
         return;
     }
 
+    /* The settings are read long before the IOP boots on some paths and long
+     * after on others; whichever came first, the stream starts at them. */
+    LockVoices();
+    ApplyOutputGain();
+    UnlockVoices();
+
     SDL_ResumeAudioDevice(audio_dev);
 
     voice_quit   = 0;
@@ -1330,4 +1357,45 @@ void MioPan_VoiceAutoDmaSetVolume(int core, u_short voll, u_short volr)
     auto_dma[core].voll = voll;
     auto_dma[core].volr = volr;
     UnlockVoices();
+}
+
+void MioPan_VoiceSetOutputVolume(float volume)
+{
+    /* Negated so a NaN lands on full volume rather than in the gain. */
+    if (!(volume >= 0.0f))
+        volume = volume < 0.0f ? 0.0f : 1.0f;
+    if (volume > 1.0f)
+        volume = 1.0f;
+
+    output_volume.store(volume);
+    LockVoices();
+    ApplyOutputGain();
+    UnlockVoices();
+}
+
+float MioPan_VoiceGetOutputVolume(void)
+{
+    return output_volume.load();
+}
+
+void MioPan_VoiceSetOutputMuted(int muted)
+{
+    output_muted.store(muted != 0);
+    LockVoices();
+    ApplyOutputGain();
+    UnlockVoices();
+}
+
+void MioPan_VoiceSetOutputPaused(int paused)
+{
+    /* Not under the voice lock: SDL takes the device's own lock here, and the
+     * device thread takes it before the stream's, which the mixer takes under
+     * ours.  audio_dev only changes in Init and Shutdown. */
+    if (audio_dev == 0)
+        return;
+
+    if (paused)
+        SDL_PauseAudioDevice(audio_dev);
+    else
+        SDL_ResumeAudioDevice(audio_dev);
 }

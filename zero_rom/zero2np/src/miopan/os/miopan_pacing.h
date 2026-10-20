@@ -76,6 +76,23 @@ void MioPan_PacingWaitField(void);
  */
 int MioPan_PacingLastVBlankWait(void);
 
+/*
+ * Stop the host's clocks, for the pause the renderer takes while the window is
+ * in the background.
+ *
+ * Holding the game thread alone is not a pause.  Two host threads keep time
+ * of their own: the V-blank thread, whose fields would bank up for vfunc() to
+ * drain on resume, and the IOP's hard timer, which steps iopSndMain()'s volume
+ * ramps -- so a fade in flight would finish while nobody could hear it.  Both
+ * poll this and sit still while it is set, and both restart their schedule
+ * from "now" when it clears rather than firing the backlog at once.
+ *
+ * The SPU2's own clock is the audio device; iop_voice.h's
+ * MioPan_VoiceSetOutputPaused() is its half of the same pause.
+ */
+void MioPan_PacingSetHostHold(int held);
+int  MioPan_PacingHostHeld(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -172,6 +172,56 @@ void MioPan_RendererToggleFullscreen(void);
  * the window would never come back to its old shape. */
 void MioPan_RendererGetWindowedSize(int *width, int *height);
 
+/* Presentation sync -- what the swapchain does with a finished frame.
+ *
+ * This governs presentation only.  The game is paced by the host's V-blank
+ * thread at the CRTC field rate (sdk/libgraph.cpp), whatever this is set to, so
+ * none of these changes game speed; they decide whether a frame may replace
+ * the one on screen mid-scan.
+ *
+ *   OFF      IMMEDIATE: presented the moment it is done, so it tears, but
+ *            never waits.  Falls back to MAILBOX, then VSYNC, where the
+ *            driver will not do it.
+ *   ON       VSYNC (FIFO): no tearing, and supported everywhere.  A present
+ *            can wait up to one refresh, which the frame's wait for its next
+ *            field absorbs -- the game only slows if the display refreshes
+ *            more slowly than the game presents.
+ *   MAILBOX  no tearing and no waiting: the newest frame replaces any not yet
+ *            shown.  Not every backend offers it; VSYNC where it is missing.
+ *
+ * Applied at the next frame boundary, because the swapchain cannot be rebuilt
+ * with a texture of it in flight.  Get returns what was asked for; GetActive
+ * what the swapchain runs, as a MIOPAN_VSYNC_* value. */
+enum
+{
+    MIOPAN_VSYNC_OFF = 0,
+    MIOPAN_VSYNC_ON = 1,
+    MIOPAN_VSYNC_MAILBOX = 2
+};
+void MioPan_RendererSetVsync(int mode);
+int  MioPan_RendererGetVsync(void);
+int  MioPan_RendererGetVsyncActive(void);
+
+/* What the game does while its window is in the background -- minimised, or
+ * not holding the keyboard focus.  Separate settings, because they answer
+ * different complaints: mute is for the player alt-tabbing to read something,
+ * pause is for the player walking away.
+ *
+ * Mute silences the output and changes nothing else; the game runs on, and
+ * its audio with it, so coming back lands wherever the game has got to.
+ *
+ * Pause holds the game thread at the end of a frame -- after the present,
+ * before control returns to the ROM -- and stops the host clocks with it (the
+ * V-blank thread, the IOP's sound timer and the audio device; see
+ * MioPan_PacingSetHostHold()).  The IOP threads stay alive and simply find
+ * nothing to do: every one of them is waiting on the EE, on a field, or on
+ * the mixer consuming audio, and none of those arrive.  Events are still
+ * pumped while held, which is what notices the window coming back. */
+void MioPan_RendererSetMuteInBackground(int enable);
+int  MioPan_RendererGetMuteInBackground(void);
+void MioPan_RendererSetPauseInBackground(int enable);
+int  MioPan_RendererGetPauseInBackground(void);
+
 /* Display aspect ratio, decoupled from the window.
  *
  * This is what g_view_extend_* is built from, so it decides two things at once
