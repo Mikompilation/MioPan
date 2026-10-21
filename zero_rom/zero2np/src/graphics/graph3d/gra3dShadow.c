@@ -1110,6 +1110,14 @@ static void _DrawShadow(GRA3DCAMERA *pCamera, float ax, float ay)
      * modulates the projected texture with. */
     MioPan_RendererShadowSetStrength(
         (float)s_pScratchpadLayout->Vu1Mem.Direct.ivColor[3] / 255.0f);
+    /* PORT: what the VU1 program culls receiver triangles by -- the projector
+     * z (s_matIP's z row; below 0 between the caster and the light), the light
+     * direction (matLIP's w column) and the camera's side of each face. */
+    {
+        float plane[4] = { s_matIP[0][2], s_matIP[1][2], s_matIP[2][2], s_matIP[3][2] };
+
+        MioPan_RendererShadowSetProjector(plane, s_vDirection, pCamera->matCoord[3]);
+    }
 
     for (i = 0; i < (int)s_stackpProjectModel.size(); i++)
     {

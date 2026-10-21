@@ -9,6 +9,9 @@
  * is the per-draw `model` and s_matIP's role is played by uShadowMatrix, the
  * light camera's world->clip that _RenderShadow() rendered the map with.
  *
+ * The world position goes on to the fragment stage for the microcode's
+ * receiver culling (shadow_receiver.frag).
+ *
  * Vertex layout is MioPan's streamed mesh layout -- position at TEXCOORD2.  The
  * MikuPan original bound aPos to TEXCOORD0, which is the UV stream here.
  */
@@ -23,14 +26,17 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float4 vShadowClip : TEXCOORD0;
+    float4 vWorld : TEXCOORD1;
 };
 
 VSOutput main(VSInput input)
 {
     float4 localPos = float4(input.aPos.xyz, 1.0);
+    float4 worldPos = mul(model, localPos);
 
     VSOutput output;
     output.position = mul(mvp, localPos);
-    output.vShadowClip = mul(uShadowMatrix, mul(model, localPos));
+    output.vShadowClip = mul(uShadowMatrix, worldPos);
+    output.vWorld = worldPos;
     return output;
 }

@@ -14,15 +14,53 @@
  * Several shadows are in flight per frame -- the player, the sister, and one
  * per object block under the flashlight -- and they share one texture, because
  * unlike the ROM the host does not consume each map before building the next.
+ *
+ * Receiver culling, from the microcode (uShadowPlane / uShadowLight /
+ * uShadowEye, set by MioPan_RendererShadowSetProjector()).  SgSuShadow_dma_main
+ * does not project onto every receiver triangle: it drops one that faces away
+ * from the camera (the pipeline's back-face cull), one whose camera-facing side
+ * faces away from the light (face normal against matLIP's w column, -light
+ * direction), and one whose three vertices all have a projector z below 0 --
+ * past the caster's light-most box corner, between the caster and the light.
+ * Without that, the light camera's whole depth range took the silhouette and a
+ * ceiling over Mio showed a second copy of her floor shadow.  The facing test
+ * is per triangle here too (the face normal from the world position's screen
+ * derivatives, oriented by the camera); the depth test is per fragment, where
+ * the ROM keeps a whole triangle that has one vertex at z >= 0 -- only the
+ * part of such a triangle between the caster and the light differs, and a
+ * real shadow never falls there.
  */
 struct PSInput
 {
     float4 position : SV_Position;
     float4 vShadowClip : TEXCOORD0;
+    float4 vWorld : TEXCOORD1;
 };
 
 float4 main(PSInput input) : SV_Target0
 {
+    /* Before any discard: derivatives need the whole quad. */
+    float3 world = input.vWorld.xyz;
+    float3 face = cross(ddx(world), ddy(world));
+
+    if (uShadowLight.w != 0.0)
+    {
+        /* The projector z, VU1 vf20.z: s_matIP's z row on the world point. */
+        float pz = dot(uShadowPlane.xyz, world) + uShadowPlane.w;
+        /* The camera and the light on opposite sides of the face: the side
+         * the camera sees faces away from the light.  Either orientation of
+         * `face` gives the same sign. */
+        float facing = dot(face, uShadowLight.xyz) * dot(face, uShadowEye.xyz - world);
+        if (pz < 0.0 || facing < 0.0)
+        {
+            if (uFlags1.z != 0)
+            {
+                return float4(0.3, 0.0, 0.45, 1.0);
+            }
+            discard;
+        }
+    }
+
     if (input.vShadowClip.w <= 0.0)
     {
         if (uFlags1.z != 0)

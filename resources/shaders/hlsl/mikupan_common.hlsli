@@ -90,6 +90,17 @@ cbuffer MikuPanUniforms : register(b0, MIKUPAN_UNIFORM_SPACE)
     // MikuPanFixClipZ()).  yzw spare.  Appended for the same reason as
     // uAlphaTest.
     float4 uClipZ;
+
+    // Projected-shadow receiver culling, per cast shadow -- what the ROM's
+    // projection microcode (SgSuShadow_dma_main) tests every receiver triangle
+    // against.  uShadowPlane = s_matIP's z row: the projector depth, below 0
+    // past the caster's light-most box corner (between it and the light).
+    // uShadowLight.xyz = s_vDirection, towards the light; uShadowEye.xyz = the
+    // game camera's position; uShadowLight.w = 1 when these are set.  See
+    // shadow_receiver.frag.  Appended for the same reason as uAlphaTest.
+    float4 uShadowPlane;
+    float4 uShadowLight;
+    float4 uShadowEye;
 };
 
 // GS alpha test.  Returns true when the fragment should be thrown away, which

@@ -46,6 +46,9 @@ struct type_MikuPanUniforms
     float4 uFinderMask2;
     float4 uAlphaSharpen;
     float4 uClipZ;
+    float4 uShadowPlane;
+    float4 uShadowLight;
+    float4 uShadowEye;
 };
 
 struct type_LightBlock
@@ -82,6 +85,7 @@ struct type_MaterialBlock
 struct main0_out
 {
     float4 out_var_TEXCOORD0 [[user(locn0)]];
+    float4 out_var_TEXCOORD1 [[user(locn1)]];
     float4 gl_Position [[position]];
 };
 
@@ -93,9 +97,11 @@ struct main0_in
 vertex main0_out main0(main0_in in [[stage_in]], constant type_MikuPanUniforms& MikuPanUniforms [[buffer(0)]])
 {
     main0_out out = {};
-    float4 _38 = float4(in.in_var_TEXCOORD2.xyz, 1.0);
-    out.gl_Position = MikuPanUniforms.mvp * _38;
-    out.out_var_TEXCOORD0 = MikuPanUniforms.uShadowMatrix * (MikuPanUniforms.model * _38);
+    float4 _39 = float4(in.in_var_TEXCOORD2.xyz, 1.0);
+    float4 _42 = MikuPanUniforms.model * _39;
+    out.gl_Position = MikuPanUniforms.mvp * _39;
+    out.out_var_TEXCOORD0 = MikuPanUniforms.uShadowMatrix * _42;
+    out.out_var_TEXCOORD1 = _42;
     return out;
 }
 

@@ -527,6 +527,14 @@ struct SpriteUniformBlock
     /* x = 1 when the draw's clip z is already reversed (DrawCommand::
      * clip_z_reversed).  Mirrors `uClipZ`; appended for the same reason. */
     float clipZ[4];
+
+    /* The cast shadow's receiver culling: projector plane (s_matIP's z row),
+     * direction towards the light (w = 1 when set) and the game camera's
+     * position.  Mirror `uShadowPlane` / `uShadowLight` / `uShadowEye`;
+     * appended for the same reason. */
+    float shadowPlane[4];
+    float shadowLight[4];
+    float shadowEye[4];
 };
 
 static const ShaderFormatInfo kShaderFormats[] = {
@@ -912,6 +920,13 @@ struct ShadowEpisode
     /* _CalcColor()'s projector alpha: the light's diffuse luminance at the
      * shadow target, capped at half. */
     float strength;
+    /* What the ROM's projection microcode culls receiver triangles by
+     * (MioPan_RendererShadowSetProjector): s_matIP's z row, the direction
+     * towards the light, the game camera's position. */
+    float plane[4];
+    float to_light[3];
+    float eye[3];
+    bool have_projector;
     bool have_casters;
 };
 std::vector<ShadowEpisode> g_shadow_episodes;
@@ -8839,6 +8854,17 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
             std::memcpy(g_uniforms.shadowMatrix, episode.matrix,
                         sizeof(g_uniforms.shadowMatrix));
             g_uniforms.params0[1] = episode.strength;
+            for (int c = 0; c < 4; c++)
+            {
+                g_uniforms.shadowPlane[c] = episode.plane[c];
+            }
+            for (int c = 0; c < 3; c++)
+            {
+                g_uniforms.shadowLight[c] = episode.to_light[c];
+                g_uniforms.shadowEye[c] = episode.eye[c];
+            }
+            g_uniforms.shadowLight[3] = episode.have_projector ? 1.0f : 0.0f;
+            g_uniforms.shadowEye[3] = 1.0f;
 
             const float inv_tiles = 1.0f / (float)kShadowAtlasTiles;
             g_uniforms.shadowSize[0] = inv_tiles;
@@ -13366,6 +13392,43 @@ void MioPan_RendererShadowSetStrength(float strength)
     }
     g_shadow_episodes[g_shadow_current_episode].strength =
         std::min(std::max(strength, 0.0f), 1.0f);
+}
+
+/*
+ * The receiver culling of the ROM's projection microcode, which the projective
+ * shader alone does not do: without it every surface inside the light
+ * camera's depth range samples the silhouette, so a ceiling between Mio and
+ * the light got a second copy of her floor shadow.  SgSuShadow_dma_main
+ * (vu1/ff2_03.vsm) drops a receiver triangle when all three of its vertices
+ * have a projector z below 0 (past the caster's light-most box corner,
+ * towards the light), when it faces away from the camera, or when the side
+ * the camera sees faces away from the light (the face normal against matLIP's
+ * w column, the negated light direction).  shadow_receiver.frag does the same
+ * per fragment.
+ */
+void MioPan_RendererShadowSetProjector(const float *plane,
+                                       const float *to_light,
+                                       const float *eye)
+{
+    if (g_shadow_current_episode < 0 ||
+        g_shadow_current_episode >= (int)g_shadow_episodes.size())
+    {
+        return;
+    }
+    ShadowEpisode &episode = g_shadow_episodes[g_shadow_current_episode];
+    episode.have_projector = true;
+    for (int c = 0; c < 4; c++)
+    {
+        episode.plane[c] = plane[c];
+        episode.have_projector &= std::isfinite(plane[c]);
+    }
+    for (int c = 0; c < 3; c++)
+    {
+        episode.to_light[c] = to_light[c];
+        episode.eye[c] = eye[c];
+        episode.have_projector &=
+            std::isfinite(to_light[c]) && std::isfinite(eye[c]);
+    }
 }
 
 /*

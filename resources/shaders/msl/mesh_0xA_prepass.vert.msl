@@ -46,6 +46,9 @@ struct type_MikuPanUniforms
     float4 uFinderMask2;
     float4 uAlphaSharpen;
     float4 uClipZ;
+    float4 uShadowPlane;
+    float4 uShadowLight;
+    float4 uShadowEye;
 };
 
 struct type_LightBlock

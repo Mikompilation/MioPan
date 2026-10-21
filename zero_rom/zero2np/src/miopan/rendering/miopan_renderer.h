@@ -1090,6 +1090,13 @@ void MioPan_RendererShadowEndCaster(void);
 void MioPan_RendererShadowBeginReceiver(void);
 void MioPan_RendererShadowEndReceiver(void);
 void MioPan_RendererShadowSetStrength(float strength);
+/* The current shadow's receiver culling, as the projection microcode does it:
+ * plane = s_matIP's z row (world; the projector z is below 0 between the
+ * caster and the light), to_light = s_vDirection, eye = the game camera's
+ * position.  Called by _DrawShadow() once s_matIP is built. */
+void MioPan_RendererShadowSetProjector(const float *plane,
+                                       const float *to_light,
+                                       const float *eye);
 void MioPan_RendererShadowReset(void);
 /* The host half of gra3dshadowDrawSGD()'s camOrigin save and _DrawShadow()'s
  * _gra3dSetCameraForce() restore, which only assigns the ROM's camera struct

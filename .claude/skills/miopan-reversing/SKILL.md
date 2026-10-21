@@ -496,6 +496,19 @@ entire anonymous namespace of helper functions. When a scripted edit truncates a
 **Before scripted deletion, know what is inside the span.** Removing "from marker A to
 the end of function B" can swallow unrelated code that happens to sit between them.
 
+**A host shader that stands in for VU1 microcode drops what the microcode rejects.**
+Mio's projected shadow showed twice, on the floor and again on the ceiling above her:
+`shadow_receiver.frag` projected the silhouette onto every receiver in the light
+camera's depth range, but `SgSuShadow_dma_main` (`vu1/ff2_03.vsm`) culls each receiver
+triangle -- projector z < 0 at all three vertices (s_matIP's z row, 0 at the caster
+box's light-most corner), the camera's back face, and a camera-visible side facing away
+from the light (face normal against matLIP's w column). `_DrawShadow` now passes the
+plane, `s_vDirection` and the camera position (`MioPan_RendererShadowSetProjector`) and
+the fragment shader rejects the same. Shared with ReiPan, whose FF3 copy of the program
+is byte-identical. When porting a VU1 program to a shader, read it for what it skips
+(ADC bits, `CLEAR_MESH`), not only for what it computes. Check with F1 -> Renderer ->
+"Shadow projector view": culled receivers turn purple.
+
 ## Style
 
 Match the surrounding code: same comment density, naming, and idiom. Comments should
