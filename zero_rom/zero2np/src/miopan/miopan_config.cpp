@@ -1422,7 +1422,7 @@ int MioPan_ConfigSetDebugMenuEnabled(int enabled)
 
     /* Persisted immediately, like the data folder: it is one discrete choice,
      * not a slider the debounce in miopan_ui.cpp exists to coalesce, and that
-     * debounce only watches MioPan_ConfigRenderer anyway. */
+     * debounce only watches the renderer, audio and ui structs anyway. */
     return MioPan_ConfigSave();
 }
 
