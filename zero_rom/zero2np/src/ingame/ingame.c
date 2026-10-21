@@ -87,6 +87,7 @@
 #include "system/pad/vib_manage.h"
 #include "../common/save_data.h"
 #include "movie_room.h"
+#include "../miopan/miopan_config.h"    // MioPan_ConfigDebugMenuEnabled (port)
 
 /* --------------------------------------------------------------------------
  *  ingame.o's own storage.
@@ -729,7 +730,15 @@ GPHASE_ENUM one_Story_Normal(GPHASE_ENUM dummy)
         }
     }
 
-    if (*key_now[0xd] == 1)                                             /* 933 */
+    /* PORT DEVIATION: the ROM opens the debug menu on any SELECT press in
+     * normal play.  SELECT is Tab and the gamepad's Back button on the port's
+     * default bindings, so players landed in a developer menu by accident; the
+     * shortcut now also needs [developer] debug_menu in miopan.ini, and with it
+     * on this is the ROM's test unchanged.  Nothing legitimate is lost: no
+     * paddat[] row maps SELECT (cnt[13]), so the map, the menus and the finder
+     * never see it, and its other direct readers -- movie.c's pause toggle,
+     * main.c's soft-reset chord, the screen saver -- are untouched. */
+    if (*key_now[0xd] == 1 && MioPan_ConfigDebugMenuEnabled() != 0)     /* 933 */
     {
         SetIngameDbgMenu(1);                                            /* 934 */
     }
@@ -1029,7 +1038,17 @@ GPHASE_ENUM one_Story_Debug_Cam(GPHASE_ENUM dummy)
     SetIngameListnerInfo();                                             /* 1374 */
     if (*key_now[0xd] == 1) {                                           /* 1377 */
         DebugCameraMenu.CameraDebugON = 0;                              /* 1378 */
-        SetNextGPhase(GID_STORY_DEBUG);                                 /* 1379 */
+
+        /* PORT DEVIATION: the ROM always drops back into the debug menu it
+         * came from.  With [developer] debug_menu off, this phase is the
+         * overlay's free camera and SELECT must not reach that menu, so it
+         * leaves the way one_Story_Debug() closes -- IngameDecideNextPhase(),
+         * which still honours a pending dbg_menu request. */
+        if (MioPan_ConfigDebugMenuEnabled() != 0) {
+            SetNextGPhase(GID_STORY_DEBUG);                             /* 1379 */
+        } else {
+            SetNextGPhase(IngameDecideNextPhase());
+        }
     }
     IngameDrawSub();                                                    /* 1387 */
     return GPHASE_CONTINUE;                                             /* 1395 */

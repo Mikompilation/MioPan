@@ -111,6 +111,11 @@ MioPan_Config miopan_config = {
     /* .ui = */ {
         /* .scale             = */ 0.0f,
     },
+    /* .paths = */ {},
+    /* .developer = */ {
+        /* Off: see MioPan_ConfigDeveloper. */
+        /* .debug_menu        = */ 0,
+    },
 };
 
 namespace
@@ -1006,6 +1011,9 @@ static void ConfigLoadOnce(void)
     ReadFloat("finder", "surround_darken", &r->finder_mask_darken);
     ReadFloat("finder", "surround_tint", &r->finder_mask_tint);
     ReadFloat("finder", "surround_scale", &r->finder_mask_scale);
+    ReadInt("developer", "debug_menu", &miopan_config.developer.debug_menu);
+    miopan_config.developer.debug_menu =
+        miopan_config.developer.debug_menu != 0 ? 1 : 0;
 
     /* The window size is the one value with no setter to clamp it, and a zero
      * or negative one would fail SDL_CreateWindow outright. */
@@ -1289,6 +1297,15 @@ int MioPan_ConfigSave(void)
         ";   line and into the picture the game did compose, which is the one\n"
         ";   value here that can spoil the original look.\n"
         "surround_scale = %.3f\n"
+        "\n"
+        "[developer]\n"
+        "; This prototype still opens its developers' debug menu when SELECT\n"
+        ";   is pressed in play or on the pause screen -- and SELECT is Tab\n"
+        ";   and the gamepad's Back button by default, so it is off here.\n"
+        ";   1 restores the ROM's behaviour; SELECT again leaves the menu.\n"
+        ";   The useful parts of it are on the F1 overlay's Assists menu\n"
+        ";   either way.\n"
+        "debug_menu = %d\n"
         "\n%s",
         miopan_config.paths.data_folder,
         EnumToName(kWindowModes, r->window_mode),
@@ -1331,6 +1348,7 @@ int MioPan_ConfigSave(void)
         (double)r->finder_mask_darken,
         (double)r->finder_mask_tint,
         (double)r->finder_mask_scale,
+        miopan_config.developer.debug_menu,
         input_section.c_str());
     };
 
@@ -1384,6 +1402,27 @@ int MioPan_ConfigSetDataFolder(const char *folder)
      * it survives to the next run -- that is how a folder guessed wrongly
      * becomes a line they can correct instead of a mystery -- and the settings
      * UI has nothing to show for a choice that was not written down. */
+    return MioPan_ConfigSave();
+}
+
+int MioPan_ConfigDebugMenuEnabled(void)
+{
+    return miopan_config.developer.debug_menu;
+}
+
+int MioPan_ConfigSetDebugMenuEnabled(int enabled)
+{
+    enabled = enabled != 0 ? 1 : 0;
+    if (miopan_config.developer.debug_menu == enabled)
+    {
+        return 1;
+    }
+
+    miopan_config.developer.debug_menu = enabled;
+
+    /* Persisted immediately, like the data folder: it is one discrete choice,
+     * not a slider the debounce in miopan_ui.cpp exists to coalesce, and that
+     * debounce only watches MioPan_ConfigRenderer anyway. */
     return MioPan_ConfigSave();
 }
 

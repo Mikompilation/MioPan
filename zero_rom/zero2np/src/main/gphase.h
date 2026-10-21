@@ -161,4 +161,13 @@ void InitGPhaseSys(void);                   /* clear all layers, queue GID_SUPER
 void GPhaseSysMain(void);                   /* advance the tree one frame        */
 void SetNextGPhase(GPHASE_ID_ENUM id);      /* queue a transition to phase `id`  */
 
+/* --------------------------------------------------------------------------
+ *  PORT-ONLY: read access for the host overlay (miopan_ui_assists.cpp), which
+ *  only offers an entry while the game is somewhere that entry is safe.  No ROM
+ *  equivalent -- gphase_sys is file-static in the ROM too, and nothing outside
+ *  gphase.o ever asked.
+ * ------------------------------------------------------------------------ */
+int GPhaseIsActive(GPHASE_ID_ENUM id);      /* `id` is running at its own layer  */
+int GPhaseIsSettled(void);                  /* nothing queued for next frame     */
+
 #endif /* _GPHASE_H */

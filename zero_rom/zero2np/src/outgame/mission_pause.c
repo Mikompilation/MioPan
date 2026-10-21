@@ -35,6 +35,7 @@
 #include "../system/eeiop/stream_auto.h"    // StreamAutoAllPause
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / padIsConnected / ...
+#include "../miopan/miopan_config.h"        // MioPan_ConfigDebugMenuEnabled (port)
 
 /* PAUSE_CTRL::step */
 #define MISPAUSE_STEP_MENU          0
@@ -169,7 +170,10 @@ static void MisPausePad(void)                                           /* 226 *
         SetIngamePauseMode(0);                                          /* 246 */
         SetNextGPhase(IngameDecideNextPhase());                         /* 248 */
     }
-    else if (*key_now[13] == 1)                                         /* 252 */
+    /* PORT DEVIATION: gated on [developer] debug_menu, like the story pause
+     * screen and normal play (see one_Story_Normal() in ingame.c for why).
+     * The ladder ends here, so with the setting off SELECT does nothing. */
+    else if (*key_now[13] == 1 && MioPan_ConfigDebugMenuEnabled() != 0) /* 252 */
     {
         SetNextGPhase(GID_STORY_DEBUG);                                 /* 253 */
     }

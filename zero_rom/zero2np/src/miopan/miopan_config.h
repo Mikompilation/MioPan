@@ -130,15 +130,39 @@ typedef struct MioPan_ConfigPaths
     char data_folder[1024];
 } MioPan_ConfigPaths;
 
+/*
+ * The prototype's own developer tooling.
+ *
+ * This Feb 2004 build still answers SELECT with the developers' debug menu
+ * (GID_STORY_DEBUG), from normal play and from both pause screens.  SELECT is
+ * Tab and the gamepad's Back button on the port's default bindings, so a player
+ * reaching for either lands in a menu that says nothing about how to leave it.
+ * Off by default; on restores the ROM's behaviour exactly.  The useful parts of
+ * that menu are on the overlay's Assists menu either way.
+ */
+typedef struct MioPan_ConfigDeveloper
+{
+    int debug_menu;      /* 0 off, 1 SELECT opens the ROM's debug menu */
+} MioPan_ConfigDeveloper;
+
 typedef struct MioPan_Config
 {
-    MioPan_ConfigRenderer renderer;
-    MioPan_ConfigAudio    audio;
-    MioPan_ConfigUi       ui;
-    MioPan_ConfigPaths    paths;
+    /* Order matters: miopan_config.cpp's defaults are a positional
+     * initialiser in exactly this order. */
+    MioPan_ConfigRenderer  renderer;
+    MioPan_ConfigAudio     audio;
+    MioPan_ConfigUi        ui;
+    MioPan_ConfigPaths     paths;
+    MioPan_ConfigDeveloper developer;
 } MioPan_Config;
 
 extern MioPan_Config miopan_config;
+
+/* [developer] debug_menu.  The game's SELECT tests (ingame.c, pause.c,
+ * mission_pause.c) ask through the getter.  The setter persists at once, as
+ * MioPan_ConfigSetDataFolder() does, and returns non-zero once it is on disk. */
+int MioPan_ConfigDebugMenuEnabled(void);
+int MioPan_ConfigSetDebugMenuEnabled(int enabled);
 
 /* Absolute path of the settings file, or NULL if the user directory could not be
  * created. */

@@ -1,4 +1,5 @@
 #include "miopan_ui.h"
+#include "miopan_ui_assists.h"
 #include "../os/miopan_pacing.h"
 #include "../rendering/miopan_renderer.h"
 #include "../miopan_config.h"
@@ -2534,6 +2535,7 @@ void DrawMainMenuBar()
         DrawAudioMenu();
         ImGui::EndMenu();
     }
+    MioPanUi::DrawAssistsMenu();
     if (ImGui::BeginMenu("Settings"))
     {
         ImGui::MenuItem("Game data folder...", nullptr, &g_show_data_folder);
