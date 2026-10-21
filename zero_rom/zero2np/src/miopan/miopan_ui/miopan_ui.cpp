@@ -1299,7 +1299,7 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 37 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 38 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
@@ -2582,6 +2582,21 @@ void DrawDiagnosticsMenu()
             "once, and then stops uploading them to the emulated GS every\n"
             "frame. Off re-sends and re-hashes them every draw, as the PS2\n"
             "did -- the A/B if a texture looks wrong.");
+    }
+
+    ImGui::TextDisabled("Characters and items");
+    bool indexed_streams = MioPan_RendererGetIndexedStreams() != 0;
+    if (ImGui::MenuItem("Send each vertex once", nullptr, &indexed_streams))
+    {
+        MioPan_RendererSetIndexedStreams(indexed_streams ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Characters, ghosts and items go up once per vertex with their\n"
+            "strips as indices, and neighbouring parts that share state are\n"
+            "merged into one draw. Off sends every triangle's three corners,\n"
+            "as the port always has -- the A/B if a model looks different.");
     }
 
     ImGui::EndMenu();
