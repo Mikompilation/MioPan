@@ -41,6 +41,7 @@ constexpr int kFontTextureBankCount = 6;
  * visible geometry synchronously crossed a GPU-buffer high-water mark during
  * its first draw. */
 constexpr Uint32 kInitialVertexBufferSize = 65536 * 12 * sizeof(float);
+constexpr Uint32 kInitialStreamIndexBufferSize = 65536 * sizeof(Uint32);
 constexpr Uint32 kInitialMeshColourBufferSize = 65536 * sizeof(float) * 4;
 constexpr Uint32 kInitialAnimatedMeshBufferSize =
     65536 * sizeof(float) * 8;
@@ -377,6 +378,15 @@ struct DrawCommand
     ResidentMeshPtr resident;
     Uint32 resident_first_vertex = 0;
     Uint32 resident_vertex_count = 0;
+    /* An indexed stream draw (MioPan_RendererBeginIndexedMeshStream()):
+     * g_stream_indices[first_index, +index_count) over the streamed vertices
+     * [first_vertex, +vertex_count), the indices being absolute g_vertices
+     * positions.  Same layout, pipelines and per-vertex data as any streamed
+     * draw -- only primitive assembly differs, so everything that works on a
+     * streamed draw's vertex span (the geometry blend, the aspect fix) works
+     * on this one unchanged. */
+    bool stream_indexed = false;
+    /* The index span of a resident or an indexed stream draw. */
     Uint32 first_index = 0;
     Uint32 index_count = 0;
     float mvp[16];
@@ -446,6 +456,10 @@ static_assert(sizeof(MioPanLightState) % 16u == 0,
 struct MeshStreamState
 {
     unsigned int token = 0;
+    /* Opened by MioPan_RendererBeginIndexedMeshStream(): vertices and
+     * triangles arrive separately, and the commit queues an indexed draw. */
+    bool indexed = false;
+    Uint32 first_index = 0;
     Uint32 first_vertex = 0;
     Uint32 max_vertices = 0;
     int submitted_triangles = 0;
@@ -963,6 +977,10 @@ SDL_GPUBuffer *g_mesh_colour_buffer;
 Uint32 g_mesh_colour_buffer_size;
 SDL_GPUBuffer *g_animated_mesh_buffer;
 Uint32 g_animated_mesh_buffer_size;
+/* g_stream_indices on the GPU.  Grow-only like g_vertex_buffer, and filled by
+ * the same upload, so a draw that can read one can read the other. */
+SDL_GPUBuffer *g_stream_index_buffer;
+Uint32 g_stream_index_buffer_size;
 Uint32 g_depth_width;
 Uint32 g_depth_height;
 Uint32 g_pause_capture_width;
@@ -1150,6 +1168,9 @@ bool g_interpolate_presents = true;
  * camera pans that have something to interpolate.
  */
 float g_camera_motion = -1.0f;
+/* Smoothed ticks presented unblended because their camera pair was a cut
+ * (CameraPairIsCut()), since startup.  MioPan_RendererGetSmoothingCuts(). */
+unsigned int g_smoothing_cuts;
 /*
  * Geometry smoothing -- the second half of an in-between frame.
  *
@@ -1306,6 +1327,9 @@ FontTextureEntry g_font_textures[kFontTextureBankCount];
 TextureEntry *g_current_font_texture;
 int g_current_font_bank = -1;
 std::vector<SpriteVertex> g_vertices;
+/* Triangles of the indexed mesh streams, three absolute g_vertices positions
+ * each.  Rebuilt every frame with g_vertices, whose lifetime it shares. */
+std::vector<Uint32> g_stream_indices;
 std::vector<MeshColour> g_mesh_colours;
 std::vector<AnimatedMeshVertex> g_animated_mesh_vertices_stream;
 std::vector<MioPanLightState> g_vertex_light_states;
@@ -1330,6 +1354,12 @@ size_t g_resident_mesh_bytes;
 int g_resident_units;
 int g_resident_draws;
 int g_resident_creates;
+/* MioPan_RendererSetIndexedStreams(). */
+bool g_indexed_streams_enabled = true;
+/* Per frame, for the stutter note: indexed stream commits, and the draws they
+ * became after consecutive ones were folded together. */
+int g_indexed_stream_units;
+int g_indexed_stream_draws;
 /* Per stats window: models whose textures were resolved, TRI2 uploads that
  * were then skipped, skipped runs sent after all because a draw sampled what
  * they leave, and what the GS was sent anyway -- the figure all of this
@@ -1804,6 +1834,107 @@ float Dot3(const float *a, const float *b)
  * and short of 180, where the slerp arc stops being defined at all.
  */
 constexpr float kGeometryMaxTickRotationCos = 0.70710678f;
+
+/*
+ * Beyond any of these, the cameras of two consecutive ticks are not one camera
+ * moving but a cut -- a fixed angle handing over to the next, an event shot
+ * change, a room coming up after a load -- and an in-between blended from them
+ * would show a view nobody set up, with the world swung through it.
+ *
+ * Measured in chapters 1 and 3 with smoothing on: a camera following Mio at a
+ * walk and through her turns moved at most 10.5 units and 0.4 degrees a tick,
+ * with the projection unchanged.  The cuts in the same runs moved 1599 to 4521
+ * units, turned 58 to 173 degrees, and two of them changed the projection as
+ * well.  The move and turn thresholds sit more than an order of magnitude from
+ * the motion and well inside the cuts; the focal one is there for a shot
+ * change that only zooms.  Finder turning and zoom were not in the sample.  A
+ * false positive costs one tick presented unsmoothed, a false negative a
+ * visibly wrong frame, so the thresholds lean towards calling a cut.
+ */
+constexpr double kSmoothingCutMove = 300.0;
+constexpr double kSmoothingCutTurnCos = 0.86602540378; /* 30 degrees */
+constexpr float kSmoothingCutFocalChange = 0.15f;
+
+/* An object that moved further than this in one tick did not move, it was put
+ * somewhere else -- an event placing a character, a ghost appearing at its
+ * next spot -- and blending it would drag it across the room for one present.
+ * Measured the same way: the fastest thing on screen, Mio walking, moved 53
+ * units a tick. */
+constexpr float kGeometryMaxTickJump = 200.0f;
+
+/* The upper-left 3x3 of a view matrix is a rotation: rows of unit length,
+ * mutually perpendicular, right-handed.  RotationRowsToQuat() assumes it, and
+ * a camera that is not one -- the all-zero matrix the renderer holds before the
+ * game's first, which looks like a perfectly finite camera -- has no
+ * orientation to blend from. */
+bool ViewRotationIsRigid(const float *view)
+{
+    const float *rows[3] = {&view[0], &view[4], &view[8]};
+    for (int i = 0; i < 3; i++)
+    {
+        if (std::fabs(Dot3(rows[i], rows[i]) - 1.0f) > 0.01f)
+        {
+            return false;
+        }
+        if (std::fabs(Dot3(rows[i], rows[(i + 1) % 3])) > 0.01f)
+        {
+            return false;
+        }
+    }
+    const float cross[3] = {
+        rows[0][1] * rows[1][2] - rows[0][2] * rows[1][1],
+        rows[0][2] * rows[1][0] - rows[0][0] * rows[1][2],
+        rows[0][0] * rows[1][1] - rows[0][1] * rows[1][0],
+    };
+    return Dot3(cross, rows[2]) > 0.99f;
+}
+
+/*
+ * Whether the camera pair a smoothed tick would interpolate between is a cut
+ * rather than one camera moving (see kSmoothingCutMove).  `move` is the eye
+ * distance the caller already measured.
+ */
+bool CameraPairIsCut(const float *from_view, const float *from_projection,
+                     const float *to_view, const float *to_projection,
+                     double move)
+{
+    if (!ViewRotationIsRigid(from_view) || !ViewRotationIsRigid(to_view))
+    {
+        return true;
+    }
+    if (!(move <= kSmoothingCutMove))
+    {
+        return true;
+    }
+
+    /* cos of the angle between the two orientations, from the Frobenius
+     * product of the rotation blocks: trace(Ra Rb^T) = 1 + 2 cos(theta). */
+    double trace = 0.0;
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 3; col++)
+        {
+            trace += (double)from_view[row * 4 + col] *
+                     (double)to_view[row * 4 + col];
+        }
+    }
+    if ((trace - 1.0) * 0.5 < kSmoothingCutTurnCos)
+    {
+        return true;
+    }
+
+    /* The focal scales, x and y, of a perspective projection. */
+    for (int i = 0; i < 2; i++)
+    {
+        const float a = std::fabs(from_projection[i * 5]);
+        const float b = std::fabs(to_projection[i * 5]);
+        if (std::fabs(a - b) > kSmoothingCutFocalChange * std::max(a, b))
+        {
+            return true;
+        }
+    }
+    return false;
+}
 
 /*
  * Blend two object transforms.
@@ -3199,6 +3330,11 @@ void AbortActiveMeshStream()
         g_vertices.size() >= g_mesh_stream.first_vertex)
     {
         g_vertices.resize(g_mesh_stream.first_vertex);
+    }
+    if (g_mesh_stream.token != 0 && g_mesh_stream.indexed &&
+        g_stream_indices.size() >= g_mesh_stream.first_index)
+    {
+        g_stream_indices.resize(g_mesh_stream.first_index);
     }
     g_mesh_stream = MeshStreamState{};
 }
@@ -6954,10 +7090,61 @@ bool EnsureVertexBuffer(size_t byte_count)
     return true;
 }
 
+bool EnsureStreamIndexBuffer(size_t byte_count)
+{
+    if (byte_count == 0)
+    {
+        return true;
+    }
+    if (byte_count > std::numeric_limits<Uint32>::max())
+    {
+        return false;
+    }
+    if (g_stream_index_buffer != nullptr &&
+        byte_count <= g_stream_index_buffer_size)
+    {
+        return true;
+    }
+
+    Uint32 new_size = kInitialStreamIndexBufferSize;
+    while (new_size < byte_count && new_size <= (Uint32)1 << 30)
+    {
+        new_size *= 2;
+    }
+    if (new_size < byte_count)
+    {
+        return false;
+    }
+
+    SDL_GPUBufferCreateInfo info{};
+    info.usage = SDL_GPU_BUFFERUSAGE_INDEX;
+    info.size = new_size;
+    SDL_GPUBuffer *replacement = SDL_CreateGPUBuffer(g_device, &info);
+    if (replacement == nullptr)
+    {
+        LogSdlError("SDL_CreateGPUBuffer");
+        return false;
+    }
+    /* Deferred past any submission still reading it, as for the vertex
+     * stream above. */
+    if (g_stream_index_buffer != nullptr)
+    {
+        SDL_ReleaseGPUBuffer(g_device, g_stream_index_buffer);
+    }
+    g_stream_index_buffer = replacement;
+    g_stream_index_buffer_size = new_size;
+    return true;
+}
+
+/* The streamed vertices, and the indexed streams' indices with them: one
+ * transfer, one copy pass, and one answer, so a draw whose vertices arrived
+ * cannot find its indices missing.  A repeated present that owes a vertex
+ * blend re-sends the indices too; they are a few hundred KB at most. */
 bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
                         SDL_GPUTransferBuffer **out_transfer)
 {
     const size_t byte_count = g_vertices.size() * sizeof(SpriteVertex);
+    const size_t index_bytes = g_stream_indices.size() * sizeof(Uint32);
     if (out_transfer != nullptr)
     {
         *out_transfer = nullptr;
@@ -6967,14 +7154,16 @@ bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
         return true;
     }
 
-    if (!EnsureVertexBuffer(byte_count))
+    if (!EnsureVertexBuffer(byte_count) ||
+        !EnsureStreamIndexBuffer(index_bytes) ||
+        byte_count + index_bytes > std::numeric_limits<Uint32>::max())
     {
         return false;
     }
 
     SDL_GPUTransferBufferCreateInfo transfer_info{};
     transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transfer_info.size = (Uint32)byte_count;
+    transfer_info.size = (Uint32)(byte_count + index_bytes);
     SDL_GPUTransferBuffer *transfer =
         SDL_CreateGPUTransferBuffer(g_device, &transfer_info);
     if (transfer == nullptr)
@@ -6991,6 +7180,11 @@ bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
         return false;
     }
     std::memcpy(mapped, g_vertices.data(), byte_count);
+    if (index_bytes != 0)
+    {
+        std::memcpy((unsigned char *)mapped + byte_count,
+                    g_stream_indices.data(), index_bytes);
+    }
     SDL_UnmapGPUTransferBuffer(g_device, transfer);
 
     SDL_GPUTransferBufferLocation src{};
@@ -7004,6 +7198,18 @@ bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
 
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
     SDL_UploadToGPUBuffer(copy, &src, &dst, true);
+    if (index_bytes != 0)
+    {
+        SDL_GPUTransferBufferLocation index_src{};
+        index_src.transfer_buffer = transfer;
+        index_src.offset = (Uint32)byte_count;
+
+        SDL_GPUBufferRegion index_dst{};
+        index_dst.buffer = g_stream_index_buffer;
+        index_dst.offset = 0;
+        index_dst.size = (Uint32)index_bytes;
+        SDL_UploadToGPUBuffer(copy, &index_src, &index_dst, true);
+    }
     SDL_EndGPUCopyPass(copy);
     if (out_transfer != nullptr)
     {
@@ -7817,6 +8023,7 @@ unsigned int GeometryDrawFlags(const DrawCommand &draw)
     flags |= ((unsigned int)draw.source & 3u) << 6;
     flags |= ((unsigned int)draw.blend_mode & 7u) << 8;
     flags |= draw.resident_mesh ? 0x800u : 0u;
+    flags |= draw.stream_indexed ? 0x1000u : 0u;
     return flags;
 }
 
@@ -8010,6 +8217,27 @@ void ApplyGeometryVertexBlend(float t)
             continue;
         }
 
+        /* A draw any of whose vertices jumped rather than moved keeps the
+         * frame's own positions, which is what g_vertices still holds for it:
+         * the decision depends only on the two snapshots, so every present of
+         * the tick skips it alike and none of them ever wrote a blend there. */
+        bool jumped = false;
+        for (size_t vertex = first; vertex < first + count && !jumped;
+             vertex++)
+        {
+            const float *from = &g_geo_prev_positions[vertex * 4u];
+            const float *to = &g_geo_curr_positions[vertex * 4u];
+            const float dx = to[0] - from[0];
+            const float dy = to[1] - from[1];
+            const float dz = to[2] - from[2];
+            jumped = !(dx * dx + dy * dy + dz * dz <=
+                       kGeometryMaxTickJump * kGeometryMaxTickJump);
+        }
+        if (jumped)
+        {
+            continue;
+        }
+
         for (size_t vertex = first; vertex < first + count; vertex++)
         {
             const float *from = &g_geo_prev_positions[vertex * 4u];
@@ -8035,6 +8263,18 @@ void ApplyGeometryVertexBlend(float t)
  * why a transform cannot be lerped element-wise, and the geometry-smoothing
  * state block for why a skinned block is not among them.
  */
+/* Whether a rigidly bound block's position jumped rather than moved between
+ * the two ticks (see kGeometryMaxTickJump).  Kept out of BlendModelMatrix(),
+ * whose maths tools/renderer/modelblend_test.cpp verifies verbatim. */
+bool ModelJumped(const float *from, const float *to)
+{
+    const float dx = to[12] - from[12];
+    const float dy = to[13] - from[13];
+    const float dz = to[14] - from[14];
+    return !(dx * dx + dy * dy + dz * dz <=
+             kGeometryMaxTickJump * kGeometryMaxTickJump);
+}
+
 int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
 {
     if (view == nullptr || projection == nullptr || !g_frame_active ||
@@ -8073,7 +8313,8 @@ int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
             continue;
         }
 
-        if (blend_models && i < g_geo_match_count)
+        if (blend_models && i < g_geo_match_count &&
+            !ModelJumped(g_geo_prev_draws[i].model, draw.model))
         {
             float model[16];
             if (BlendModelMatrix(g_geo_prev_draws[i].model, draw.model,
@@ -8672,7 +8913,8 @@ void PublishStutterFrameNote()
     SDL_snprintf(note, sizeof(note),
                  "hit %d miss %d new %d promo %d bdefer %d udefer %d "
                  "evict %d inval %d | texdl %d texnew %d texpend %zu | "
-                 "draws %zu verts %zu meshtri %d resident %zu",
+                 "draws %zu verts %zu idx %zu istream %d/%d "
+                 "meshtri %d resident %zu",
                  delta(g_mesh_cache_hits, last_hits),
                  delta(g_mesh_cache_misses, last_misses),
                  delta(g_mesh_cache_creates, last_creates),
@@ -8684,7 +8926,8 @@ void PublishStutterFrameNote()
                  delta(g_texture_downloads, last_downloads),
                  delta(g_texture_creates, last_creates_tex),
                  g_pending_texture_uploads.size(),
-                 g_draws.size(), g_vertices.size(),
+                 g_draws.size(), g_vertices.size(), g_stream_indices.size(),
+                 g_indexed_stream_draws, g_indexed_stream_units,
                  g_mesh_triangles_submitted, g_mesh_cache.size());
     MioPan_ProfilerSetFrameNote(note);
 
@@ -8891,6 +9134,30 @@ MeshPipelineLayout DrawPipelineLayout(const DrawCommand &draw)
  * which is static vertex v and the right colour both.  Every backend takes a
  * signed base vertex, and the element it lands on is never negative.
  */
+/* A streamed draw, with g_vertex_buffer already bound at offset 0.  An
+ * indexed stream's indices are absolute, so it needs no base vertex; binding
+ * the index buffer per draw is cheap next to the draw it saves. */
+void DrawStreamedPrimitives(SDL_GPURenderPass *pass, const DrawCommand &draw)
+{
+    if (!draw.stream_indexed)
+    {
+        SDL_DrawGPUPrimitives(pass, draw.vertex_count, 1, draw.first_vertex,
+                              0);
+        return;
+    }
+    if (g_stream_index_buffer == nullptr || draw.index_count == 0)
+    {
+        return;
+    }
+    SDL_GPUBufferBinding index_binding{};
+    index_binding.buffer = g_stream_index_buffer;
+    index_binding.offset = 0;
+    SDL_BindGPUIndexBuffer(pass, &index_binding,
+                           SDL_GPU_INDEXELEMENTSIZE_32BIT);
+    SDL_DrawGPUIndexedPrimitives(pass, draw.index_count, 1, draw.first_index,
+                                 0, 0);
+}
+
 bool DrawResidentMesh(SDL_GPURenderPass *pass, const DrawCommand &draw)
 {
     if (draw.resident == nullptr || draw.resident->vertex_buffer == nullptr ||
@@ -9316,8 +9583,7 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
                 SDL_BindGPUVertexBuffers(pass, 0, &vertex_binding, 1);
                 streamed_vertices_bound = true;
             }
-            SDL_DrawGPUPrimitives(pass, draw.vertex_count, 1,
-                                  draw.first_vertex, 0);
+            DrawStreamedPrimitives(pass, draw);
         }
     }
 }
@@ -9500,8 +9766,7 @@ bool RecordShadowMapPass(SDL_GPUCommandBuffer *cmd, bool streamed_ready,
                     SDL_BindGPUVertexBuffers(pass, 0, &vertex_binding, 1);
                     streamed_vertices_bound = true;
                 }
-                SDL_DrawGPUPrimitives(pass, draw.vertex_count, 1,
-                                      draw.first_vertex, 0);
+                DrawStreamedPrimitives(pass, draw);
             }
             drew_any = true;
         }
@@ -10715,7 +10980,7 @@ bool PresentLogicalFrame()
     /* Held aside before the first reprojection replaces it. */
     float true_view[16];
     float true_projection[16];
-    const bool interpolate =
+    bool interpolate =
         g_interpolate_presents && MioPan_RendererHavePreviousCamera() != 0;
     if (interpolate)
     {
@@ -10733,7 +10998,27 @@ bool PresentLogicalFrame()
         const double dx = to_eye[0] - from_eye[0];
         const double dy = to_eye[1] - from_eye[1];
         const double dz = to_eye[2] - from_eye[2];
-        g_camera_motion = (float)std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double move = std::sqrt(dx * dx + dy * dy + dz * dz);
+        g_camera_motion = (float)move;
+
+        /* A cut is presented as the frame it is, every present of the tick:
+         * no camera blend, and so no geometry blend either.  Nothing else
+         * changes -- the presents and their field waits still happen, so the
+         * pacing does not hitch on the cut, and this frame's true camera is
+         * still what the next one blends from. */
+        if (CameraPairIsCut(g_prev_3d_view, g_prev_3d_projection, true_view,
+                            true_projection, move))
+        {
+            interpolate = false;
+            /* Counted only when there is a real camera to cut to.  Before the
+             * game sets its first one -- boot, logos, the title -- every tick
+             * pairs two all-zero matrices, and counting those would bury the
+             * cuts the figure exists to show. */
+            if (ViewRotationIsRigid(true_view))
+            {
+                g_smoothing_cuts++;
+            }
+        }
     }
     else
     {
@@ -11530,6 +11815,9 @@ void MioPan_RendererBeginFrame(void)
     g_shadow_stat_casters = 0;
     g_shadow_stat_receivers = 0;
     g_vertices.clear();
+    g_stream_indices.clear();
+    g_indexed_stream_units = 0;
+    g_indexed_stream_draws = 0;
     g_mesh_colours.clear();
     g_animated_mesh_vertices_stream.clear();
     g_vertex_light_states.clear();
@@ -11681,6 +11969,11 @@ int MioPan_RendererGetPresentInterpolation(void)
 float MioPan_RendererGetCameraMotion(void)
 {
     return g_camera_motion;
+}
+
+unsigned int MioPan_RendererGetSmoothingCuts(void)
+{
+    return g_smoothing_cuts;
 }
 
 void MioPan_RendererSetGeometryInterpolation(int enable)
@@ -14854,25 +15147,32 @@ void MioPan_RendererInvalidateMeshCache(const void *owner)
     g_mesh_cache_invalidations++;
 }
 
-unsigned int MioPan_RendererBeginMeshStream(const sceGsTex0 *tex0,
-                                              int expected_vertex_count,
-                                              const float *local_world,
-                                              const MioPanLightState *fragment_lights,
-                                              const void *texture)
+/* Both kinds of mesh stream open here, so an indexed draw and a triangle-list
+ * one of the same unit capture the same state in the same order and differ in
+ * primitive assembly only. */
+static unsigned int OpenMeshStream(const sceGsTex0 *tex0,
+                                   int max_vertices,
+                                   int max_indices,
+                                   bool indexed,
+                                   const float *local_world,
+                                   const MioPanLightState *fragment_lights,
+                                   const void *texture)
 {
-    if (expected_vertex_count <= 0 || (expected_vertex_count % 3) != 0 ||
-        local_world == nullptr || !g_3d_camera_valid || !g_frame_active ||
-        g_mesh_stream.token != 0 || !EnsureRenderer() ||
-        g_vertices.size() >
-            (size_t)std::numeric_limits<Uint32>::max() -
-                (size_t)expected_vertex_count)
+    const size_t limit = (size_t)std::numeric_limits<Uint32>::max();
+    if (max_vertices <= 0 || local_world == nullptr || !g_3d_camera_valid ||
+        !g_frame_active || g_mesh_stream.token != 0 || !EnsureRenderer() ||
+        g_vertices.size() > limit - (size_t)max_vertices ||
+        (indexed && (max_indices <= 0 ||
+                     g_stream_indices.size() > limit - (size_t)max_indices)))
     {
         return 0;
     }
 
     MeshStreamState pending{};
+    pending.indexed = indexed;
+    pending.first_index = (Uint32)g_stream_indices.size();
     pending.first_vertex = (Uint32)g_vertices.size();
-    pending.max_vertices = (Uint32)expected_vertex_count;
+    pending.max_vertices = (Uint32)max_vertices;
     pending.command.first_vertex = pending.first_vertex;
     pending.command.depth_test = true;
     pending.command.repeat_uv = true;
@@ -14910,9 +15210,13 @@ unsigned int MioPan_RendererBeginMeshStream(const sceGsTex0 *tex0,
         if (!pending.discard_all)
         {
             ReserveGeometric(g_vertices,
-                             g_vertices.size() +
-                                 (size_t)expected_vertex_count,
-                             4096);
+                             g_vertices.size() + (size_t)max_vertices, 4096);
+            if (indexed)
+            {
+                ReserveGeometric(g_stream_indices,
+                                 g_stream_indices.size() + (size_t)max_indices,
+                                 4096);
+            }
         }
         ReserveGeometric(g_draws, g_draws.size() + 1, 1024);
     }
@@ -14929,11 +15233,78 @@ unsigned int MioPan_RendererBeginMeshStream(const sceGsTex0 *tex0,
     return pending.token;
 }
 
+unsigned int MioPan_RendererBeginMeshStream(const sceGsTex0 *tex0,
+                                              int expected_vertex_count,
+                                              const float *local_world,
+                                              const MioPanLightState *fragment_lights,
+                                              const void *texture)
+{
+    if ((expected_vertex_count % 3) != 0)
+    {
+        return 0;
+    }
+    return OpenMeshStream(tex0, expected_vertex_count, 0, false, local_world,
+                          fragment_lights, texture);
+}
+
+unsigned int MioPan_RendererBeginIndexedMeshStream(
+    const sceGsTex0 *tex0,
+    int max_vertices,
+    int max_indices,
+    const float *local_world,
+    const MioPanLightState *fragment_lights,
+    const void *texture)
+{
+    if (!g_indexed_streams_enabled || (max_indices % 3) != 0)
+    {
+        return 0;
+    }
+    return OpenMeshStream(tex0, max_vertices, max_indices, true, local_world,
+                          fragment_lights, texture);
+}
+
+/* One streamed vertex, on the scales MioPanMeshVertexInput documents.  The
+ * caller has already checked the position. */
+static SpriteVertex StreamVertexFromInput(const MioPanMeshVertexInput &input,
+                                          bool fragment_lighting)
+{
+    SpriteVertex vertex;
+    vertex.position[0] = input.position[0];
+    vertex.position[1] = input.position[1];
+    vertex.position[2] = input.position[2];
+    vertex.position[3] = 1.0f;
+    vertex.uv[0] = input.s;
+    vertex.uv[1] = input.t;
+    vertex.uv[2] = 0.0f;
+    vertex.uv[3] = 0.0f;
+    if (fragment_lighting)
+    {
+        EncodeMeshNormal(vertex.uv, input.normal);
+    }
+
+    const float r = input.rgb != nullptr ? input.rgb[0] : 1.0f;
+    const float g = input.rgb != nullptr ? input.rgb[1] : 1.0f;
+    const float b = input.rgb != nullptr ? input.rgb[2] : 1.0f;
+    vertex.colour[0] = std::isfinite(r) ? Clamp(r, 0.0f, 2.0f) : 1.0f;
+    vertex.colour[1] = std::isfinite(g) ? Clamp(g, 0.0f, 2.0f) : 1.0f;
+    vertex.colour[2] = std::isfinite(b) ? Clamp(b, 0.0f, 2.0f) : 1.0f;
+    vertex.colour[3] = std::isfinite(input.alpha)
+        ? Clamp01(input.alpha) : 1.0f;
+    return vertex;
+}
+
+static bool StreamPositionIsUsable(const float *position)
+{
+    return position != nullptr && std::isfinite(position[0]) &&
+           std::isfinite(position[1]) && std::isfinite(position[2]);
+}
+
 void MioPan_RendererAppendMeshTriangle(
     unsigned int stream,
     const MioPanMeshVertexInput vertices[3])
 {
-    if (stream == 0 || stream != g_mesh_stream.token || vertices == nullptr)
+    if (stream == 0 || stream != g_mesh_stream.token ||
+        g_mesh_stream.indexed || vertices == nullptr)
     {
         return;
     }
@@ -14945,11 +15316,7 @@ void MioPan_RendererAppendMeshTriangle(
                  emitted <= (size_t)g_mesh_stream.max_vertices - 3u;
     for (int i = 0; i < 3; i++)
     {
-        const float *position = vertices[i].position;
-        valid = valid && position != nullptr &&
-                std::isfinite(position[0]) &&
-                std::isfinite(position[1]) &&
-                std::isfinite(position[2]);
+        valid = valid && StreamPositionIsUsable(vertices[i].position);
     }
     if (!valid)
     {
@@ -14959,31 +15326,122 @@ void MioPan_RendererAppendMeshTriangle(
 
     for (int i = 0; i < 3; i++)
     {
-        const MioPanMeshVertexInput &input = vertices[i];
-        SpriteVertex vertex;
-        vertex.position[0] = input.position[0];
-        vertex.position[1] = input.position[1];
-        vertex.position[2] = input.position[2];
-        vertex.position[3] = 1.0f;
-        vertex.uv[0] = input.s;
-        vertex.uv[1] = input.t;
-        vertex.uv[2] = 0.0f;
-        vertex.uv[3] = 0.0f;
-        if (g_mesh_stream.command.fragment_lighting)
-        {
-            EncodeMeshNormal(vertex.uv, input.normal);
-        }
-
-        const float r = input.rgb != nullptr ? input.rgb[0] : 1.0f;
-        const float g = input.rgb != nullptr ? input.rgb[1] : 1.0f;
-        const float b = input.rgb != nullptr ? input.rgb[2] : 1.0f;
-        vertex.colour[0] = std::isfinite(r) ? Clamp(r, 0.0f, 2.0f) : 1.0f;
-        vertex.colour[1] = std::isfinite(g) ? Clamp(g, 0.0f, 2.0f) : 1.0f;
-        vertex.colour[2] = std::isfinite(b) ? Clamp(b, 0.0f, 2.0f) : 1.0f;
-        vertex.colour[3] = std::isfinite(input.alpha)
-            ? Clamp01(input.alpha) : 1.0f;
-        g_vertices.push_back(vertex);
+        g_vertices.push_back(StreamVertexFromInput(
+            vertices[i], g_mesh_stream.command.fragment_lighting));
     }
+}
+
+void MioPan_RendererAppendIndexedMesh(unsigned int stream,
+                                      const MioPanMeshVertexInput *vertices,
+                                      int vertex_count,
+                                      const unsigned int *indices,
+                                      int index_count)
+{
+    if (stream == 0 || stream != g_mesh_stream.token ||
+        !g_mesh_stream.indexed || vertices == nullptr || indices == nullptr ||
+        vertex_count <= 0 || index_count <= 0 || (index_count % 3) != 0)
+    {
+        return;
+    }
+
+    const int triangles = index_count / 3;
+    g_mesh_stream.submitted_triangles += triangles;
+    const size_t base = g_vertices.size();
+    if (g_mesh_stream.discard_all ||
+        (size_t)vertex_count > (size_t)g_mesh_stream.max_vertices ||
+        base - (size_t)g_mesh_stream.first_vertex >
+            (size_t)g_mesh_stream.max_vertices - (size_t)vertex_count)
+    {
+        g_mesh_stream.clipped_triangles += triangles;
+        return;
+    }
+
+    /* Every vertex is kept, usable or not, so the caller's indices still name
+     * the right ones; a triangle with an unusable corner is then dropped here,
+     * which is the triangle-list stream's rule applied per corner instead of
+     * per copy. */
+    static thread_local std::vector<unsigned char> usable;
+    usable.assign((size_t)vertex_count, 0);
+    for (int i = 0; i < vertex_count; i++)
+    {
+        if (StreamPositionIsUsable(vertices[i].position))
+        {
+            usable[(size_t)i] = 1;
+            g_vertices.push_back(StreamVertexFromInput(
+                vertices[i], g_mesh_stream.command.fragment_lighting));
+        }
+        else
+        {
+            g_vertices.push_back(SpriteVertex{});
+        }
+    }
+
+    for (int i = 0; i < index_count; i += 3)
+    {
+        const unsigned int a = indices[i + 0];
+        const unsigned int b = indices[i + 1];
+        const unsigned int c = indices[i + 2];
+        if (a >= (unsigned int)vertex_count ||
+            b >= (unsigned int)vertex_count ||
+            c >= (unsigned int)vertex_count || usable[a] == 0 ||
+            usable[b] == 0 || usable[c] == 0)
+        {
+            g_mesh_stream.clipped_triangles++;
+            continue;
+        }
+        g_stream_indices.push_back((Uint32)(base + a));
+        g_stream_indices.push_back((Uint32)(base + b));
+        g_stream_indices.push_back((Uint32)(base + c));
+    }
+}
+
+/* Indexed stream twin of ResidentDrawContinues(): `next` carries straight on
+ * from `previous` in both the vertex and the index stream, with identical
+ * state, and no capture has been queued between them. */
+static bool IndexedStreamDrawContinues(const DrawCommand &previous,
+                                       const DrawCommand &next)
+{
+    if (!previous.stream_indexed || !next.stream_indexed)
+    {
+        return false;
+    }
+    if (!g_capture_points.empty() &&
+        g_capture_points.back().draw_index >= g_draws.size())
+    {
+        return false;
+    }
+    if (previous.first_vertex + previous.vertex_count != next.first_vertex ||
+        previous.first_index + previous.index_count != next.first_index)
+    {
+        return false;
+    }
+    return previous.source == next.source &&
+           previous.texture == next.texture &&
+           previous.texture_width == next.texture_width &&
+           previous.texture_height == next.texture_height &&
+           previous.depth_test == next.depth_test &&
+           previous.depth_compare == next.depth_compare &&
+           previous.repeat_uv == next.repeat_uv &&
+           previous.min_linear == next.min_linear &&
+           previous.mag_linear == next.mag_linear &&
+           previous.preserve_original_aspect ==
+               next.preserve_original_aspect &&
+           previous.transform_mesh == next.transform_mesh &&
+           previous.fragment_lighting == next.fragment_lighting &&
+           (!next.fragment_lighting ||
+            previous.fragment_light_index == next.fragment_light_index) &&
+           previous.blend_mode == next.blend_mode &&
+           previous.depth_write == next.depth_write &&
+           std::memcmp(&previous.scissor, &next.scissor,
+                       sizeof(next.scissor)) == 0 &&
+           std::memcmp(previous.alpha_test, next.alpha_test,
+                       sizeof(next.alpha_test)) == 0 &&
+           std::memcmp(previous.mvp, next.mvp, sizeof(next.mvp)) == 0 &&
+           std::memcmp(previous.model, next.model, sizeof(next.model)) == 0 &&
+           previous.shadow_caster == next.shadow_caster &&
+           previous.shadow_receiver == next.shadow_receiver &&
+           previous.shadow_episode == next.shadow_episode &&
+           !previous.finder_mask && !next.finder_mask;
 }
 
 void MioPan_RendererCommitMeshStream(unsigned int stream)
@@ -14997,6 +15455,45 @@ void MioPan_RendererCommitMeshStream(unsigned int stream)
     g_mesh_triangles_clipped += g_mesh_stream.clipped_triangles;
     const size_t vertex_count =
         g_vertices.size() - (size_t)g_mesh_stream.first_vertex;
+    if (g_mesh_stream.indexed)
+    {
+        const size_t index_count =
+            g_stream_indices.size() - (size_t)g_mesh_stream.first_index;
+        if (index_count != 0 && vertex_count != 0 &&
+            vertex_count <= std::numeric_limits<Uint32>::max() &&
+            index_count <= std::numeric_limits<Uint32>::max())
+        {
+            DrawCommand &command = g_mesh_stream.command;
+            command.vertex_count = (Uint32)vertex_count;
+            command.stream_indexed = true;
+            command.first_index = g_mesh_stream.first_index;
+            command.index_count = (Uint32)index_count;
+            g_mesh_direct_stream_vertices += vertex_count;
+            g_indexed_stream_units++;
+            if (!g_draws.empty() &&
+                IndexedStreamDrawContinues(g_draws.back(), command))
+            {
+                DrawCommand &previous = g_draws.back();
+                previous.vertex_count += command.vertex_count;
+                previous.index_count += command.index_count;
+            }
+            else
+            {
+                g_draws.push_back(command);
+                g_indexed_stream_draws++;
+            }
+        }
+        else
+        {
+            /* Nothing survived the corner checks: give the vertices back too,
+             * so no span is left that no draw owns. */
+            g_vertices.resize(g_mesh_stream.first_vertex);
+            g_stream_indices.resize(g_mesh_stream.first_index);
+        }
+        g_mesh_stream = MeshStreamState{};
+        return;
+    }
+
     if (vertex_count != 0 && (vertex_count % 3) == 0 &&
         vertex_count <= std::numeric_limits<Uint32>::max())
     {
@@ -15329,6 +15826,16 @@ void MioPan_RendererSetResidentMeshes(int enable)
 int MioPan_RendererGetResidentMeshes(void)
 {
     return g_resident_meshes_enabled ? 1 : 0;
+}
+
+void MioPan_RendererSetIndexedStreams(int enable)
+{
+    g_indexed_streams_enabled = enable != 0;
+}
+
+int MioPan_RendererGetIndexedStreams(void)
+{
+    return g_indexed_streams_enabled ? 1 : 0;
 }
 
 unsigned long long MioPan_RendererGetFrameIndex(void)

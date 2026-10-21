@@ -961,6 +961,14 @@ int MioPan_RendererGetPresentInterpolation(void);
  * has nothing to show.  Reported beside the FPS figures. */
 float MioPan_RendererGetCameraMotion(void);
 
+/* Smoothed ticks presented without interpolation because the camera cut
+ * between them -- a fixed angle handing over, a shot change, a room coming up
+ * after a load -- counted since startup.  An in-between blended across a cut
+ * would show a view nobody set up, so a cut tick presents its own frame every
+ * time instead.  Reported beside the camera motion; it should step once per
+ * visible cut and stay put while the camera merely moves. */
+unsigned int MioPan_RendererGetSmoothingCuts(void);
+
 /* The second half of an in-between: move the world as well as the eye.
  *
  * A reprojected camera does not move anything the camera is looking at, so
@@ -1065,6 +1073,43 @@ void MioPan_RendererAppendMeshTriangle(
     const MioPanMeshVertexInput vertices[3]);
 void MioPan_RendererCommitMeshStream(unsigned int stream);
 void MioPan_RendererAbortMeshStream(unsigned int stream);
+
+/* Indexed mesh stream.  The same transaction, state capture and draw as
+ * MioPan_RendererBeginMeshStream(), but each vertex is sent once and the
+ * triangles as indices into the vertices sent with them, instead of every
+ * triangle carrying three copies.  A strip of n vertices costs n vertices
+ * rather than 3(n-2).
+ *
+ * Commit and Abort are the ordinary ones.  A committed draw that carries on
+ * from the one queued immediately before it -- the next vertices and indices,
+ * identical state -- is folded into it, as a resident one is.
+ *
+ * Returns 0, and the caller should stream triangles instead, when indexed
+ * streams are switched off (MioPan_RendererSetIndexedStreams). */
+unsigned int MioPan_RendererBeginIndexedMeshStream(
+    const sceGsTex0 *tex0,
+    int max_vertices,
+    int max_indices,
+    const float *local_world,
+    /* As for MioPan_RendererBeginMeshStream(). */
+    const MioPanLightState *fragment_lights,
+    const void *texture = nullptr);
+
+/* Append `vertex_count` vertices and the triangles `indices` makes of them --
+ * indices relative to this call's first vertex, three per triangle, winding
+ * as the triangle-list stream would have it.  A triangle with a corner that
+ * has no position, or a non-finite one, is dropped, exactly as
+ * MioPan_RendererAppendMeshTriangle() drops it. */
+void MioPan_RendererAppendIndexedMesh(unsigned int stream,
+                                      const MioPanMeshVertexInput *vertices,
+                                      int vertex_count,
+                                      const unsigned int *indices,
+                                      int index_count);
+
+/* Indexed mesh streams on or off.  Off sends every triangle's three corners
+ * the way the port always has -- the A/B.  Live. */
+void MioPan_RendererSetIndexedStreams(int enable);
+int  MioPan_RendererGetIndexedStreams(void);
 
 /* Compatibility path for callers that already own an expanded triangle list.
  * It is implemented through the same direct stream and no longer constructs a

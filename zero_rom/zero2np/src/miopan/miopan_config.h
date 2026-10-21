@@ -81,6 +81,9 @@ typedef struct MioPan_ConfigRenderer
     /* Model textures resolved once, their GS uploads then skipped.  See
      * MioPan_RendererSetResidentTextures(). */
     int   resident_textures;     /* 0 off, 1 on                              */
+    /* Character, item and other runtime meshes sent as indexed streams.  See
+     * MioPan_RendererBeginIndexedMeshStream(). */
+    int   indexed_streams;       /* 0 off, 1 on                              */
 
     /* Presentation sync.  See the block above MioPan_RendererSetVsync() in
      * rendering/miopan_renderer.h. */

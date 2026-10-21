@@ -997,49 +997,6 @@ void MaskCpuLightTerms(GRA3DVU1LIGHTSNAPSHOT *vu, int fragment_terms)
      * pass outright instead of masking it.  Both callers test for that first. */
 }
 
-/* Snapshot the VU1 light image for the per-VERTEX path -- the one the four
- * microprograms in vu1/ actually read, not g3dCalcVertexColor()'s prelight
- * mirror.  The graph walker keeps changing that state (a coordinate block
- * refreshes the lights, a material block the colours), so each queued draw
- * owns its copy.
- *
- * Three lanes, because this path exists to reproduce the hardware; widening
- * the set is the fragment path's business. */
-bool BuildAnimatedVertexLightState(MioPanLightState *state)
-{
-    if (state == nullptr)
-    {
-        return false;
-    }
-    std::memset(state, 0, sizeof(*state));
-
-    if (MioPan_RendererGetAnimatedLightingBackend() !=
-        MIOPAN_ANIMATED_LIGHTING_GPU)
-    {
-        return false;
-    }
-
-    /* These modes intentionally submit white.  They still use the indexed
-     * animated fast path; config.y bit 0 stays clear and the shader bypasses
-     * the light block. */
-    if (g_dbg_nolighting || g_dbg_flatcolor)
-    {
-        return true;
-    }
-
-    /* No monotone flag: _MakeColorToMonotone() runs inside
-     * gra3dCalcVu1MaterialData*(), so the colours in this snapshot are already
-     * grey when monotone draw is on.  Applying it again in the shader would be
-     * a second average of an already-flat triple -- harmless, but it would
-     * imply the VU1 does something it does not. */
-    GRA3DVU1LIGHTSNAPSHOT core{};
-    gra3dSnapshotVu1Lighting(&core);
-
-    ExpandVu1Snapshot(state, core);
-    return true;
-}
-
-
 const float *RuntimeVectorPosition(const _VECTORDATA *vector_data,
                                    const float *post_positions, int index);
 
@@ -1477,136 +1434,6 @@ int RuntimeMeshStreamCapacity(SGDPROCUNITHEADER *vuvn,
         *out_unique_vertices = vertex_offset;
     }
     return (int)capacity;
-}
-
-bool BuildRuntimeAnimatedGeometry(std::vector<float> &positions,
-                                  std::vector<float> &normals,
-                                  SGDPROCUNITHEADER *vuvn,
-                                  int mesh_family,
-                                  int vertex_count,
-                                  const float *post_positions,
-                                  const float *post_normals)
-{
-    positions.clear();
-    normals.clear();
-    if (vuvn == nullptr || vertex_count <= 0 ||
-        vertex_count > vuvn->VUVNDesc.sNumVertex)
-    {
-        return false;
-    }
-
-    const bool preloaded = mesh_family == 0x80 || mesh_family == 0x82;
-    const SGDVUVNDATA_PRESET *preloaded_data = preloaded
-        ? (const SGDVUVNDATA_PRESET *)&vuvn[1] : nullptr;
-    const _VECTORDATA *vector_data = preloaded
-        ? nullptr : (const _VECTORDATA *)&vuvn[3];
-    positions.reserve((size_t)vertex_count * 3);
-    normals.reserve((size_t)vertex_count * 3);
-    for (int i = 0; i < vertex_count; i++)
-    {
-        const float *position = preloaded
-            ? preloaded_data->avt2[i].vVertex
-            : RuntimeVectorPosition(vector_data, post_positions, i);
-        const float *normal = preloaded
-            ? preloaded_data->avt2[i].vNormal
-            : RuntimeVectorNormal(vector_data, post_normals, i);
-        if (position == nullptr || !std::isfinite(position[0]) ||
-            !std::isfinite(position[1]) || !std::isfinite(position[2]) ||
-            normal == nullptr || !std::isfinite(normal[0]) ||
-            !std::isfinite(normal[1]) || !std::isfinite(normal[2]))
-        {
-            positions.clear();
-            normals.clear();
-            return false;
-        }
-        positions.push_back(position[0]);
-        positions.push_back(position[1]);
-        positions.push_back(position[2]);
-        normals.push_back(normal[0]);
-        normals.push_back(normal[1]);
-        normals.push_back(normal[2]);
-    }
-    return true;
-}
-
-bool BuildRuntimeAnimatedTopology(SGDPROCUNITHEADER *vuvn,
-                                  SGDPROCUNITHEADER *mesh,
-                                  int expected_vertex_count,
-                                  std::vector<float> &uv,
-                                  std::vector<unsigned int> &indices)
-{
-    uv.clear();
-    indices.clear();
-    if (vuvn == nullptr || mesh == nullptr || expected_vertex_count <= 0)
-    {
-        return false;
-    }
-
-    const int num_mesh = mesh->VUMeshDesc.ucNumMesh;
-    const bool textured = (mesh->VUMeshDesc.ucMeshType & 0x02) != 0;
-    SGDVUMESHPOINTNUM *point_num = (SGDVUMESHPOINTNUM *)&mesh[4];
-    SGDVUMESHSTREGSET *st_regset =
-        (SGDVUMESHSTREGSET *)&point_num[num_mesh];
-    SGDVUMESHSTDATA *st_data =
-        (SGDVUMESHSTDATA *)&st_regset->auiVifCode[3];
-
-    uv.reserve((size_t)expected_vertex_count * 2);
-    indices.reserve((size_t)expected_vertex_count * 3);
-    int vertex_offset = 0;
-    size_t emitted_vertices = 0;
-    for (int i = 0; i < num_mesh; i++)
-    {
-        const int strip_count = (int)point_num[i].uiPointNum;
-        if (strip_count <= 0)
-        {
-            continue;
-        }
-        if (vertex_offset + strip_count > vuvn->VUVNDesc.sNumVertex ||
-            (size_t)strip_count >
-                ((size_t)kMeshBufferVertexLimit - emitted_vertices) / 3)
-        {
-            break;
-        }
-
-        SGDVUMESHST *st = textured && st_data != nullptr
-            ? st_data->astData : nullptr;
-        if (textured)
-        {
-            FixUV(st, strip_count);
-        }
-        for (int j = 0; j < strip_count; j++)
-        {
-            const float s = st != nullptr ? st[j].fS : 0.0f;
-            const float t = st != nullptr ? st[j].fT : 0.0f;
-            /* The direct stream intentionally forwards malformed UVs.  Do
-             * not let the cache's defensive sanitization turn them into a
-             * permanently different mesh; just keep this draw on the old
-             * path instead. */
-            if (!std::isfinite(s) || !std::isfinite(t))
-            {
-                uv.clear();
-                indices.clear();
-                return false;
-            }
-            uv.push_back(s);
-            uv.push_back(t);
-        }
-        AppendTriangleStripIndices(indices, (unsigned int)vertex_offset,
-                                   strip_count);
-        if (strip_count >= 3)
-        {
-            emitted_vertices += (size_t)(strip_count - 2) * 3;
-        }
-        vertex_offset += strip_count;
-        if (st_data != nullptr)
-        {
-            st_data = (SGDVUMESHSTDATA *)&st_data->astData[strip_count];
-        }
-    }
-
-    return vertex_offset == expected_vertex_count &&
-           uv.size() == (size_t)expected_vertex_count * 2 &&
-           !indices.empty();
 }
 
 void AppendRuntimeIndexedMesh(unsigned int stream,
@@ -3146,6 +2973,142 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
                         bound_texture);
 }
 
+/* Scratch for DrawRuntimeMeshIndexed(), kept across calls so a character's
+ * hundred-odd units a frame do not each allocate. */
+struct RuntimeIndexedScratch
+{
+    std::vector<MioPanMeshVertexInput> vertices;
+    std::vector<unsigned int> indices;
+};
+
+static thread_local RuntimeIndexedScratch s_runtime_indexed_scratch;
+
+/*
+ * A runtime unit as one indexed stream draw: each VUVN vertex the strips use
+ * once, and the strips as indices.
+ *
+ * The same walk as AppendRuntimeIndexedMesh() / AppendRuntimePreloadedMesh()
+ * -- the same strips skipped and stopped at, the same FixUV(), the same
+ * corners and the same winding (AppendTriangleStripIndices() swaps the first
+ * two corners of every odd triangle, as they do) -- so the triangles are the
+ * ones the triangle-list stream draws.  What changes is that a strip of n
+ * vertices costs n vertices instead of 3(n-2), and that no corner is built
+ * three times over.
+ *
+ * Positions, normals and colours are read exactly where those two read them,
+ * which is what keeps skinning and lighting the walker's own: a skinned block
+ * still arrives in world space out of SetVUVNDataPost(), a rigid one in its
+ * bone's space with the bone in `local_world`.
+ *
+ * False when the renderer would not open an indexed stream; the caller then
+ * streams triangles.
+ */
+static bool DrawRuntimeMeshIndexed(const sceGsTex0 *tex0,
+                                   const void *bound_texture,
+                                   SGDPROCUNITHEADER *vuvn,
+                                   SGDPROCUNITHEADER *mesh,
+                                   int mesh_family,
+                                   const float *local_world,
+                                   const MioPanLightState *fragment_lights,
+                                   const float *post_positions,
+                                   const float *post_normals,
+                                   const RUNTIME_VERTEX_COLORS &colors)
+{
+    if (!MioPan_RendererGetIndexedStreams())
+    {
+        return false;
+    }
+
+    std::vector<MioPanMeshVertexInput> &vertices =
+        s_runtime_indexed_scratch.vertices;
+    std::vector<unsigned int> &indices = s_runtime_indexed_scratch.indices;
+    vertices.clear();
+    indices.clear();
+
+    const bool preloaded = mesh_family == 0x80 || mesh_family == 0x82;
+    const bool textured = (mesh->VUMeshDesc.ucMeshType & 0x02) != 0;
+    const int num_mesh = mesh->VUMeshDesc.ucNumMesh;
+    const _VECTORDATA *vector_data =
+        preloaded ? nullptr : (const _VECTORDATA *)&vuvn[3];
+    const SGDVUVNDATA_PRESET *vuvn_data =
+        preloaded ? (const SGDVUVNDATA_PRESET *)&vuvn[1] : nullptr;
+    SGDVUMESHPOINTNUM *point_num = (SGDVUMESHPOINTNUM *)&mesh[4];
+    SGDVUMESHSTREGSET *st_regset = (SGDVUMESHSTREGSET *)&point_num[num_mesh];
+    SGDVUMESHSTDATA *st_data = (SGDVUMESHSTDATA *)&st_regset->auiVifCode[3];
+
+    int vertex_offset = 0;
+    size_t emitted_vertices = 0;
+    for (int i = 0; i < num_mesh; i++)
+    {
+        const int vertex_count = (int)point_num[i].uiPointNum;
+        if (vertex_count <= 0)
+        {
+            continue;
+        }
+        if (vertex_offset + vertex_count > vuvn->VUVNDesc.sNumVertex ||
+            (size_t)vertex_count >
+                ((size_t)kMeshBufferVertexLimit - emitted_vertices) / 3)
+        {
+            break;
+        }
+
+        SGDVUMESHST *st = textured && st_data != nullptr
+            ? st_data->astData : nullptr;
+        if (textured)
+        {
+            FixUV(st, vertex_count);
+        }
+
+        for (int j = 0; j < vertex_count; j++)
+        {
+            const int index = vertex_offset + j;
+            MioPanMeshVertexInput vertex{};
+            vertex.position = preloaded
+                ? vuvn_data->avt2[index].vVertex
+                : RuntimeVectorPosition(vector_data, post_positions, index);
+            /* Only read when the draw is fragment-lit. */
+            vertex.normal = preloaded
+                ? vuvn_data->avt2[index].vNormal
+                : RuntimeVectorNormal(vector_data, post_normals, index);
+            vertex.rgb = RuntimeVertexColor(colors, index);
+            vertex.s = st != nullptr ? st[j].fS : 0.0f;
+            vertex.t = st != nullptr ? st[j].fT : 0.0f;
+            /* PushRuntimeStripTriangle()'s rule: the material alpha rides in
+             * the colour record, and a missing record is opaque white. */
+            vertex.alpha = vertex.rgb != nullptr ? vertex.rgb[3] : 1.0f;
+            vertices.push_back(vertex);
+        }
+        if (vertex_count >= 3)
+        {
+            AppendTriangleStripIndices(indices, (unsigned int)vertex_offset,
+                                       vertex_count);
+            emitted_vertices += (size_t)(vertex_count - 2) * 3;
+        }
+
+        vertex_offset += vertex_count;
+        st_data = (SGDVUMESHSTDATA *)&st_data->astData[vertex_count];
+    }
+
+    if (vertices.empty() || indices.empty())
+    {
+        /* Nothing the triangle-list stream would have drawn either. */
+        return true;
+    }
+
+    const unsigned int stream = MioPan_RendererBeginIndexedMeshStream(
+        tex0, (int)vertices.size(), (int)indices.size(), local_world,
+        fragment_lights, bound_texture);
+    if (stream == 0)
+    {
+        return false;
+    }
+    MioPan_RendererAppendIndexedMesh(stream, vertices.data(),
+                                     (int)vertices.size(), indices.data(),
+                                     (int)indices.size());
+    MioPan_RendererCommitMeshStream(stream);
+    return true;
+}
+
 void DrawRuntimeMesh(SGDFILEHEADER *owner,
                      SGDPROCUNITHEADER *vuvn,
                      SGDPROCUNITHEADER *mesh,
@@ -3156,11 +3119,6 @@ void DrawRuntimeMesh(SGDFILEHEADER *owner,
     sceGsTex0             tex0_value;
     const sceGsTex0      *tex0;
     RUNTIME_VERTEX_COLORS &colors = s_mesh_decode_scratch.lighting;
-    std::vector<float>   &positions = s_mesh_decode_scratch.positions;
-    std::vector<float>   &normals = s_mesh_decode_scratch.normals;
-    std::vector<float>   &uv = s_mesh_decode_scratch.uv;
-    std::vector<unsigned int> &indices = s_mesh_decode_scratch.indices;
-    MioPanLightState vertex_lights{};
     MioPanLightState fragment_lights{};
     int                   mesh_type;
     int                   mesh_family;
@@ -3210,72 +3168,50 @@ void DrawRuntimeMesh(SGDFILEHEADER *owner,
     const MioPanLightState *fragment_lights_p =
         fragment_lighting ? &fragment_lights : nullptr;
 
-    bool cpu_colors_ready = false;
-    const auto build_cpu_colors = [&]()
+    if (mesh_family == 0x80 || mesh_family == 0x82)
     {
-        if (cpu_colors_ready)
-        {
-            return;
-        }
-        if (mesh_family == 0x80 || mesh_family == 0x82)
-        {
-            BuildRuntimeVertexColors(
-                colors, unique_vertex_count, nullptr,
-                (const SGDVUVNDATA_PRESET *)&vuvn[1], nullptr, nullptr,
-                local_world, fragment_lights_p);
-        }
-        else
-        {
-            /* Family 0x42 is the VU "common" path: its mesh packet has no
-             * matching VUVN process unit and consumes the VUVN selected by the
-             * walker immediately before it. */
-            BuildRuntimeVertexColors(
-                colors, unique_vertex_count,
-                (const _VECTORDATA *)&vuvn[3], nullptr,
-                post_positions, post_normals, local_world,
-                fragment_lights_p);
-        }
-        cpu_colors_ready = true;
-    };
+        BuildRuntimeVertexColors(
+            colors, unique_vertex_count, nullptr,
+            (const SGDVUVNDATA_PRESET *)&vuvn[1], nullptr, nullptr,
+            local_world, fragment_lights_p);
+    }
+    else
+    {
+        /* Family 0x42 is the VU "common" path: its mesh packet has no
+         * matching VUVN process unit and consumes the VUVN selected by the
+         * walker immediately before it. */
+        BuildRuntimeVertexColors(
+            colors, unique_vertex_count,
+            (const _VECTORDATA *)&vuvn[3], nullptr,
+            post_positions, post_normals, local_world,
+            fragment_lights_p);
+    }
 
-    const auto draw_streamed_fallback = [&]()
+    if (DrawRuntimeMeshIndexed(tex0, bound_texture, vuvn, mesh, mesh_family,
+                               local_world, fragment_lights_p, post_positions,
+                               post_normals, colors))
     {
-        /* Lighting is deliberately lazy: the common indexed path now sends
-         * normals to the GPU, while only exceptional decode/cache/upload
-         * fallbacks pay the old per-vertex CPU cost. */
-        build_cpu_colors();
-        MeshStreamScope stream(tex0, stream_capacity, local_world,
-                               fragment_lights_p, bound_texture);
-        if (!stream)
-        {
-            return;
-        }
-        if (mesh_family == 0x80 || mesh_family == 0x82)
-        {
-            AppendRuntimePreloadedMesh(stream.token(), vuvn, mesh, colors);
-        }
-        else
-        {
-            AppendRuntimeIndexedMesh(stream.token(), vuvn, mesh,
-                                     post_positions, post_normals, colors);
-        }
-        stream.Commit();
-    };
-
-    /* A pose with a null/nonfinite address must retain the direct stream's
-     * per-triangle clipping semantics.  Valid poses take the indexed path and
-     * upload one live position/normal record per strip vertex. */
-    if (owner == nullptr ||
-        !BuildRuntimeAnimatedGeometry(positions, normals, vuvn, mesh_family,
-                                      unique_vertex_count, post_positions,
-                                      post_normals) ||
-        !BuildAnimatedVertexLightState(&vertex_lights))
-    {
-        draw_streamed_fallback();
         return;
     }
 
-    draw_streamed_fallback();
+    /* Indexed streams are off (the A/B), or the renderer would not open one:
+     * every triangle goes up with its own three corners, as it always has. */
+    MeshStreamScope stream(tex0, stream_capacity, local_world,
+                           fragment_lights_p, bound_texture);
+    if (!stream)
+    {
+        return;
+    }
+    if (mesh_family == 0x80 || mesh_family == 0x82)
+    {
+        AppendRuntimePreloadedMesh(stream.token(), vuvn, mesh, colors);
+    }
+    else
+    {
+        AppendRuntimeIndexedMesh(stream.token(), vuvn, mesh,
+                                 post_positions, post_normals, colors);
+    }
+    stream.Commit();
 }
 
 SGDPROCUNITHEADER *s_cachedPostVUVNSource;

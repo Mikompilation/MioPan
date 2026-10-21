@@ -92,6 +92,9 @@ MioPan_Config miopan_config = {
         /* On, for the same reason: the textures are the ones the GS path
          * resolves, only no longer re-sent. */
         /* .resident_textures = */ 1,
+        /* On: the same triangles, each vertex sent once instead of once per
+         * triangle it is a corner of.  Off is the A/B. */
+        /* .indexed_streams   = */ 1,
         /* On: a deviation from what the port did before -- it asked for
          * IMMEDIATE and tore on every display that granted it -- but tearing
          * was never a choice anyone made.  Presenting at 30 or 60 Hz against
@@ -986,6 +989,7 @@ static void ConfigLoadOnce(void)
     ReadFloat("render", "alpha_cutoff", &r->alpha_cutoff);
     ReadInt("render", "resident_meshes", &r->resident_meshes);
     ReadInt("render", "resident_textures", &r->resident_textures);
+    ReadInt("render", "indexed_streams", &r->indexed_streams);
     /* After aspect_ratio, so a "21:9" written in `aspect` wins over a stale
      * ratio left in the companion key. */
     ReadAspect("render", "aspect", &r->aspect_mode, &r->aspect_ratio);
@@ -1198,6 +1202,10 @@ int MioPan_ConfigSave(void)
         ";   uploading them to the emulated GS every frame. 0 re-sends and\n"
         ";   re-hashes them every draw, as the PS2 did -- the A/B.\n"
         "resident_textures = %d\n"
+        "; Send characters, ghosts and items once per vertex, with their strips\n"
+        ";   as indices, and merge neighbouring parts that share state into one\n"
+        ";   draw. 0 sends every triangle's three corners -- the A/B.\n"
+        "indexed_streams = %d\n"
         "\n"
         "[lighting]\n"
         "; vertex reproduces the PS2 VU1 path; fragment is smoother\n"
@@ -1327,6 +1335,7 @@ int MioPan_ConfigSave(void)
         (double)r->alpha_cutoff,
         r->resident_meshes,
         r->resident_textures,
+        r->indexed_streams,
         EnumToName(kLightingModes, r->lighting_mode),
         EnumToName(kAnimatedLighting, r->animated_lighting),
         r->extra_presents,
@@ -1449,6 +1458,7 @@ void MioPan_ConfigApply(void)
     MioPan_RendererSetAlphaCutoff(r->alpha_cutoff);
     MioPan_RendererSetResidentMeshes(r->resident_meshes);
     MioPan_RendererSetResidentTextures(r->resident_textures);
+    MioPan_RendererSetIndexedStreams(r->indexed_streams);
     MioPan_RendererSetFinderMask(r->finder_mask, r->finder_mask_blur,
                                  r->finder_mask_darken, r->finder_mask_tint,
                                  r->finder_mask_scale);
@@ -1511,6 +1521,7 @@ void MioPan_ConfigCapture(void)
     r->alpha_cutoff = MioPan_RendererGetAlphaCutoff();
     r->resident_meshes = MioPan_RendererGetResidentMeshes();
     r->resident_textures = MioPan_RendererGetResidentTextures();
+    r->indexed_streams = MioPan_RendererGetIndexedStreams();
     r->window_mode = MioPan_RendererGetWindowMode();
     /* The requested mode, not the granted one, for the same reason as MSAA:
      * a driver without MAILBOX must not rewrite the player's choice. */

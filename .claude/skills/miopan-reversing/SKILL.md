@@ -302,10 +302,28 @@ _gra3dDrawSGD(pSGDTop, type, pCoord, pnum)      gra3dSGD.c
                       └─ MioPan_Graph3dDraw{Preset,Runtime}Mesh[Post]   miopan_graph3d.cpp
                            ├─ preset:  FindResidentPresetUnit
                            │    └─ MioPan_RendererDrawResidentMesh      (geometry on the GPU)
-                           └─ runtime, or a preset unit that declines:
+                           └─ runtime: DrawRuntimeMeshIndexed
+                           │    └─ MioPan_RendererBeginIndexedMeshStream (each vertex once,
+                           │                                             strips as indices)
+                           └─ indexed streams off, or a preset unit that declines:
                                 MeshStreamScope → MioPan_RendererBeginMeshStream
-                                                  (decoded and streamed every frame)
+                                                  (every triangle's three corners)
 ```
+
+**Runtime models are indexed streams.** Characters, ghosts and items still
+change every frame — CPU skinning (`CalcVertexBuffer()`, `SetVUVNDataPost()`)
+and the VU1 lighting kernels stay exactly where the walker runs them — so their
+vertices are still streamed. What changed is the shape: each VUVN vertex a unit's
+strips use goes up once, the strips become indices into
+`g_stream_indices`, and consecutive commits with identical state fold into one
+draw (`IndexedStreamDrawContinues()`). In chapter 1's first room that is 192
+units → 70 draws and 30,885 → 13,383 streamed vertices for the same 10,165
+triangles. Measured before building it: CPU skinning was ~0.05 ms a frame; the
+cost was the per-corner expansion and its upload, which is why this is not GPU
+skinning. The geometry blend and the aspect fix work on the vertex span, so they
+need nothing new. **If a character looks different, toggle Debug → Diagnostics /
+A-B → "Send each vertex once"** — off is the triangle-list stream, the A/B
+(`[render] indexed_streams`).
 
 **Preset models are resident.** A room, furniture or door SGD is decoded once, on
 its first draw, into one GPU mesh holding every unit in walk order; each later
