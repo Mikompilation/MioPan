@@ -85,6 +85,13 @@ void EndFrame();
 bool PrepareDrawData(SDL_GPUCommandBuffer *command_buffer);
 void RenderDrawData(SDL_GPUCommandBuffer *command_buffer,
                     SDL_GPURenderPass *render_pass);
+
+/* The overlay's size.  0 follows the display's content scale -- the OS's
+ * 150% / 200% setting -- and keeps following it when the window moves to
+ * another monitor; anything else pins that factor, clamped to 0.5..4.  May be
+ * set before Init(); it takes effect at the next frame. */
+void  SetScaleOverride(float scale);
+float GetScaleOverride();
 }
 
 #endif

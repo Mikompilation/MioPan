@@ -3,7 +3,9 @@
 #include "io/miopan_file.h"
 #include "io/miopan_input.h"
 #include "io/miopan_paths.h"
+#include "miopan_ui/miopan_ui.h"
 #include "rendering/miopan_renderer.h"
+#include "iop_voice.h"
 
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_stdinc.h>
@@ -90,6 +92,24 @@ MioPan_Config miopan_config = {
         /* On, for the same reason: the textures are the ones the GS path
          * resolves, only no longer re-sent. */
         /* .resident_textures = */ 1,
+        /* On: a deviation from what the port did before -- it asked for
+         * IMMEDIATE and tore on every display that granted it -- but tearing
+         * was never a choice anyone made.  Presenting at 30 or 60 Hz against
+         * a 60 Hz or faster display, the wait it can add is absorbed by the
+         * field wait the frame does anyway; see MioPan_RendererSetVsync(). */
+        /* .vsync             = */ MIOPAN_VSYNC_ON,
+        /* Off: a game that stops by itself is a surprise the first time,
+         * however welcome after that.  Mute is the gentler default. */
+        /* .pause_in_background = */ 0,
+    },
+    /* .audio = */ {
+        /* .volume            = */ 1.0f,
+        /* On: alt-tabbing away to read a walkthrough should not leave the
+         * Manor's ambience playing over it. */
+        /* .mute_in_background = */ 1,
+    },
+    /* .ui = */ {
+        /* .scale             = */ 0.0f,
     },
 };
 
@@ -177,6 +197,17 @@ const EnumName kHdrModes[] = {
     {"on", MIOPAN_HDR_AUTO},
     {"pq", MIOPAN_HDR_HDR10},
     {"st2084", MIOPAN_HDR_HDR10},
+    {nullptr, 0},
+};
+
+const EnumName kVsyncModes[] = {
+    {"on", MIOPAN_VSYNC_ON},
+    {"off", MIOPAN_VSYNC_OFF},
+    {"mailbox", MIOPAN_VSYNC_MAILBOX},
+    /* Accepted on read, never written: the SDL names for the same modes. */
+    {"vsync", MIOPAN_VSYNC_ON},
+    {"fifo", MIOPAN_VSYNC_ON},
+    {"immediate", MIOPAN_VSYNC_OFF},
     {nullptr, 0},
 };
 
@@ -317,6 +348,28 @@ void ReadString(const char *section, const char *name, char *dst, size_t size)
     }
 }
 
+/* A name from the table, else a number.  Returns false, leaving `dst` alone,
+ * for anything else. */
+bool ParseEnum(const EnumName *table, const char *value, int *dst)
+{
+    for (const EnumName *e = table; e->label != nullptr; e++)
+    {
+        if (SDL_strcasecmp(value, e->label) == 0)
+        {
+            *dst = e->value;
+            return true;
+        }
+    }
+    char *end = nullptr;
+    const long number = std::strtol(value, &end, 10);
+    if (end == value)
+    {
+        return false;
+    }
+    *dst = (int)number;
+    return true;
+}
+
 void ReadEnum(const char *section, const char *name, const EnumName *table,
               int *dst)
 {
@@ -325,17 +378,15 @@ void ReadEnum(const char *section, const char *name, const EnumName *table,
     {
         return;
     }
-    for (const EnumName *e = table; e->label != nullptr; e++)
+    /* Not a name we know: a number from an older file, or a typo.  Only a
+     * number is taken.  A typo keeps what the field already holds, which at
+     * load time is the default -- it used to store strtol's 0, which was the
+     * same thing only while 0 was every enum's default, and vsync's is not. */
+    if (!ParseEnum(table, value, dst))
     {
-        if (SDL_strcasecmp(value, e->label) == 0)
-        {
-            *dst = e->value;
-            return;
-        }
+        SDL_Log("MioPan: [%s] %s: unrecognised value \"%s\"; keeping the "
+                "default", section, name, value);
     }
-    /* Not a name we know: a number from an older file, or a typo.  A typo
-     * lands on 0, which every one of these enums defines as its default. */
-    *dst = (int)std::strtol(value, nullptr, 10);
 }
 
 /*
@@ -746,6 +797,8 @@ bool EnvOverrideActive()
         "MIOPAN_RENDER_RES",   "MIOPAN_RENDER_SCALE",
         "MIOPAN_RENDER_FILTER", "MIOPAN_ASPECT",
         "MIOPAN_WINDOW_MODE",  "MIOPAN_LIGHTING_MODE",
+        "MIOPAN_VSYNC",        "MIOPAN_VOLUME",
+        "MIOPAN_UI_SCALE",
     };
     for (const char *name : kNames)
     {
@@ -756,6 +809,44 @@ bool EnvOverrideActive()
         }
     }
     return false;
+}
+
+const char *EnvValue(const char *name)
+{
+    const char *value = std::getenv(name);
+    return (value != nullptr && value[0] != '\0') ? value : nullptr;
+}
+
+/*
+ * The environment overrides for the settings that came after the renderer's.
+ *
+ * Applied here, over what the file said, rather than by each owner the way the
+ * renderer reads its older MIOPAN_* variables: these three belong to three
+ * different modules -- renderer, voice engine, overlay -- and this file is
+ * where the precedence is written down.  Like the others, any one of them also
+ * stops the session saving; see EnvOverrideActive().
+ *
+ *   MIOPAN_VSYNC     off | on | mailbox
+ *   MIOPAN_VOLUME    0 .. 1
+ *   MIOPAN_UI_SCALE  0 to follow the display, else a fixed factor
+ */
+void ApplyEnvironmentOverrides(int *vsync, float *volume, float *ui_scale)
+{
+    if (const char *value = EnvValue("MIOPAN_VSYNC"))
+    {
+        if (!ParseEnum(kVsyncModes, value, vsync))
+        {
+            SDL_Log("MioPan: MIOPAN_VSYNC=\"%s\" not understood", value);
+        }
+    }
+    if (const char *value = EnvValue("MIOPAN_VOLUME"))
+    {
+        *volume = (float)std::atof(value);
+    }
+    if (const char *value = EnvValue("MIOPAN_UI_SCALE"))
+    {
+        *ui_scale = (float)std::atof(value);
+    }
 }
 
 } // namespace
@@ -822,6 +913,12 @@ static void ConfigLoadOnce(void)
     ReadEnum("window", "mode", kWindowModes, &r->window_mode);
     ReadInt("window", "width", &r->window_width);
     ReadInt("window", "height", &r->window_height);
+    ReadEnum("window", "vsync", kVsyncModes, &r->vsync);
+    ReadInt("window", "pause_in_background", &r->pause_in_background);
+    ReadFloat("audio", "volume", &miopan_config.audio.volume);
+    ReadInt("audio", "mute_in_background",
+            &miopan_config.audio.mute_in_background);
+    ReadFloat("ui", "scale", &miopan_config.ui.scale);
     ReadEnum("render", "mode", kRenderModes, &r->render_mode);
     ReadFloat("render", "scale", &r->render_scale);
     ReadEnum("render", "upscale_filter", kFilters, &r->upscale_filter);
@@ -958,6 +1055,35 @@ int MioPan_ConfigSave(void)
         "; windowed size only -- going fullscreen does not overwrite these\n"
         "width = %d\n"
         "height = %d\n"
+        "; Presentation sync: on | off | mailbox.  This decides only whether a\n"
+        ";   frame may replace the one on screen mid-scan; the game keeps its\n"
+        ";   own pace, which is a timer, whatever it is set to.\n"
+        ";     on       no tearing.  Works everywhere.\n"
+        ";     off      tears, but never waits for the display.\n"
+        ";     mailbox  no tearing and no waiting, where the driver offers\n"
+        ";              it; on where it does not.\n"
+        ";   MIOPAN_VSYNC overrides it for one run.\n"
+        "vsync = %s\n"
+        "; Hold the game while the window is minimised or in the background\n"
+        ";   -- audio, movies and all -- until it is brought back.  0 off, 1 on.\n"
+        "pause_in_background = %d\n"
+        "\n"
+        "[audio]\n"
+        "; Master volume, 0..1, applied to everything the game plays, movies\n"
+        ";   included.  It is a slider position rather than a gain: the gain\n"
+        ";   is its square, so 0.5 is about -12 dB.  MIOPAN_VOLUME overrides\n"
+        ";   it for one run.\n"
+        "volume = %.3f\n"
+        "; Silence the game while the window is minimised or in the background.\n"
+        ";   The game itself carries on -- see [window] pause_in_background\n"
+        ";   for stopping it.  0 off, 1 on.\n"
+        "mute_in_background = %d\n"
+        "\n"
+        "[ui]\n"
+        "; Size of the F1 overlay.  0 follows the display's own scale setting,\n"
+        ";   including onto another monitor; anything else is a fixed factor,\n"
+        ";   e.g. 1.5.  MIOPAN_UI_SCALE overrides it for one run.\n"
+        "scale = %.2f\n"
         "\n"
         "[render]\n"
         "; match_window | native | window_scale\n"
@@ -1116,6 +1242,11 @@ int MioPan_ConfigSave(void)
         EnumToName(kWindowModes, r->window_mode),
         r->window_width,
         r->window_height,
+        EnumToName(kVsyncModes, r->vsync),
+        r->pause_in_background,
+        (double)miopan_config.audio.volume,
+        miopan_config.audio.mute_in_background,
+        (double)miopan_config.ui.scale,
         EnumToName(kRenderModes, r->render_mode),
         (double)r->render_scale,
         EnumToName(kFilters, r->upscale_filter),
@@ -1240,6 +1371,21 @@ void MioPan_ConfigApply(void)
     MioPan_RendererSetHdrExpansion(r->hdr_expansion, r->hdr_expansion_knee);
     MioPan_RendererSetGrade(r->grade_brightness, r->grade_contrast,
                             r->grade_gamma, r->grade_saturation);
+
+    int vsync = r->vsync;
+    float volume = miopan_config.audio.volume;
+    float ui_scale = miopan_config.ui.scale;
+    ApplyEnvironmentOverrides(&vsync, &volume, &ui_scale);
+
+    /* Before the device exists, like the HDR mode, so the swapchain is
+     * created in the right present mode rather than switched into it. */
+    MioPan_RendererSetVsync(vsync);
+    MioPan_RendererSetPauseInBackground(r->pause_in_background);
+    MioPan_RendererSetMuteInBackground(miopan_config.audio.mute_in_background);
+    /* The voice engine may or may not be up yet -- the IOP boots on its own
+     * schedule -- and holds the value for its stream either way. */
+    MioPan_VoiceSetOutputVolume(volume);
+    MioPanUi::SetScaleOverride(ui_scale);
     MioPan_RendererSetWindowMode(r->window_mode);
 }
 
@@ -1275,6 +1421,15 @@ void MioPan_ConfigCapture(void)
     r->resident_meshes = MioPan_RendererGetResidentMeshes();
     r->resident_textures = MioPan_RendererGetResidentTextures();
     r->window_mode = MioPan_RendererGetWindowMode();
+    /* The requested mode, not the granted one, for the same reason as MSAA:
+     * a driver without MAILBOX must not rewrite the player's choice. */
+    r->vsync = MioPan_RendererGetVsync();
+    r->pause_in_background = MioPan_RendererGetPauseInBackground();
+
+    miopan_config.audio.volume = MioPan_VoiceGetOutputVolume();
+    miopan_config.audio.mute_in_background =
+        MioPan_RendererGetMuteInBackground();
+    miopan_config.ui.scale = MioPanUi::GetScaleOverride();
 
     /* The windowed size, which the renderer latches while the window is not
      * fullscreen.  Reading the live window instead would store the desktop

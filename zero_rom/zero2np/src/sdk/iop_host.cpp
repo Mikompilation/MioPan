@@ -57,6 +57,8 @@ extern "C" __declspec(dllimport) size_t __stdcall VirtualQuery(
 #include <sys/mman.h>
 #endif
 
+#include "../miopan/os/miopan_pacing.h"  /* host clock hold */
+
 #include <SDL3/SDL_mutex.h>
 #include <SDL3/SDL_thread.h>
 #include <SDL3/SDL_timer.h>
@@ -646,6 +648,20 @@ static int SDLCALL IopTimerMain(void *data)
 
     while (timer->running && !iop_shutdown)
     {
+        /* The game is paused in the background.  iopSndMain() is the one
+         * handler, and everything it does is a volume ramp step: left running,
+         * a fade in flight would finish in silence.  `next` restarts from now
+         * on release -- it advances by `interval` with no catch-up clamp, so
+         * resuming from a stale value would fire the whole pause's worth of
+         * ticks back to back.  See MioPan_PacingSetHostHold(). */
+        if (MioPan_PacingHostHeld())
+        {
+            while (MioPan_PacingHostHeld() && timer->running && !iop_shutdown)
+                SDL_Delay(5);
+            next = SDL_GetTicksNS() + interval;
+            continue;
+        }
+
         Uint64 now = SDL_GetTicksNS();
         if (now < next)
             SDL_DelayNS(next - now);
