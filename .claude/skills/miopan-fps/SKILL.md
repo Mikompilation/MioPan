@@ -31,8 +31,8 @@ stated otherwise.
 | 3. Drive reprojected presents from the frame loop | **done**, verified in-game |
 | 4. Interpolated geometry | **built**, maths verified, **not yet judged in-game** |
 
-The build is clean and the whole chain runs: menu bar → **Profiler → Frame
-smoothing** presents each logical frame up to four times, on an interpolated
+The build is clean and the whole chain runs: menu bar → **Settings → Graphics →
+Frame smoothing** presents each logical frame up to four times, on an interpolated
 camera and — since increment 4 — through an interpolated world, while the
 simulation keeps its 30 Hz tick.
 
@@ -300,7 +300,7 @@ wait, clamped 1..8, `0` meaning "follow the game".
 
 - `vfunc()` reads `MioPan_ResolveVBlankWait(SYSTEM_VBLANK_WAIT_NUM)`, checked
   per frame rather than latched (movies rewrite the game's value every frame).
-- UI: menu bar → **Profiler → Frame pacing**. Not persisted to `miopan.ini` —
+- UI: menu bar → **Debug → Frame pacing**. Not persisted to `miopan.ini` —
   it is a harness, and a config file that silently double-speeds the game would
   be a trap.
 - The existing `Pacing target %d VBlanks` line in the summary reads the resolved
@@ -810,7 +810,7 @@ The profiler split falls exactly on the boundary that matters, because
 | Sim 30 / present 60 | `game_cpu_ms + 2 × renderer_ms ≤ 33.3` |
 | Either | `vblank_deadline_misses == 0` |
 
-Overlay: menu bar → **Profiler → Summary**, or **Summary → FPS only** for
+Overlay: menu bar → **Debug → Summary**, or **Summary → FPS only** for
 just its first line — `Game … | Present … | present/frame … | cam … | geo …` —
 when the frame
 rate is the only question and the rest of the block is in the way. For worst frames rather than
@@ -846,7 +846,7 @@ they stress different halves of the split.
 - **A repeated present reuses the GS block captures.** A slot captured twice in
   one logical frame keeps only its last capture. Accepted for in-betweens — but
   it means a repeat is not bit-identical to the real present in the handful of
-  frames that do that, and Profiler > Extra presents will show it.
+  frames that do that, and Settings > Graphics > Frame smoothing will show it.
 - **Do not reproject a draw without `transform_mesh`.** Screen-space draws have
   no `model` and their `mvp` is unused; rewriting it is harmless today but the
   invariant is what makes the eligibility test a one-liner.

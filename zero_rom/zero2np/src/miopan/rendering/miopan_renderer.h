@@ -156,7 +156,8 @@ int  MioPan_RendererGetAnisotropyMax(void);
  * on a 4K desktop can still rasterise at 640x448.  That is what makes exclusive
  * mode unnecessary here rather than merely unfashionable.
  *
- * Toggled at runtime with Alt+Enter, or from the host UI's Renderer menu. */
+ * Toggled at runtime with Alt+Enter, or from the host UI's Settings >
+ * Display menu. */
 enum
 {
     MIOPAN_WINDOW_MODE_WINDOWED = 0,

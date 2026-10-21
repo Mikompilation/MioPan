@@ -1101,7 +1101,7 @@ struct FrameUploadState
 
 FrameUploadState g_frame_upload;
 /*
- * Frame smoothing -- menu bar, Profiler > Frame smoothing.
+ * Frame smoothing -- menu bar, Settings > Graphics > Frame smoothing.
  *
  * Additional presents of each logical frame, 0..3.  The game keeps simulating
  * at its own rate; these are the same frame put on screen again through a

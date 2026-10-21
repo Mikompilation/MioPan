@@ -947,18 +947,18 @@ void DrawFinderMenu()
 }
 
 /*
- * HDR output and the display grade.
+ * HDR output.
  *
  * Laid out in the order a player should actually reach for them: pick a mode,
  * see what the display says it can do, then set paper white -- which is the
  * brightness control that matters and is not the same knob as the grade's
- * brightness further down.  The expansion pair is below that because it is the
- * only thing here that invents information the source never had, and the
- * faithful setting for it is 0.
+ * Brightness in the menu beside this one.  The expansion pair is below that
+ * because it is the only thing here that invents information the source never
+ * had, and the faithful setting for it is 0.
  */
 void DrawHdrMenu()
 {
-    if (!ImGui::BeginMenu("HDR and display"))
+    if (!ImGui::BeginMenu("HDR"))
     {
         return;
     }
@@ -1090,38 +1090,49 @@ void DrawHdrMenu()
     }
     ImGui::EndDisabled();
 
-    ImGui::Separator();
-    ImGui::TextDisabled("Display grade (SDR and HDR)");
+    ImGui::EndMenu();
+}
+
+/*
+ * The display grade, SDR and HDR alike.  Its own menu beside HDR rather than
+ * inside it, so a player on an SDR screen finds brightness and gamma without
+ * opening a menu named for a mode they do not have.
+ */
+void DrawGradeMenu()
+{
+    if (!ImGui::BeginMenu("Brightness and colour"))
     {
-        float brightness = 1.0f;
-        float contrast = 1.0f;
-        float gamma = 1.0f;
-        float saturation = 1.0f;
-        MioPan_RendererGetGrade(&brightness, &contrast, &gamma, &saturation);
-
-        bool changed = false;
-        ImGui::SetNextItemWidth(Px(180.0f));
-        changed |= ImGui::SliderFloat("Brightness", &brightness, 0.25f, 2.0f,
-                                      "%.2f");
-        ImGui::SetNextItemWidth(Px(180.0f));
-        changed |= ImGui::SliderFloat("Contrast", &contrast, 0.5f, 2.0f,
-                                      "%.2f");
-        ImGui::SetNextItemWidth(Px(180.0f));
-        changed |= ImGui::SliderFloat("Gamma", &gamma, 0.5f, 2.5f, "%.2f");
-        ImGui::SetNextItemWidth(Px(180.0f));
-        changed |= ImGui::SliderFloat("Saturation", &saturation, 0.0f, 2.0f,
-                                      "%.2f");
-        if (changed)
-        {
-            MioPan_RendererSetGrade(brightness, contrast, gamma, saturation);
-        }
-
-        if (ImGui::MenuItem("Reset grade"))
-        {
-            MioPan_RendererSetGrade(1.0f, 1.0f, 1.0f, 1.0f);
-        }
-        ImGui::TextDisabled("  all four at 1.00 skips the output pass");
+        return;
     }
+
+    float brightness = 1.0f;
+    float contrast = 1.0f;
+    float gamma = 1.0f;
+    float saturation = 1.0f;
+    MioPan_RendererGetGrade(&brightness, &contrast, &gamma, &saturation);
+
+    bool changed = false;
+    ImGui::SetNextItemWidth(Px(180.0f));
+    changed |= ImGui::SliderFloat("Brightness", &brightness, 0.25f, 2.0f,
+                                  "%.2f");
+    ImGui::SetNextItemWidth(Px(180.0f));
+    changed |= ImGui::SliderFloat("Contrast", &contrast, 0.5f, 2.0f,
+                                  "%.2f");
+    ImGui::SetNextItemWidth(Px(180.0f));
+    changed |= ImGui::SliderFloat("Gamma", &gamma, 0.5f, 2.5f, "%.2f");
+    ImGui::SetNextItemWidth(Px(180.0f));
+    changed |= ImGui::SliderFloat("Saturation", &saturation, 0.0f, 2.0f,
+                                  "%.2f");
+    if (changed)
+    {
+        MioPan_RendererSetGrade(brightness, contrast, gamma, saturation);
+    }
+
+    if (ImGui::MenuItem("Reset grade"))
+    {
+        MioPan_RendererSetGrade(1.0f, 1.0f, 1.0f, 1.0f);
+    }
+    ImGui::TextDisabled("  all four at 1.00 skips the output pass");
 
     ImGui::EndMenu();
 }
@@ -2196,6 +2207,454 @@ void DrawDataFolderWindow()
     ImGui::End();
 }
 
+/*
+ * Settings > Display: the window, and what reaches the screen through it.
+ * Everything here is about the output rather than the frame being drawn --
+ * which window, how it is presented, how the picture is framed in it, and the
+ * HDR and grade passes on the way out.
+ */
+void DrawDisplaySettingsMenu()
+{
+    if (!ImGui::BeginMenu("Display"))
+    {
+        return;
+    }
+
+    ImGui::TextDisabled("Window");
+    {
+        const int window_mode = MioPan_RendererGetWindowMode();
+        if (ImGui::MenuItem("Windowed", "Alt+Enter",
+                            window_mode == MIOPAN_WINDOW_MODE_WINDOWED))
+        {
+            MioPan_RendererSetWindowMode(MIOPAN_WINDOW_MODE_WINDOWED);
+        }
+        if (ImGui::MenuItem("Borderless fullscreen", "Alt+Enter",
+                            window_mode == MIOPAN_WINDOW_MODE_BORDERLESS))
+        {
+            MioPan_RendererSetWindowMode(MIOPAN_WINDOW_MODE_BORDERLESS);
+        }
+    }
+    ImGui::Separator();
+
+    DrawVsyncMenu();
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Aspect ratio");
+    {
+        int aspect_mode = MIOPAN_ASPECT_AUTO;
+        float custom = 16.0f / 9.0f;
+        MioPan_RendererGetAspectMode(&aspect_mode, &custom);
+
+        struct AspectChoice
+        {
+            const char *label;
+            int mode;
+        };
+        static const AspectChoice kAspects[] = {
+            {"Auto (window)", MIOPAN_ASPECT_AUTO},
+            {"Original 640:448 (PS2 framing)", MIOPAN_ASPECT_ORIGINAL},
+            {"4:3", MIOPAN_ASPECT_4_3},
+            {"16:9", MIOPAN_ASPECT_16_9},
+            {"16:10", MIOPAN_ASPECT_16_10},
+            {"Custom", MIOPAN_ASPECT_CUSTOM},
+        };
+        for (const AspectChoice &choice : kAspects)
+        {
+            if (ImGui::MenuItem(choice.label, nullptr,
+                                aspect_mode == choice.mode))
+            {
+                MioPan_RendererSetAspectMode(choice.mode, custom);
+            }
+        }
+
+        ImGui::SetNextItemWidth(Px(180.0f));
+        if (ImGui::SliderFloat("Custom ratio", &custom, 0.5f, 5.0f, "%.3f"))
+        {
+            MioPan_RendererSetAspectMode(MIOPAN_ASPECT_CUSTOM, custom);
+        }
+
+        int px = 0, py = 0, pw = 0, ph = 0;
+        MioPan_RendererGetPresentRect(&px, &py, &pw, &ph);
+        ImGui::TextDisabled("  presented at %dx%d +%d+%d", pw, ph, px, py);
+    }
+    ImGui::Separator();
+
+    DrawHdrMenu();
+    DrawGradeMenu();
+
+    ImGui::EndMenu();
+}
+
+/*
+ * Settings > Graphics: how the frame itself is drawn -- at what resolution,
+ * how often it is put on screen, how it is lit and shadowed, and the effects
+ * laid over it.  The switches that exist to check the port against itself are
+ * under Debug instead, even the ones miopan.ini keeps.
+ */
+void DrawGraphicsSettingsMenu()
+{
+    if (!ImGui::BeginMenu("Graphics"))
+    {
+        return;
+    }
+
+    ImGui::TextDisabled("Render resolution");
+    {
+        int mode = MIOPAN_RENDER_RES_MATCH_WINDOW;
+        float scale = 1.0f;
+        MioPan_RendererGetRenderResolution(&mode, &scale);
+
+        if (ImGui::MenuItem("Match window", nullptr,
+                            mode == MIOPAN_RENDER_RES_MATCH_WINDOW))
+        {
+            MioPan_RendererSetRenderResolution(
+                MIOPAN_RENDER_RES_MATCH_WINDOW, scale);
+        }
+        if (ImGui::MenuItem("Native PS2 (640x448 x scale)", nullptr,
+                            mode == MIOPAN_RENDER_RES_NATIVE_PS2))
+        {
+            MioPan_RendererSetRenderResolution(
+                MIOPAN_RENDER_RES_NATIVE_PS2, scale);
+        }
+        if (ImGui::MenuItem("Window x scale", nullptr,
+                            mode == MIOPAN_RENDER_RES_WINDOW_SCALE))
+        {
+            MioPan_RendererSetRenderResolution(
+                MIOPAN_RENDER_RES_WINDOW_SCALE, scale);
+        }
+
+        ImGui::SetNextItemWidth(Px(180.0f));
+        if (ImGui::SliderFloat("Scale", &scale, 0.25f, 4.0f, "%.2fx"))
+        {
+            MioPan_RendererSetRenderResolution(mode, scale);
+        }
+
+        const int filter = MioPan_RendererGetUpscaleFilter();
+        if (ImGui::MenuItem("Upscale: nearest (sharp)", nullptr,
+                            filter == MIOPAN_RENDER_FILTER_NEAREST))
+        {
+            MioPan_RendererSetUpscaleFilter(MIOPAN_RENDER_FILTER_NEAREST);
+        }
+        if (ImGui::MenuItem("Upscale: linear (smooth)", nullptr,
+                            filter == MIOPAN_RENDER_FILTER_LINEAR))
+        {
+            MioPan_RendererSetUpscaleFilter(MIOPAN_RENDER_FILTER_LINEAR);
+        }
+
+        int render_w = 0;
+        int render_h = 0;
+        MioPan_RendererGetRenderSize(&render_w, &render_h);
+        ImGui::TextDisabled("  rasterised at %dx%d", render_w, render_h);
+    }
+    ImGui::Separator();
+
+    DrawAntiAliasingMenu();
+    DrawFrameSmoothingMenu();
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Static mesh shading");
+    const int lighting_mode = MioPan_RendererGetLightingMode();
+    if (ImGui::MenuItem("Vertex lighting (PS2)", nullptr,
+                        lighting_mode == MIOPAN_LIGHTING_VERTEX))
+    {
+        MioPan_RendererSetLightingMode(MIOPAN_LIGHTING_VERTEX);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Every light on the CPU, once per vertex. What the PS2 did.");
+    }
+    if (ImGui::MenuItem("Fragment lighting (spots)", nullptr,
+                        lighting_mode == MIOPAN_LIGHTING_FRAGMENT))
+    {
+        MioPan_RendererSetLightingMode(MIOPAN_LIGHTING_FRAGMENT);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Spotlights per pixel, the rest per vertex on the CPU.");
+    }
+    if (ImGui::MenuItem("Fragment lighting (all lights)", nullptr,
+                        lighting_mode == MIOPAN_LIGHTING_FRAGMENT_ALL))
+    {
+        MioPan_RendererSetLightingMode(MIOPAN_LIGHTING_FRAGMENT_ALL);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "The whole light image per pixel; no CPU vertex lighting at "
+            "all.\nSharper speculars and cone edges than the PS2 had.");
+    }
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Projected shadows");
+    const int shadow_filter = MioPan_RendererGetShadowFilter();
+    if (ImGui::MenuItem("Hard edge (PS2)", nullptr,
+                        shadow_filter == MIOPAN_SHADOW_FILTER_NONE))
+    {
+        MioPan_RendererSetShadowFilter(MIOPAN_SHADOW_FILTER_NONE);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "One tap of the silhouette, as the projected sprite gave.");
+    }
+    if (ImGui::MenuItem("Soft edge", nullptr,
+                        shadow_filter == MIOPAN_SHADOW_FILTER_SOFT))
+    {
+        MioPan_RendererSetShadowFilter(MIOPAN_SHADOW_FILTER_SOFT);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Average a 3x3 of the silhouette.");
+    }
+    ImGui::Separator();
+
+    DrawEffectsMenu();
+    DrawFinderMenu();
+
+    ImGui::EndMenu();
+}
+
+/* Settings > Controls.  The rebinding itself is a window -- twenty rows of
+ * cells to click do not fit in a menu -- so this is the way to it, plus the
+ * two things worth having without opening it. */
+void DrawControlsSettingsMenu()
+{
+    if (!ImGui::BeginMenu("Controls"))
+    {
+        return;
+    }
+
+    ImGui::MenuItem("Rebind keyboard, mouse and gamepad...", nullptr,
+                    &g_show_controls);
+    bool mouse_look = MioPan_InputGetMouseLook() != 0;
+    if (ImGui::MenuItem("Aim the viewfinder with the mouse", nullptr,
+                        &mouse_look))
+    {
+        MioPan_InputSetMouseLook(mouse_look ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Reset all bindings", nullptr, false,
+                        MioPan_InputBindingsAreDefault() == 0))
+    {
+        CancelCapture();
+        MioPan_InputResetBindings();
+        MarkSettingsDirty();
+    }
+    ImGui::EndMenu();
+}
+
+/*
+ * The Settings menu: the port's preferences, one submenu per subject.  Kept to
+ * a single menu so the bar stays short -- Settings, Assists, Debug -- and a
+ * player after any preference has one place to look for it.  What is left at
+ * this level belongs to MioPan itself rather than to the picture or the sound.
+ */
+void DrawSettingsMenu()
+{
+    if (!ImGui::BeginMenu("Settings"))
+    {
+        return;
+    }
+
+    DrawDisplaySettingsMenu();
+    DrawGraphicsSettingsMenu();
+    if (ImGui::BeginMenu("Audio"))
+    {
+        DrawAudioMenu();
+        ImGui::EndMenu();
+    }
+    DrawControlsSettingsMenu();
+    ImGui::Separator();
+
+    DrawInterfaceScaleMenu();
+    bool pause = MioPan_RendererGetPauseInBackground() != 0;
+    if (ImGui::MenuItem("Pause when in the background", nullptr, &pause))
+    {
+        MioPan_RendererSetPauseInBackground(pause ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Hold the game -- audio and movies included -- while the\n"
+            "window is minimised or another window has the focus, and\n"
+            "carry on from the same frame when it comes back.");
+    }
+    ImGui::Separator();
+
+    ImGui::MenuItem("Game data folder...", nullptr, &g_show_data_folder);
+    if (ImGui::MenuItem("Open user data folder"))
+    {
+        OpenFolderInShell(MioPan_PathUserDir());
+    }
+    if (ImGui::MenuItem("Open game data folder"))
+    {
+        OpenFolderInShell(MioPan_PathDataDir());
+    }
+    ImGui::EndMenu();
+}
+
+/*
+ * Debug > Diagnostics / A-B.  Each row turns off one thing the port does
+ * differently from the PS2, or faster than it did, so a picture that looks
+ * wrong can be pinned on that change or cleared of it.  A submenu because the
+ * rows have to say what they leave running, and that makes them long.
+ */
+void DrawDiagnosticsMenu()
+{
+    if (!ImGui::BeginMenu("Diagnostics / A-B"))
+    {
+        return;
+    }
+
+    DrawRendererDebugViewItem(
+        "Disable host 3D quads (simulation + PS2 packets continue)",
+        MIOPAN_RENDERER_DEBUG_DISABLE_BILLBOARD_HOST);
+    DrawRendererDebugViewItem(
+        "Skip legacy PS2 billboard packets (host visuals remain)",
+        MIOPAN_RENDERER_DEBUG_SKIP_BILLBOARD_LEGACY_PACKETS);
+    DrawRendererDebugViewItem(
+        "Disable sky dome grid (flat fog/background remains)",
+        MIOPAN_RENDERER_DEBUG_DISABLE_SKY_DOME);
+    DrawRendererDebugViewItem(
+        "Disable sky horizon quad (flat fog/background remains)",
+        MIOPAN_RENDERER_DEBUG_DISABLE_SKY_HORIZON);
+    DrawRendererDebugViewItem(
+        "Disable 2D depth (photo/tray depth-stencil passes unmasked)",
+        MIOPAN_RENDERER_DEBUG_DISABLE_2D_DEPTH);
+    DrawRendererDebugViewItem(
+        "Shadow projector view (red occluded / green lit / blue unprojected)",
+        MIOPAN_RENDERER_DEBUG_SHADOW_VIEW);
+    {
+        int shadows = 0, casters = 0, receivers = 0, valid = 0;
+        MioPan_RendererGetShadowStats(&shadows, &casters, &receivers,
+                                      &valid);
+        ImGui::TextDisabled(
+            "  shadows %d / caster draws %d / receiver draws %d / map %s",
+            shadows, casters, receivers, valid ? "yes" : "no");
+    }
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Animated character lighting");
+    const int animated_backend =
+        MioPan_RendererGetAnimatedLightingBackend();
+    if (ImGui::MenuItem("GPU vertex (fast)", nullptr,
+                        animated_backend == MIOPAN_ANIMATED_LIGHTING_GPU))
+    {
+        MioPan_RendererSetAnimatedLightingBackend(
+            MIOPAN_ANIMATED_LIGHTING_GPU);
+    }
+    if (ImGui::MenuItem("CPU reference (A/B)", nullptr,
+                        animated_backend == MIOPAN_ANIMATED_LIGHTING_CPU))
+    {
+        MioPan_RendererSetAnimatedLightingBackend(
+            MIOPAN_ANIMATED_LIGHTING_CPU);
+    }
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Static meshes");
+    bool resident = MioPan_RendererGetResidentMeshes() != 0;
+    if (ImGui::MenuItem("Keep geometry on the GPU", nullptr, &resident))
+    {
+        MioPan_RendererSetResidentMeshes(resident ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Rooms, furniture and doors are decoded once and drawn from\n"
+            "GPU buffers, with neighbouring parts merged into one draw.\n"
+            "Off re-decodes and re-uploads every mesh every frame, as the\n"
+            "PS2-shaped path always has -- the A/B if anything differs.");
+    }
+    bool resident_textures = MioPan_RendererGetResidentTextures() != 0;
+    if (ImGui::MenuItem("Stop re-sending their textures", nullptr,
+                        &resident_textures))
+    {
+        MioPan_RendererSetResidentTextures(resident_textures ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Each room, piece of furniture and door resolves its textures\n"
+            "once, and then stops uploading them to the emulated GS every\n"
+            "frame. Off re-sends and re-hashes them every draw, as the PS2\n"
+            "did -- the A/B if a texture looks wrong.");
+    }
+
+    ImGui::EndMenu();
+}
+
+/*
+ * The Debug menu: what is there to measure the port or check it against
+ * itself rather than to play with -- the profiler and its pacing harness, the
+ * renderer's debug views and A/B switches, and the way into the prototype's
+ * own debug tooling.  Some of these are kept in miopan.ini all the same; where
+ * a row lives says what it is for, not whether it is saved.
+ */
+void DrawDebugMenu()
+{
+    if (!ImGui::BeginMenu("Debug"))
+    {
+        return;
+    }
+
+    ImGui::TextDisabled("Profiler");
+    {
+        const bool visible =
+            g_show_performance_summary || g_show_performance_graphs;
+        if (ImGui::MenuItem("Show profiler", nullptr, visible))
+        {
+            const bool show = !visible;
+            g_show_performance_summary = show;
+            g_show_performance_graphs = show;
+        }
+    }
+    ImGui::MenuItem("Summary", nullptr, &g_show_performance_summary);
+    ImGui::MenuItem("   FPS only", nullptr, &g_summary_fps_only,
+                    g_show_performance_summary);
+    ImGui::MenuItem("Graphs", nullptr, &g_show_performance_graphs);
+    /* The graph window carries these three as well; they are here for when
+     * it is closed, a level down so they do not crowd the toggles above. */
+    if (ImGui::BeginMenu("Graph history"))
+    {
+        if (ImGui::MenuItem("Pause", nullptr, &g_pause_performance_history) &&
+            g_pause_performance_history)
+        {
+            g_follow_performance_history = false;
+        }
+        ImGui::MenuItem("Follow latest", nullptr,
+                        &g_follow_performance_history);
+        if (ImGui::MenuItem("Clear", nullptr, false,
+                            g_profiler_history_count != 0))
+        {
+            ClearProfilerHistory();
+        }
+        ImGui::EndMenu();
+    }
+    DrawFramePacingMenu();
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Render views");
+    DrawRendererDebugViewItem("Wireframe",
+                              MIOPAN_RENDERER_DEBUG_WIREFRAME);
+    DrawRendererDebugViewItem("Disable depth test/write",
+                              MIOPAN_RENDERER_DEBUG_DISABLE_DEPTH);
+    DrawRendererDebugViewItem("Flat colours",
+                              MIOPAN_RENDERER_DEBUG_FLAT_COLOUR);
+    DrawRendererDebugViewItem("Disable lighting",
+                              MIOPAN_RENDERER_DEBUG_DISABLE_LIGHTING);
+    MioPanUi::DrawSceneLayersMenu();
+    DrawDiagnosticsMenu();
+    ImGui::Separator();
+
+    ImGui::TextDisabled("Developer");
+    MioPanUi::DrawDeveloperItems();
+
+    ImGui::EndMenu();
+}
+
 void DrawMainMenuBar()
 {
     if (!g_show_main_menu_bar)
@@ -2207,363 +2666,9 @@ void DrawMainMenuBar()
         return;
     }
 
-    if (ImGui::BeginMenu("Profiler"))
-    {
-        const bool visible =
-            g_show_performance_summary || g_show_performance_graphs;
-        if (ImGui::MenuItem("Show profiler", nullptr, visible))
-        {
-            const bool show = !visible;
-            g_show_performance_summary = show;
-            g_show_performance_graphs = show;
-        }
-        ImGui::Separator();
-        ImGui::MenuItem("Summary", nullptr, &g_show_performance_summary);
-        ImGui::MenuItem("   FPS only", nullptr, &g_summary_fps_only,
-                        g_show_performance_summary);
-        ImGui::MenuItem("Graphs", nullptr, &g_show_performance_graphs);
-        ImGui::Separator();
-        if (ImGui::MenuItem("Pause graph history", nullptr,
-                            &g_pause_performance_history) &&
-            g_pause_performance_history)
-        {
-            g_follow_performance_history = false;
-        }
-        ImGui::MenuItem("Follow latest", nullptr,
-                        &g_follow_performance_history);
-        if (ImGui::MenuItem("Clear graph history", nullptr, false,
-                            g_profiler_history_count != 0))
-        {
-            ClearProfilerHistory();
-        }
-        ImGui::Separator();
-        DrawFramePacingMenu();
-        DrawFrameSmoothingMenu();
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Controls"))
-    {
-        ImGui::MenuItem("Rebind keyboard, mouse and gamepad...", nullptr,
-                        &g_show_controls);
-        bool mouse_look = MioPan_InputGetMouseLook() != 0;
-        if (ImGui::MenuItem("Aim the viewfinder with the mouse", nullptr,
-                            &mouse_look))
-        {
-            MioPan_InputSetMouseLook(mouse_look ? 1 : 0);
-            MarkSettingsDirty();
-        }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Reset all bindings", nullptr, false,
-                            MioPan_InputBindingsAreDefault() == 0))
-        {
-            CancelCapture();
-            MioPan_InputResetBindings();
-            MarkSettingsDirty();
-        }
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Renderer"))
-    {
-        ImGui::TextDisabled("Window");
-        {
-            const int window_mode = MioPan_RendererGetWindowMode();
-            if (ImGui::MenuItem("Windowed", "Alt+Enter",
-                                window_mode == MIOPAN_WINDOW_MODE_WINDOWED))
-            {
-                MioPan_RendererSetWindowMode(MIOPAN_WINDOW_MODE_WINDOWED);
-            }
-            if (ImGui::MenuItem("Borderless fullscreen", "Alt+Enter",
-                                window_mode == MIOPAN_WINDOW_MODE_BORDERLESS))
-            {
-                MioPan_RendererSetWindowMode(MIOPAN_WINDOW_MODE_BORDERLESS);
-            }
-        }
-        ImGui::Separator();
-
-        DrawVsyncMenu();
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Aspect ratio");
-        {
-            int aspect_mode = MIOPAN_ASPECT_AUTO;
-            float custom = 16.0f / 9.0f;
-            MioPan_RendererGetAspectMode(&aspect_mode, &custom);
-
-            struct AspectChoice
-            {
-                const char *label;
-                int mode;
-            };
-            static const AspectChoice kAspects[] = {
-                {"Auto (window)", MIOPAN_ASPECT_AUTO},
-                {"Original 640:448 (PS2 framing)", MIOPAN_ASPECT_ORIGINAL},
-                {"4:3", MIOPAN_ASPECT_4_3},
-                {"16:9", MIOPAN_ASPECT_16_9},
-                {"16:10", MIOPAN_ASPECT_16_10},
-                {"Custom", MIOPAN_ASPECT_CUSTOM},
-            };
-            for (const AspectChoice &choice : kAspects)
-            {
-                if (ImGui::MenuItem(choice.label, nullptr,
-                                    aspect_mode == choice.mode))
-                {
-                    MioPan_RendererSetAspectMode(choice.mode, custom);
-                }
-            }
-
-            ImGui::SetNextItemWidth(Px(180.0f));
-            if (ImGui::SliderFloat("Custom ratio", &custom, 0.5f, 5.0f, "%.3f"))
-            {
-                MioPan_RendererSetAspectMode(MIOPAN_ASPECT_CUSTOM, custom);
-            }
-
-            int px = 0, py = 0, pw = 0, ph = 0;
-            MioPan_RendererGetPresentRect(&px, &py, &pw, &ph);
-            ImGui::TextDisabled("  presented at %dx%d +%d+%d", pw, ph, px, py);
-        }
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Render resolution");
-        {
-            int mode = MIOPAN_RENDER_RES_MATCH_WINDOW;
-            float scale = 1.0f;
-            MioPan_RendererGetRenderResolution(&mode, &scale);
-
-            if (ImGui::MenuItem("Match window", nullptr,
-                                mode == MIOPAN_RENDER_RES_MATCH_WINDOW))
-            {
-                MioPan_RendererSetRenderResolution(
-                    MIOPAN_RENDER_RES_MATCH_WINDOW, scale);
-            }
-            if (ImGui::MenuItem("Native PS2 (640x448 x scale)", nullptr,
-                                mode == MIOPAN_RENDER_RES_NATIVE_PS2))
-            {
-                MioPan_RendererSetRenderResolution(
-                    MIOPAN_RENDER_RES_NATIVE_PS2, scale);
-            }
-            if (ImGui::MenuItem("Window x scale", nullptr,
-                                mode == MIOPAN_RENDER_RES_WINDOW_SCALE))
-            {
-                MioPan_RendererSetRenderResolution(
-                    MIOPAN_RENDER_RES_WINDOW_SCALE, scale);
-            }
-
-            ImGui::SetNextItemWidth(Px(180.0f));
-            if (ImGui::SliderFloat("Scale", &scale, 0.25f, 4.0f, "%.2fx"))
-            {
-                MioPan_RendererSetRenderResolution(mode, scale);
-            }
-
-            const int filter = MioPan_RendererGetUpscaleFilter();
-            if (ImGui::MenuItem("Upscale: nearest (sharp)", nullptr,
-                                filter == MIOPAN_RENDER_FILTER_NEAREST))
-            {
-                MioPan_RendererSetUpscaleFilter(MIOPAN_RENDER_FILTER_NEAREST);
-            }
-            if (ImGui::MenuItem("Upscale: linear (smooth)", nullptr,
-                                filter == MIOPAN_RENDER_FILTER_LINEAR))
-            {
-                MioPan_RendererSetUpscaleFilter(MIOPAN_RENDER_FILTER_LINEAR);
-            }
-
-            int render_w = 0;
-            int render_h = 0;
-            MioPan_RendererGetRenderSize(&render_w, &render_h);
-            ImGui::TextDisabled("  rasterised at %dx%d", render_w, render_h);
-        }
-        ImGui::Separator();
-
-        DrawAntiAliasingMenu();
-        ImGui::Separator();
-
-        DrawHdrMenu();
-        ImGui::Separator();
-
-        DrawEffectsMenu();
-        ImGui::Separator();
-
-        DrawFinderMenu();
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Debug views");
-        DrawRendererDebugViewItem("Wireframe",
-                                  MIOPAN_RENDERER_DEBUG_WIREFRAME);
-        DrawRendererDebugViewItem("Disable depth test/write",
-                                  MIOPAN_RENDERER_DEBUG_DISABLE_DEPTH);
-        DrawRendererDebugViewItem("Flat colours",
-                                  MIOPAN_RENDERER_DEBUG_FLAT_COLOUR);
-        DrawRendererDebugViewItem("Disable lighting",
-                                  MIOPAN_RENDERER_DEBUG_DISABLE_LIGHTING);
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Diagnostics / A-B");
-        DrawRendererDebugViewItem(
-            "Disable host 3D quads (simulation + PS2 packets continue)",
-            MIOPAN_RENDERER_DEBUG_DISABLE_BILLBOARD_HOST);
-        DrawRendererDebugViewItem(
-            "Skip legacy PS2 billboard packets (host visuals remain)",
-            MIOPAN_RENDERER_DEBUG_SKIP_BILLBOARD_LEGACY_PACKETS);
-        DrawRendererDebugViewItem(
-            "Disable sky dome grid (flat fog/background remains)",
-            MIOPAN_RENDERER_DEBUG_DISABLE_SKY_DOME);
-        DrawRendererDebugViewItem(
-            "Disable sky horizon quad (flat fog/background remains)",
-            MIOPAN_RENDERER_DEBUG_DISABLE_SKY_HORIZON);
-        DrawRendererDebugViewItem(
-            "Disable 2D depth (photo/tray depth-stencil passes unmasked)",
-            MIOPAN_RENDERER_DEBUG_DISABLE_2D_DEPTH);
-        DrawRendererDebugViewItem(
-            "Shadow projector view (red occluded / green lit / blue unprojected)",
-            MIOPAN_RENDERER_DEBUG_SHADOW_VIEW);
-        {
-            int shadows = 0, casters = 0, receivers = 0, valid = 0;
-            MioPan_RendererGetShadowStats(&shadows, &casters, &receivers,
-                                          &valid);
-            ImGui::TextDisabled(
-                "  shadows %d / caster draws %d / receiver draws %d / map %s",
-                shadows, casters, receivers, valid ? "yes" : "no");
-        }
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Animated character lighting");
-        const int animated_backend =
-            MioPan_RendererGetAnimatedLightingBackend();
-        if (ImGui::MenuItem("GPU vertex (fast)", nullptr,
-                            animated_backend == MIOPAN_ANIMATED_LIGHTING_GPU))
-        {
-            MioPan_RendererSetAnimatedLightingBackend(
-                MIOPAN_ANIMATED_LIGHTING_GPU);
-        }
-        if (ImGui::MenuItem("CPU reference (A/B)", nullptr,
-                            animated_backend == MIOPAN_ANIMATED_LIGHTING_CPU))
-        {
-            MioPan_RendererSetAnimatedLightingBackend(
-                MIOPAN_ANIMATED_LIGHTING_CPU);
-        }
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Static meshes");
-        bool resident = MioPan_RendererGetResidentMeshes() != 0;
-        if (ImGui::MenuItem("Keep geometry on the GPU", nullptr, &resident))
-        {
-            MioPan_RendererSetResidentMeshes(resident ? 1 : 0);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Rooms, furniture and doors are decoded once and drawn from\n"
-                "GPU buffers, with neighbouring parts merged into one draw.\n"
-                "Off re-decodes and re-uploads every mesh every frame, as the\n"
-                "PS2-shaped path always has -- the A/B if anything differs.");
-        }
-        bool resident_textures = MioPan_RendererGetResidentTextures() != 0;
-        if (ImGui::MenuItem("Stop re-sending their textures", nullptr,
-                            &resident_textures))
-        {
-            MioPan_RendererSetResidentTextures(resident_textures ? 1 : 0);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Each room, piece of furniture and door resolves its textures\n"
-                "once, and then stops uploading them to the emulated GS every\n"
-                "frame. Off re-sends and re-hashes them every draw, as the PS2\n"
-                "did -- the A/B if a texture looks wrong.");
-        }
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Static mesh shading");
-        const int lighting_mode = MioPan_RendererGetLightingMode();
-        if (ImGui::MenuItem("Vertex lighting (PS2)", nullptr,
-                            lighting_mode == MIOPAN_LIGHTING_VERTEX))
-        {
-            MioPan_RendererSetLightingMode(MIOPAN_LIGHTING_VERTEX);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Every light on the CPU, once per vertex. What the PS2 did.");
-        }
-        if (ImGui::MenuItem("Fragment lighting (spots)", nullptr,
-                            lighting_mode == MIOPAN_LIGHTING_FRAGMENT))
-        {
-            MioPan_RendererSetLightingMode(MIOPAN_LIGHTING_FRAGMENT);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Spotlights per pixel, the rest per vertex on the CPU.");
-        }
-        if (ImGui::MenuItem("Fragment lighting (all lights)", nullptr,
-                            lighting_mode == MIOPAN_LIGHTING_FRAGMENT_ALL))
-        {
-            MioPan_RendererSetLightingMode(MIOPAN_LIGHTING_FRAGMENT_ALL);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "The whole light image per pixel; no CPU vertex lighting at "
-                "all.\nSharper speculars and cone edges than the PS2 had.");
-        }
-        ImGui::Separator();
-
-        ImGui::TextDisabled("Projected shadows");
-        const int shadow_filter = MioPan_RendererGetShadowFilter();
-        if (ImGui::MenuItem("Hard edge (PS2)", nullptr,
-                            shadow_filter == MIOPAN_SHADOW_FILTER_NONE))
-        {
-            MioPan_RendererSetShadowFilter(MIOPAN_SHADOW_FILTER_NONE);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "One tap of the silhouette, as the projected sprite gave.");
-        }
-        if (ImGui::MenuItem("Soft edge", nullptr,
-                            shadow_filter == MIOPAN_SHADOW_FILTER_SOFT))
-        {
-            MioPan_RendererSetShadowFilter(MIOPAN_SHADOW_FILTER_SOFT);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Average a 3x3 of the silhouette.");
-        }
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Audio"))
-    {
-        DrawAudioMenu();
-        ImGui::EndMenu();
-    }
+    DrawSettingsMenu();
     MioPanUi::DrawAssistsMenu();
-    if (ImGui::BeginMenu("Settings"))
-    {
-        ImGui::MenuItem("Game data folder...", nullptr, &g_show_data_folder);
-        ImGui::Separator();
-        bool pause = MioPan_RendererGetPauseInBackground() != 0;
-        if (ImGui::MenuItem("Pause when in the background", nullptr, &pause))
-        {
-            MioPan_RendererSetPauseInBackground(pause ? 1 : 0);
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip(
-                "Hold the game -- audio and movies included -- while the\n"
-                "window is minimised or another window has the focus, and\n"
-                "carry on from the same frame when it comes back.");
-        }
-        DrawInterfaceScaleMenu();
-        ImGui::Separator();
-        if (ImGui::MenuItem("Open user data folder"))
-        {
-            OpenFolderInShell(MioPan_PathUserDir());
-        }
-        if (ImGui::MenuItem("Open game data folder"))
-        {
-            OpenFolderInShell(MioPan_PathDataDir());
-        }
-        ImGui::EndMenu();
-    }
+    DrawDebugMenu();
     ImGui::EndMainMenuBar();
 }
 

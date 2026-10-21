@@ -1,5 +1,6 @@
 /*
- * The overlay's "Assists" menu.
+ * The overlay's "Assists" menu, and the rows of its "Debug" menu that reach
+ * into the game.
  *
  * The Feb 2004 prototype still carries its developers' debug menu
  * (debug/debug_menu.c), reached from SELECT -- which miopan.ini now gates off
@@ -17,6 +18,10 @@
  * frame and the next, so a write here is seen by the very next frame and never
  * races one.  The shape follows MikuPan's Cheats menu
  * (src/mikupan/ui/mikupan_ui_cheats.cpp): Inventory, Unlocks, then the rest.
+ *
+ * The ROM menu's DISP switches and the way into the ROM menu itself are not
+ * things a player reaches for, so they go on the Debug menu instead -- drawn
+ * from here all the same, because this file is where the game's state is.
  */
 #include "miopan_ui_assists.h"
 
@@ -358,8 +363,8 @@ void DrawFreeCameraMenu(bool in_play)
     }
     Tooltip("The ROM's CAMERA DEBUG: the player and the ghosts stop and the\n"
             "camera is yours. Only from normal play. SELECT (Tab) leaves it\n"
-            "too -- into the debug menu when 'SELECT opens the debug menu'\n"
-            "is on, as in the ROM.");
+            "too -- into the debug menu when Debug > 'SELECT opens the debug\n"
+            "menu' is on, as in the ROM.");
 
     SwitchItem("Fly, world running", &DebugCameraMenu.FreeCameraON, true,
                "The ROM's FREE CAMERA: the game keeps running and the\n"
@@ -397,29 +402,6 @@ void DrawFreeCameraMenu(bool in_play)
     ImGui::TextDisabled("Move    other stick/pad  arrow keys");
     ImGui::TextDisabled("Up/down R1 / L1          F / R");
     ImGui::TextDisabled("Speed   L2 slow, R2 fast Z / X");
-
-    ImGui::EndMenu();
-}
-
-/* ---------------------------------------------------------------------------
- *  Display -- the ROM menu's DISP submenu (dbg_disp_main)
- * ------------------------------------------------------------------------ */
-
-void DrawDisplayMenu(bool in_story)
-{
-    if (!ImGui::BeginMenu("Display", in_story))
-    {
-        return;
-    }
-
-    /* The game sets these too (a game over hides everyone but the player,
-     * for one), so they read live rather than remembering a choice. */
-    SwitchItem("Player", &obj_draw_ctrl.player, true, nullptr);
-    SwitchItem("Sister", &obj_draw_ctrl.sister, true, nullptr);
-    SwitchItem("Room", &obj_draw_ctrl.room, true, nullptr);
-    SwitchItem("Objects", &obj_draw_ctrl.obj, true, nullptr);
-    SwitchItem("Sky", &obj_draw_ctrl.sky, true, nullptr);
-    SwitchItem("Shadows", &obj_draw_ctrl.shadow, true, nullptr);
 
     ImGui::EndMenu();
 }
@@ -474,21 +456,46 @@ void DrawAssistsMenu()
 
     ImGui::Separator();
     DrawFreeCameraMenu(in_play);
-    DrawDisplayMenu(GPhaseIsActive(GID_STORY_MAIN) != 0);
 
-    ImGui::Separator();
-    ImGui::TextDisabled("Developer");
+    ImGui::EndMenu();
+}
+
+/* ---------------------------------------------------------------------------
+ *  Debug-menu rows -- see the header
+ * ------------------------------------------------------------------------ */
+
+/* The ROM menu's DISP submenu (dbg_disp_main). */
+void DrawSceneLayersMenu()
+{
+    if (!ImGui::BeginMenu("Scene layers", GPhaseIsActive(GID_STORY_MAIN) != 0))
     {
-        bool select_opens = MioPan_ConfigDebugMenuEnabled() != 0;
-        if (ImGui::MenuItem("SELECT opens the debug menu", nullptr,
-                            &select_opens))
-        {
-            MioPan_ConfigSetDebugMenuEnabled(select_opens ? 1 : 0);
-        }
-        Tooltip("The prototype's own shortcut, off by default because SELECT\n"
-                "is Tab and the gamepad's Back button. Saved to miopan.ini\n"
-                "as [developer] debug_menu.");
+        return;
     }
+
+    /* The game sets these too (a game over hides everyone but the player,
+     * for one), so they read live rather than remembering a choice. */
+    SwitchItem("Player", &obj_draw_ctrl.player, true, nullptr);
+    SwitchItem("Sister", &obj_draw_ctrl.sister, true, nullptr);
+    SwitchItem("Room", &obj_draw_ctrl.room, true, nullptr);
+    SwitchItem("Objects", &obj_draw_ctrl.obj, true, nullptr);
+    SwitchItem("Sky", &obj_draw_ctrl.sky, true, nullptr);
+    SwitchItem("Shadows", &obj_draw_ctrl.shadow, true, nullptr);
+
+    ImGui::EndMenu();
+}
+
+void DrawDeveloperItems()
+{
+    bool select_opens = MioPan_ConfigDebugMenuEnabled() != 0;
+    if (ImGui::MenuItem("SELECT opens the debug menu", nullptr,
+                        &select_opens))
+    {
+        MioPan_ConfigSetDebugMenuEnabled(select_opens ? 1 : 0);
+    }
+    Tooltip("The prototype's own shortcut, off by default because SELECT\n"
+            "is Tab and the gamepad's Back button. Saved to miopan.ini\n"
+            "as [developer] debug_menu.");
+
     if (ImGui::MenuItem("Open the debug menu now", nullptr, false,
                         GPhaseIsActive(GID_STORY_NORMAL) != 0))
     {
@@ -498,8 +505,6 @@ void DrawAssistsMenu()
     }
     Tooltip("The developers' menu itself, whatever the setting above says.\n"
             "SELECT closes it.");
-
-    ImGui::EndMenu();
 }
 
 } // namespace MioPanUi
