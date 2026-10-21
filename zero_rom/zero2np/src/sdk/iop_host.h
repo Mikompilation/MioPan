@@ -75,12 +75,21 @@ typedef struct
     int    reserved1, reserved2, reserved3, reserved4;
 } ThreadInfo;
 
+/* ThreadInfo::status as ReferThreadStatus() reports it -- only the two states
+ * the host can tell apart.  The values are the IOP kernel's. */
+#define THS_RUN      0x01
+#define THS_DORMANT  0x10
+
 typedef struct
 {
     u_int lo;
     u_int hi;
 } SysClock;
 
+/* ExitThread() does not return when called on an IOP thread: the body is
+ * abandoned and the thread goes dormant, as on the IOP.  TerminateThread() is
+ * cooperative -- the target goes dormant at its next WaitSema, SleepThread or
+ * DelayThread -- and, as on the IOP, is a no-op aimed at the calling thread. */
 int  MioPan_IopCreateThread(IopThreadParam *param);
 int  MioPan_IopDeleteThread(int thid);
 int  MioPan_IopStartThread(int thid, void *arg);

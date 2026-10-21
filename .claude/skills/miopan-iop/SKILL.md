@@ -283,12 +283,12 @@ constant.** The ones that matter: `THREAD_PRIORITY_ENUM` (`PRI_MAIN`,
   `slot0 ... IsUse=1 status=ST_STREAM_WAIT_END` beside a free-but-disabled
   slot1.  `zero_rom/.../iop.c` now has the `case REQ_STREAM_ABORT:` calling the
   already-written `StreamAbort()` and skipping `sizeof(STREAM_ABORT)`; the
-  tracer table in `iop_sif.cpp` was updated to match.  Caveat: `StreamAbort()`
-  expects `TerminateThread()` to kill the stream threads, and the host shim
-  cannot -- it only signals their wake semaphore, so a thread parked somewhere
-  that never tests `stop` stays parked while `StreamReleaseSub()` frees the ring
-  under it.  Treat it as a rescue, not a reason to stop chasing why the release
-  was missed.
+  tracer table in `iop_sif.cpp` was updated to match.  The port's
+  `StreamAbort()` works in three stages: escalate the cooperative stop and wait
+  for both threads to go dormant; else `TerminateThread()` them (cooperative
+  on this host -- see "ExitThread does not return" below) and do the release
+  they missed; else abandon the slot, leaking the ring.  Treat it as a rescue,
+  not a reason to stop chasing why the release was missed.
 - **`StreamStart()` reads one past `spu_loop_packet[]`.** The `just_loop`
   decision is `if (stp->spu_loop_packet[i] == 0 || (both fractions are 0))`,
   but `i` is left at `stp->nchannel` by the copy loop just above it. For the
@@ -501,9 +501,30 @@ synchronous host read that fires `cdvd_callback()` — and so signals
 `sema_Sync_CD` — *before it returns*, so `MyCdRead()`'s wait is already
 satisfied on arrival and the reader thread never actually blocked. The
 semaphore accounting is unchanged. The `ExitThread()` must not come along:
-on this host it marks the **calling** thread exited, and the caller is a live
-stream or ring-buffer thread. `sceCdRead()` drops the BKL around the host read,
-since that is where the IOP used to be parked.
+it ends the **calling** thread, and the caller is a live stream or ring-buffer
+thread. `sceCdRead()` drops the BKL around the host read, since that is where
+the IOP used to be parked.
+
+**`ExitThread()` does not return, and `TerminateThread()` is real.**
+`IopThreadMain()` `setjmp`s; `ExitThread()` `longjmp`s back to it, so the body
+is abandoned exactly as on the IOP. That matters because `StreamVoiceThread()`
+calls `VoiceThreadExit()` from three places *mid-body* with nothing after. While
+`ExitThread()` returned, a voice thread whose stream was stopped before it played
+released the slot and ran on -- over the next stream's `STREAM_WRK` -- into
+`SleepThread()` forever, flagged exited but alive; the reader's next
+`StartThread(voice)` then joined it forever, and the slot never released.
+Symptom in the log: `File End` from the reader, then no
+`PRE STREAM READ END RELEASE N` ever, then an abort that has to abandon the slot.
+Trigger: streams started and cut short back to back (cutscene, event sound,
+cutscene). `TerminateThread()` flags the target and wakes it; it goes dormant at
+its next `WaitSema` (waited in 10 ms slices for this), `SleepThread` or
+`DelayThread` -- never on a wait satisfied on arrival, and never aimed at the
+caller (`PCMStreamRelease()` terminates itself and must carry on).
+`StartThread()` drains banked wakeups on a relaunch, and `ReferThreadStatus()`
+reports `THS_RUN` / `THS_DORMANT`. Verified with a throwaway harness linked
+against `iop_host.cpp.obj` (the same harness on the old shim hung in the
+relaunch); that is the quickest check if this is touched again, since the
+in-game trigger needs a played-through scene sequence.
 
 `StartThread()` still gives a busy-looking thread a 10 ms grace period before
 answering "already running" — the ring-buffer reader and the two stream threads
@@ -533,15 +554,14 @@ the release will never happen — which is the stall above, not an audio fault.
 **Never block while holding `iop_table_lock`.** It is one global mutex over the
 thread, semaphore, timer and memory tables, so anything that blocks under it
 stops every IOP thread — they all queue up in `IopLock()`, which is where a hung
-process will be sitting. The trap is `StartThread()` relaunching a finished
-thread: `ExitThread()` sets `exited` from *inside* the thread body, so a thread
-can be flagged exited while still unwinding, and an IOP thread's unwind runs the
-ROM's release path (`StreamReleaseSub` → `FreeSysMemory`, `DeleteSema`) which
-takes that same lock. Joining it under the lock deadlocks the pair. Capture the
-stale `SDL_Thread *`, drop the lock, join, then retake it — with a `starting`
-flag holding the slot so a second `StartThread()` cannot spawn a duplicate in
-the unlocked window. Symptom: hang at the end of a scene, where one stream's
-threads exit exactly as the next stream starts one.
+process will be sitting. The trap was `StartThread()` relaunching a finished
+thread: back when `ExitThread()` returned, it set `exited` from *inside* the
+thread body, so a thread could be flagged exited while the ROM's release path
+(`StreamReleaseSub` → `FreeSysMemory`, `DeleteSema`) was still to run and take
+that same lock. `exited` is now raised by `IopThreadMain()` after the body, but
+the join still happens outside both locks: capture the stale `SDL_Thread *`,
+drop the lock, join, then retake it — with a `starting` flag holding the slot so
+a second `StartThread()` cannot spawn a duplicate in the unlocked window.
 
 ### The RPC bridge
 
