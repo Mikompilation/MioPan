@@ -509,6 +509,18 @@ is byte-identical. When porting a VU1 program to a shader, read it for what it s
 (ADC bits, `CLEAR_MESH`), not only for what it computes. Check with F1 -> Renderer ->
 "Shadow projector view": culled receivers turn purple.
 
+**SDL owns the main loop: a tick must return, and the frame never pumps.** `main.c` uses
+`SDL_MAIN_USE_CALLBACKS`, as MikuPan does: `SDL_AppIterate` is one `GPhaseSysMain()`, and
+SDL hands events to `SDL_AppEvent` (-> `MioPan_RendererProcessEvent`) between ticks. That
+is what keeps the game running while the window is dragged: Windows moves and resizes a
+window from a modal loop inside the event pump, and SDL ticks the callbacks from a timer in
+that loop. So no game or host code may call `SDL_PollEvent`, `SDL_PumpEvents` or
+`SDL_WaitEvent*` -- inside a drag it would nest a pump in the modal loop and take its mouse
+messages -- and nothing may loop across frames waiting for an event: the background pause
+is `MioPan_RendererHoldInBackground()` skipping ticks, not a loop. Test a drag by posting
+`WM_SYSCOMMAND SC_MOVE` to the window and counting `MIOPAN_STUTTER_MS=0.0001` lines in
+`miopan_stutter.log`: frames keep coming every ~33 ms; the old loop stopped for the drag.
+
 ## Style
 
 Match the surrounding code: same comment density, naming, and idiom. Comments should

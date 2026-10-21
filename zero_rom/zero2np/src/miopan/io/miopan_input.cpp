@@ -637,7 +637,11 @@ void MioPan_InputUpdate(void)
     {
         return;
     }
-    SDL_PumpEvents();
+    /* No SDL_PumpEvents() here.  SDL pumps -- and with it refreshes the pads
+     * and the keyboard -- before every tick it runs (SDL_AppIterate, main.c),
+     * and while Windows holds the thread in a window drag it ticks the game
+     * from inside that loop, where a nested pump would take the drag's own
+     * mouse messages. */
     SelectGamepad();
     AdvanceMouse();
     AdvanceStickRamps();

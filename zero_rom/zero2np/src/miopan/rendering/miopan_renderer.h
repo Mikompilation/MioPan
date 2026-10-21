@@ -210,17 +210,32 @@ int  MioPan_RendererGetVsyncActive(void);
  * Mute silences the output and changes nothing else; the game runs on, and
  * its audio with it, so coming back lands wherever the game has got to.
  *
- * Pause holds the game thread at the end of a frame -- after the present,
- * before control returns to the ROM -- and stops the host clocks with it (the
- * V-blank thread, the IOP's sound timer and the audio device; see
- * MioPan_PacingSetHostHold()).  The IOP threads stay alive and simply find
- * nothing to do: every one of them is waiting on the EE, on a field, or on
- * the mixer consuming audio, and none of those arrive.  Events are still
- * pumped while held, which is what notices the window coming back. */
+ * Pause holds the game between two ticks -- the app loop simply does not run
+ * the next one; see MioPan_RendererHoldInBackground() -- and stops the host
+ * clocks with it (the V-blank thread, the IOP's sound timer and the audio
+ * device; see MioPan_PacingSetHostHold()).  The IOP threads stay alive and
+ * simply find nothing to do: every one of them is waiting on the EE, on a
+ * field, or on the mixer consuming audio, and none of those arrive.  SDL keeps
+ * pumping events between the skipped ticks, which is what notices the window
+ * coming back. */
 void MioPan_RendererSetMuteInBackground(int enable);
 int  MioPan_RendererGetMuteInBackground(void);
 void MioPan_RendererSetPauseInBackground(int enable);
 int  MioPan_RendererGetPauseInBackground(void);
+
+/* Asked by the app loop before every tick (SDL_AppIterate, main.c): non-zero
+ * means the window is in the background with pause on, and the tick is to be
+ * skipped.  Entering and leaving the hold happen here, and a held call sleeps a
+ * moment first so a paused game does not spin a core. */
+int  MioPan_RendererHoldInBackground(void);
+
+/* One window event, as SDL delivers it to SDL_AppEvent (main.c): the overlay,
+ * the input layer, Alt+Enter, quitting, display and window-size changes.  SDL
+ * dispatches the queue between ticks -- and, while Windows holds the thread in
+ * a window drag's modal loop, from inside that loop -- so nothing in the game's
+ * frame pumps or polls the queue itself. */
+union SDL_Event;
+void MioPan_RendererProcessEvent(const union SDL_Event *event);
 
 /* Display aspect ratio, decoupled from the window.
  *

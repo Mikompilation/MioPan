@@ -2200,7 +2200,7 @@ bool g_mute_in_background = true;
 bool g_pause_in_background;
 bool g_in_background;
 bool g_background_muted;
-/* Inside HoldWhileInBackground()'s loop.  See PumpEvents(). */
+/* Ticks are being skipped for the background pause.  See ProcessEvent(). */
 bool g_holding_in_background;
 /* Chosen at startup and never changed: whether the pipelines were built
  * against the 10-bit scene target HDR wants. */
@@ -3745,86 +3745,87 @@ void UpdateBackgroundState()
     }
 }
 
-void PumpEvents()
+/* One event, as SDL hands it to SDL_AppEvent (see
+ * MioPan_RendererProcessEvent()). */
+void ProcessEvent(const SDL_Event &event)
 {
-    SDL_Event event;
-
-    while (SDL_PollEvent(&event))
+    /* While the game is held in the background no ImGui frame runs to drain
+     * its input queue, and a cursor crossing the window -- on a second
+     * monitor, say -- would add to it for as long as the pause lasts.  Motion
+     * is the one event worth nothing by then: the next one after the resume
+     * says where the mouse is. */
+    if (!g_holding_in_background || event.type != SDL_EVENT_MOUSE_MOTION)
     {
-        /* While the game is held in the background no ImGui frame runs to
-         * drain its input queue, and a cursor crossing the window -- on a
-         * second monitor, say -- would add to it for as long as the pause
-         * lasts.  Motion is the one event worth nothing by then: the next
-         * one after the resume says where the mouse is. */
-        if (!g_holding_in_background || event.type != SDL_EVENT_MOUSE_MOTION)
-        {
-            MioPanUi::ProcessEvent(&event);
-        }
-
-        /* Mouse buttons, the wheel and finder mouse look.  Every event, not
-         * just the mouse ones: focus loss is what lets go of held buttons. */
-        MioPan_InputProcessEvent(&event);
-
-        if (event.type == SDL_EVENT_QUIT)
-        {
-            std::exit(0);
-        }
-
-        /* A pad plugged in or pulled out.  The input layer picks the device by
-         * GUID, so it has to re-run that choice rather than keep whatever was
-         * open -- and a hotplug handled here lands the same frame instead of
-         * waiting for the next poll to notice. */
-        if (event.type == SDL_EVENT_GAMEPAD_ADDED ||
-            event.type == SDL_EVENT_GAMEPAD_REMOVED)
-        {
-            MioPan_InputRefreshDevices();
-        }
-
-        /* Alt+Enter, the platform convention.  Not gated on ImGui's keyboard
-         * capture: it is a window-manager action rather than input the game or
-         * the overlay competes for, and `repeat` is what stops a held Return
-         * flipping the mode every frame. */
-        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-            (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) &&
-            (event.key.mod & SDL_KMOD_ALT) != 0)
-        {
-            MioPan_RendererToggleFullscreen();
-        }
-
-        /* The display's HDR state moved -- the window was dragged to another
-         * monitor, or the player turned HDR on or off in the OS.  Re-reading
-         * here rather than polling is what lets AUTO follow it, and what keeps
-         * an auto paper white pinned to the OS's current SDR level. */
-        if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED)
-        {
-            RefreshDisplayHdrInfo();
-        }
-
-        /* Latch the windowed size so the config can persist it.  Gated on the
-         * window not being fullscreen, because going borderless also produces a
-         * resize event -- and storing the desktop size from it is exactly how a
-         * window forgets the shape it should come back to.  Screen coordinates,
-         * not pixels: this is fed back to SDL_CreateWindow, which takes them. */
-        if (event.type == SDL_EVENT_WINDOW_RESIZED &&
-            g_window_mode == MIOPAN_WINDOW_MODE_WINDOWED && g_window != nullptr)
-        {
-            int width = 0;
-            int height = 0;
-            if (SDL_GetWindowSize(g_window, &width, &height) &&
-                width > 0 && height > 0)
-            {
-                g_windowed_width = width;
-                g_windowed_height = height;
-            }
-        }
+        MioPanUi::ProcessEvent(&event);
     }
 
+    /* Mouse buttons, the wheel and finder mouse look.  Every event, not just
+     * the mouse ones: focus loss is what lets go of held buttons. */
+    MioPan_InputProcessEvent(&event);
+
+    if (event.type == SDL_EVENT_QUIT)
+    {
+        std::exit(0);
+    }
+
+    /* A pad plugged in or pulled out.  The input layer picks the device by
+     * GUID, so it has to re-run that choice rather than keep whatever was open
+     * -- and a hotplug handled here lands the same frame instead of waiting for
+     * the next poll to notice. */
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED ||
+        event.type == SDL_EVENT_GAMEPAD_REMOVED)
+    {
+        MioPan_InputRefreshDevices();
+    }
+
+    /* Alt+Enter, the platform convention.  Not gated on ImGui's keyboard
+     * capture: it is a window-manager action rather than input the game or the
+     * overlay competes for, and `repeat` is what stops a held Return flipping
+     * the mode every frame. */
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+        (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) &&
+        (event.key.mod & SDL_KMOD_ALT) != 0)
+    {
+        MioPan_RendererToggleFullscreen();
+    }
+
+    /* The display's HDR state moved -- the window was dragged to another
+     * monitor, or the player turned HDR on or off in the OS.  Re-reading here
+     * rather than polling is what lets AUTO follow it, and what keeps an auto
+     * paper white pinned to the OS's current SDR level. */
+    if (event.type == SDL_EVENT_WINDOW_HDR_STATE_CHANGED)
+    {
+        RefreshDisplayHdrInfo();
+    }
+
+    /* Latch the windowed size so the config can persist it.  Gated on the
+     * window not being fullscreen, because going borderless also produces a
+     * resize event -- and storing the desktop size from it is exactly how a
+     * window forgets the shape it should come back to.  Screen coordinates, not
+     * pixels: this is fed back to SDL_CreateWindow, which takes them. */
+    if (event.type == SDL_EVENT_WINDOW_RESIZED &&
+        g_window_mode == MIOPAN_WINDOW_MODE_WINDOWED && g_window != nullptr)
+    {
+        int width = 0;
+        int height = 0;
+        if (SDL_GetWindowSize(g_window, &width, &height) &&
+            width > 0 && height > 0)
+        {
+            g_windowed_width = width;
+            g_windowed_height = height;
+        }
+    }
+}
+
+/* What follows the batch of events SDL dispatched ahead of this tick. */
+void FinishEventBatch()
+{
     UpdateBackgroundState();
 
     /* After the batch, so the capture decision already reflects an F1 or a
-     * focus change this pump delivered.  Here rather than in the pad update
-     * because this is where the window is, and because an overlay that opens
-     * should get its cursor back on this frame, not on the next game tick. */
+     * focus change it delivered.  Here rather than in the pad update because
+     * this is where the window is, and because an overlay that opens should get
+     * its cursor back on this frame, not on the next game tick. */
     MioPan_InputUpdateMouse(g_window);
 }
 
@@ -3837,15 +3838,14 @@ void RestartFrameStatistics()
 }
 
 /*
- * The background pause: hold the game thread here, between two frames, until
- * the window comes back.
+ * The background pause: the app loop skips ticks until the window comes back
+ * (MioPan_RendererHoldInBackground()).
  *
- * Why here, and not by stopping the V-blank thread and letting vfunc() wait:
- * this thread is the one that pumps the window's events, so a game parked in
+ * Why between ticks, and not by stopping the V-blank thread and letting vfunc()
+ * wait: events are pumped on this thread, between ticks, so a game parked in
  * vfunc()'s WaitSema() could never see the focus return -- the pause would be
- * permanent.  Holding at the end of MioPan_RendererEndFrame() is outside every
- * ROM function that could care: the frame has been presented, SendDMAMain()
- * has nothing left but InitGraph2dEFrame(), and the next thing the game does is
+ * permanent.  Between two ticks is also outside every ROM function that could
+ * care: the last frame has been presented and the next thing the game does is
  * start a new tick.  The V-blank thread is stopped as well, but as a clock
  * rather than as the hold -- see MioPan_PacingSetHostHold().
  *
@@ -3853,27 +3853,16 @@ void RestartFrameStatistics()
  * has no focus, and the first click on it ends the pause, so there is never a
  * moment where the menu could be used.  The screen keeps the last frame.
  */
-void HoldWhileInBackground()
+void EnterBackgroundHold()
 {
-    if (!g_pause_in_background || !g_in_background)
-    {
-        return;
-    }
-
     SDL_Log("MioPan: window in the background; game paused");
     MioPan_PacingSetHostHold(1);
     MioPan_VoiceSetOutputPaused(1);
     g_holding_in_background = true;
+}
 
-    while (g_pause_in_background && g_in_background)
-    {
-        /* Sleeps until there is an event to pump, but no longer than a tenth
-         * of a second, so a state change that arrives without one -- the
-         * window flags are what is tested -- is still noticed. */
-        SDL_WaitEventTimeout(nullptr, 100);
-        PumpEvents();
-    }
-
+void LeaveBackgroundHold()
+{
     g_holding_in_background = false;
     MioPan_VoiceSetOutputPaused(0);
     MioPan_PacingSetHostHold(0);
@@ -10877,6 +10866,44 @@ int MioPan_RendererGetPauseInBackground(void)
     return g_pause_in_background ? 1 : 0;
 }
 
+int MioPan_RendererHoldInBackground(void)
+{
+    /* The window flags as of the events SDL has just dispatched. */
+    UpdateBackgroundState();
+
+    const bool hold = g_pause_in_background && g_in_background;
+    if (hold && !g_holding_in_background)
+    {
+        EnterBackgroundHold();
+    }
+    else if (!hold && g_holding_in_background)
+    {
+        LeaveBackgroundHold();
+    }
+
+    if (!hold)
+    {
+        return 0;
+    }
+
+    /* SDL runs the app loop as fast as it is let, so a held tick has to take
+     * some time or the pause spins a core.  A sleep rather than waiting for an
+     * event, because waiting pumps -- and this is also reached from inside the
+     * modal loops Windows runs for the window (SDL ticks the app from those),
+     * where a nested pump would take the loop's own input.  One field's worth:
+     * the click that ends the pause is answered within a frame. */
+    SDL_Delay(16);
+    return 1;
+}
+
+void MioPan_RendererProcessEvent(const SDL_Event *event)
+{
+    if (event != nullptr)
+    {
+        ProcessEvent(*event);
+    }
+}
+
 void MioPan_RendererSetRenderResolution(int mode, float scale)
 {
     if (mode != MIOPAN_RENDER_RES_NATIVE_PS2 &&
@@ -11451,9 +11478,11 @@ void MioPan_RendererBeginFrame(void)
     }
 
     MioPan_ProfilerBeginFrame();
-    PumpEvents();
-    /* After PumpEvents, so an HDR state change the pump just read is acted on
-     * this frame, and before anything acquires a swapchain texture -- the
+    /* SDL has already dispatched this tick's events (SDL_AppEvent, main.c);
+     * nothing here polls for more. */
+    FinishEventBatch();
+    /* After the events, so an HDR state change they carried is acted on this
+     * frame, and before anything acquires a swapchain texture -- the
      * composition cannot be re-negotiated with one in flight. */
     ApplyHdrComposition();
     /* Same constraint, same place: a vsync change rebuilds the swapchain. */
@@ -11542,7 +11571,6 @@ void MioPan_RendererEndFrame(void)
     /* A malformed decoder path must not leave an unpublished vertex tail in
      * the frame stream.  Normal mesh scopes always commit before this point. */
     AbortActiveMeshStream();
-    PumpEvents();
     MioPanUi::Draw();
     MioPanUi::EndFrame();
     presented = false;
@@ -11593,10 +11621,6 @@ void MioPan_RendererEndFrame(void)
     MioPan_ProfilerEndFrame();
     UpdatePerformanceStats(presented);
     MioPan_GsResetFrameMetrics();
-
-    /* Last, so the frame the player comes back to is the one already on
-     * screen and every per-frame book above has been closed. */
-    HoldWhileInBackground();
 }
 
 /*
