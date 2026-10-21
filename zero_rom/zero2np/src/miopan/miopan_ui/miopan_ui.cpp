@@ -46,6 +46,16 @@ bool g_summary_fps_only;
 bool g_show_performance_graphs;
 bool g_show_controls;
 bool g_show_data_folder;
+/* Who has the mouse.  The bar is up by default, so it being visible cannot be
+ * what takes the mouse away from finder aiming -- F1 pressed *while aiming* is:
+ * it claims the cursor for the overlay (showing the bar if it was hidden) and
+ * a second F1 hands it back.  The claim lapses when the finder comes down, so
+ * the next time it is raised the mouse aims again.  `busy` is the overlay
+ * needing the mouse on its own account: a menu or a settings window open. */
+bool g_mouse_claimed;
+bool g_bar_shown_for_claim;
+bool g_ui_mouse_busy;
+bool g_pointer_over_ui;
 bool g_pause_performance_history;
 bool g_follow_performance_history = true;
 MioPanUi::PerformanceStats g_performance_stats{};
@@ -1307,6 +1317,58 @@ void PersistSettingsIfChanged()
 }
 
 /* ---------------------------------------------------------------------------
+ *  The mouse, between the overlay and the game.
+ *
+ *  miopan_input decides when the cursor is captured for finder aiming and
+ *  whether a click or a wheel notch reaches the game; this is the overlay's
+ *  half of that conversation.
+ * ------------------------------------------------------------------------ */
+
+void ReportUiMouse()
+{
+    MioPan_InputSetUiMouse(g_mouse_claimed || g_ui_mouse_busy,
+                           g_pointer_over_ui);
+}
+
+/* Once per UI frame, after NewFrame() has settled hover and capture. */
+void UpdateUiMouse()
+{
+    const ImGuiIO &io = ImGui::GetIO();
+
+    /* The finder came down while F1 held the mouse.  The claim was for that
+     * stretch of aiming; the next one should capture again by itself.  The bar
+     * is left as it is -- the player may still be using it. */
+    if (g_mouse_claimed && !MioPan_InputMouseLookRequested())
+    {
+        g_mouse_claimed = false;
+        g_bar_shown_for_claim = false;
+    }
+
+    /* A menu dropped from the bar, or a window that is nothing but settings to
+     * click.  The profiler's windows are left out: they are read rather than
+     * used, and leaving the graphs up must not cost finder aiming. */
+    g_ui_mouse_busy =
+        g_show_controls || g_show_data_folder || io.WantTextInput ||
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+
+    /* Hover means nothing while captured -- BeginFrame() has the overlay
+     * ignoring the mouse then -- so this only ever describes a free cursor. */
+    g_pointer_over_ui = (io.ConfigFlags & ImGuiConfigFlags_NoMouse) == 0 &&
+                        io.WantCaptureMouse;
+
+    ReportUiMouse();
+
+    /* A cursor left sitting over the game is hidden until the mouse moves.
+     * Through ImGui rather than SDL_HideCursor(), because the SDL backend
+     * re-shows the cursor every frame for whatever shape ImGui asks for. */
+    if (!g_mouse_claimed && !g_ui_mouse_busy && !g_pointer_over_ui &&
+        MioPan_InputCursorIdle())
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    }
+}
+
+/* ---------------------------------------------------------------------------
  *  Controls -- rebinding.
  *
  *  The 16 PS2 buttons and 4 stick axes are the whole vocabulary the game reads
@@ -1448,6 +1510,48 @@ bool HandleCaptureEvent(const SDL_Event *event)
         src.dir = value < 0 ? -1 : 1;
         src.threshold = 8000;
     }
+    else if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+             event->button.which != SDL_TOUCH_MOUSEID)
+    {
+        /* The left button binds only when clicked away from the overlay.  On
+         * it, a left click is still a click -- "press..." is how a capture is
+         * cancelled by mouse, and taking that away would leave the cell
+         * impossible to back out of without the keyboard. */
+        if (event->button.button == SDL_BUTTON_LEFT &&
+            ImGui::GetIO().WantCaptureMouse)
+        {
+            return false;
+        }
+        src.kind = MIOPAN_SRC_MOUSE_BUTTON;
+        src.code = (int)event->button.button;
+    }
+    else if (event->type == SDL_EVENT_MOUSE_WHEEL &&
+             event->wheel.which != SDL_TOUCH_MOUSEID)
+    {
+        /* Half a notch, so a touchpad's drift does not bind itself; and the
+         * finger's direction rather than the content's, as miopan_input reads
+         * it. */
+        float x = event->wheel.x;
+        float y = event->wheel.y;
+        if (event->wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+        {
+            x = -x;
+            y = -y;
+        }
+        if (std::fabs(y) >= std::fabs(x) && std::fabs(y) >= 0.5f)
+        {
+            src.code = y > 0.0f ? MIOPAN_WHEEL_UP : MIOPAN_WHEEL_DOWN;
+        }
+        else if (std::fabs(x) >= 0.5f)
+        {
+            src.code = x > 0.0f ? MIOPAN_WHEEL_RIGHT : MIOPAN_WHEEL_LEFT;
+        }
+        else
+        {
+            return false;
+        }
+        src.kind = MIOPAN_SRC_MOUSE_WHEEL;
+    }
     else
     {
         return false;
@@ -1554,6 +1658,67 @@ void DrawCaptureCell(const char *id, const MioPan_InputSource &src, bool waiting
     ImGui::PopID();
 }
 
+/* Finder mouse look.  Each control writes straight through to miopan_input,
+ * which owns the values, and arms the save itself for the same reason a
+ * rebinding does. */
+void DrawMouseSettings()
+{
+    bool look = MioPan_InputGetMouseLook() != 0;
+    if (ImGui::Checkbox("Aim the viewfinder with the mouse", &look))
+    {
+        MioPan_InputSetMouseLook(look ? 1 : 0);
+        MarkSettingsDirty();
+    }
+
+    ImGui::BeginDisabled(!look);
+    float sensitivity = MioPan_InputGetMouseSensitivity();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderFloat("Sensitivity", &sensitivity,
+                           MIOPAN_MOUSE_SENSITIVITY_MIN,
+                           MIOPAN_MOUSE_SENSITIVITY_MAX, "%.2fx",
+                           ImGuiSliderFlags_Logarithmic))
+    {
+        MioPan_InputSetMouseSensitivity(sensitivity);
+        MarkSettingsDirty();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%.3f deg per count",
+                        (double)(MioPan_InputGetMouseSensitivity() *
+                                 MIOPAN_MOUSE_LOOK_DEG_PER_COUNT));
+
+    bool invert_x = MioPan_InputGetMouseInvertX() != 0;
+    if (ImGui::Checkbox("Invert X", &invert_x))
+    {
+        MioPan_InputSetMouseInvertX(invert_x ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    ImGui::SameLine();
+    bool invert_y = MioPan_InputGetMouseInvertY() != 0;
+    if (ImGui::Checkbox("Invert Y", &invert_y))
+    {
+        MioPan_InputSetMouseInvertY(invert_y ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(MioPan_InputMouseSettingsAreDefault() != 0);
+    if (ImGui::Button("Reset mouse"))
+    {
+        MioPan_InputResetMouseSettings();
+        MarkSettingsDirty();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped(
+        "The cursor is captured while the Camera Obscura is raised and let go "
+        "when it comes down. F1 while aiming hands it to this overlay; F1 again "
+        "hands it back.");
+    ImGui::PopStyleColor();
+}
+
 void DrawControlsWindow()
 {
     if (!g_show_controls)
@@ -1572,10 +1737,14 @@ void DrawControlsWindow()
         ImGui::TextWrapped(
             "These 16 buttons and 4 stick axes are what the whole game reads "
             "through, so rebinding one here moves it everywhere at once. Click "
-            "a binding, then press the key, gamepad button or trigger you want.");
+            "a binding, then press the key, mouse button, wheel, gamepad button "
+            "or trigger you want.");
         ImGui::TextDisabled(
             "Esc cancels   Backspace clears   up to %d sources per button",
             MIOPAN_INPUT_MAX_SOURCES);
+        ImGui::TextDisabled(
+            "Mouse buttons and the wheel bind anywhere; a left click only "
+            "outside this window");
 
         ImGui::Separator();
 
@@ -1672,6 +1841,8 @@ void DrawControlsWindow()
             }
         }
 
+        ImGui::Separator();
+        DrawMouseSettings();
         ImGui::Separator();
 
         constexpr ImGuiTableFlags kTableFlags = ImGuiTableFlags_BordersInnerV |
@@ -2071,8 +2242,15 @@ void DrawMainMenuBar()
     }
     if (ImGui::BeginMenu("Controls"))
     {
-        ImGui::MenuItem("Rebind keyboard and gamepad...", nullptr,
+        ImGui::MenuItem("Rebind keyboard, mouse and gamepad...", nullptr,
                         &g_show_controls);
+        bool mouse_look = MioPan_InputGetMouseLook() != 0;
+        if (ImGui::MenuItem("Aim the viewfinder with the mouse", nullptr,
+                            &mouse_look))
+        {
+            MioPan_InputSetMouseLook(mouse_look ? 1 : 0);
+            MarkSettingsDirty();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Reset all bindings", nullptr, false,
                             MioPan_InputBindingsAreDefault() == 0))
@@ -3077,6 +3255,11 @@ void Shutdown()
     g_show_performance_graphs = false;
     g_show_controls = false;
     g_show_data_folder = false;
+    g_mouse_claimed = false;
+    g_bar_shown_for_claim = false;
+    g_ui_mouse_busy = false;
+    g_pointer_over_ui = false;
+    MioPan_InputSetUiMouse(0, 0);
     CancelCapture();
     g_pause_performance_history = false;
     g_follow_performance_history = true;
@@ -3102,7 +3285,32 @@ void ProcessEvent(const SDL_Event *event)
         if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat &&
             event->key.scancode == SDL_SCANCODE_F1)
         {
-            g_show_main_menu_bar = !g_show_main_menu_bar;
+            if (g_mouse_claimed)
+            {
+                /* Back to aiming, and the bar back to how it was. */
+                g_mouse_claimed = false;
+                if (g_bar_shown_for_claim)
+                {
+                    g_show_main_menu_bar = false;
+                }
+                g_bar_shown_for_claim = false;
+            }
+            else if (MioPan_InputMouseCaptured())
+            {
+                /* Aiming: give the overlay the cursor rather than hiding the
+                 * bar, which is what a plain toggle would do from here. */
+                g_mouse_claimed = true;
+                g_bar_shown_for_claim = !g_show_main_menu_bar;
+                g_show_main_menu_bar = true;
+            }
+            else
+            {
+                g_show_main_menu_bar = !g_show_main_menu_bar;
+            }
+
+            /* Now rather than at the next Draw(), so the pump this event came
+             * in on already releases or recaptures the cursor. */
+            ReportUiMouse();
         }
     }
 }
@@ -3122,6 +3330,21 @@ void BeginFrame()
 
     ImGui::SetCurrentContext(g_context);
     UpdateUiScale();
+
+    /* While the cursor is captured it is not really anywhere -- relative mode
+     * still reports a position, and it wanders -- so the overlay must not
+     * hover or click with it.  A shutter on the left button would otherwise
+     * open whatever menu sat under that phantom position. */
+    ImGuiIO &io = ImGui::GetIO();
+    if (MioPan_InputMouseCaptured())
+    {
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+    }
+    else
+    {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+    }
+
     ImGui_ImplSDLGPU3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     RemapGamepadWindowingTrigger();
@@ -3140,6 +3363,7 @@ void Draw()
     /* Ahead of the menu, so a change made this frame is compared against the
      * state the menu is about to redraw rather than against itself. */
     PersistSettingsIfChanged();
+    UpdateUiMouse();
 
     DrawMainMenuBar();
     if (!g_show_performance_summary)

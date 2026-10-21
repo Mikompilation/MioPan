@@ -21,8 +21,9 @@ extern "C" {
 // GetPadAnalogRpt() — resolves through them, so rebinding what a physical
 // control *means* is done here and nothing upstream has to change.  This header
 // deliberately names no SDL type: the codes below are SDL scancode / gamepad
-// button / gamepad axis values, but keeping them plain ints is what lets
-// sdk/libpad.cpp include this without pulling SDL in.
+// button / gamepad axis / mouse button values, but keeping them plain ints is
+// what lets sdk/libpad.cpp include this without pulling SDL in.  (The two
+// event-loop hooks at the bottom take SDL pointers, forward-declared only.)
 
 #define MIOPAN_PAD_BUTTON_COUNT 16
 #define MIOPAN_PAD_STICK_COUNT  4
@@ -33,13 +34,28 @@ extern "C" {
 // the list was made data.
 #define MIOPAN_INPUT_MAX_SOURCES 4
 
-// What kind of physical control a binding source names.
+// What kind of physical control a binding source names.  New kinds go on the
+// end: the values are not written to the settings file, but the rebinding UI
+// and the defaults compare them.
 enum
 {
     MIOPAN_SRC_NONE = 0,
-    MIOPAN_SRC_KEY,        // `code` is an SDL scancode
-    MIOPAN_SRC_PAD_BUTTON, // `code` is an SDL_GamepadButton
-    MIOPAN_SRC_PAD_AXIS    // `code` is an SDL_GamepadAxis; see dir/threshold
+    MIOPAN_SRC_KEY,          // `code` is an SDL scancode
+    MIOPAN_SRC_PAD_BUTTON,   // `code` is an SDL_GamepadButton
+    MIOPAN_SRC_PAD_AXIS,     // `code` is an SDL_GamepadAxis; see dir/threshold
+    MIOPAN_SRC_MOUSE_BUTTON, // `code` is an SDL mouse button, 1 (left) .. 32
+    MIOPAN_SRC_MOUSE_WHEEL   // `code` is one of MIOPAN_WHEEL_*
+};
+
+// Wheel directions, as MIOPAN_SRC_MOUSE_WHEEL codes.  A wheel has no "held":
+// each notch reads as one press -- held for one pad update, then released for
+// one -- so the game sees every notch as its own edge.
+enum
+{
+    MIOPAN_WHEEL_UP = 1,
+    MIOPAN_WHEEL_DOWN,
+    MIOPAN_WHEEL_LEFT,
+    MIOPAN_WHEEL_RIGHT
 };
 
 typedef struct MioPan_InputSource
@@ -79,6 +95,9 @@ void MioPan_InputShutdown(void);
 // Pump host events, (re)open the first connected gamepad if needed, and advance
 // the digital stick ramps by one step.  Call once per poll before reading
 // button/stick state — the ramp advances per call, not per wall-clock tick.
+// The same goes for the mouse: this is where the motion accumulated since the
+// last call becomes this update's look delta, and where a wheel notch is
+// turned into its one-update press.
 void MioPan_InputUpdate(void);
 
 // 1 if logical button `index` (0..15) is currently held by any of its sources.
@@ -167,12 +186,88 @@ int MioPan_InputBindingsAreDefault(void);
 // Text form, for the settings file and the rebinding UI.  The grammar is
 // "key:<scancode name>", "pad:<button name>" and "axis+:<axis name>" /
 // "axis-:<axis name>", using SDL's own names so the file stays hand-editable;
-// a non-default threshold is appended as "@<n>".  ToString returns the number
-// of characters written (0 on failure); FromString returns non-zero on a
-// recognised source and leaves `out` untouched otherwise, so an unknown name in
-// a settings file is skipped rather than clearing the binding.
+// a non-default threshold is appended as "@<n>".  The mouse adds
+// "mouse:left|middle|right|x1|x2" (or "mouse:<n>" for a button past the fifth)
+// and "wheel:up|down|left|right".  ToString returns the number of characters
+// written (0 on failure); FromString returns non-zero on a recognised source
+// and leaves `out` untouched otherwise, so an unknown name in a settings file
+// is skipped rather than clearing the binding.
 int MioPan_InputSourceToString(const MioPan_InputSource *src, char *buf, int len);
 int MioPan_InputSourceFromString(const char *text, MioPan_InputSource *out);
+
+// ---------------------------------------------------------------------------
+//  Mouse.
+//
+//  Two jobs.  Mouse buttons and the wheel are binding sources like any key, and
+//  while the Camera Obscura's viewfinder is up the mouse aims it.
+//
+//  Aiming does not go through the stick.  The finder turns at one of three
+//  fixed rates the moment the stick passes a third of its travel
+//  (finder_camera.c, SetFinderRot), so a mouse folded into pad[0].analog could
+//  only ever pick a speed, never a distance.  Instead the game asks for mouse
+//  look each tick it is aiming and adds the motion to its own yaw and pitch.
+//
+//  The motion is accumulated from SDL's events between pad updates and handed
+//  over once per update, so how many frames are presented in between -- one or
+//  four -- does not change how far a given hand movement turns the camera.
+//
+//  The cursor is captured (SDL relative mode) only while the game is asking
+//  and the overlay does not want the mouse, and released on the first update
+//  that does not ask.  The overlay always wins: while it is using the mouse,
+//  mouse look stops and mouse buttons and the wheel stop reaching the game.
+// ---------------------------------------------------------------------------
+
+union SDL_Event;
+struct SDL_Window;
+
+// Feed every polled event through.  Only mouse and focus events are looked at.
+void MioPan_InputProcessEvent(const union SDL_Event *event);
+
+// Settle whether the cursor should be captured.  Call after each batch of
+// events has been polled; `window` is the window to capture it to.
+void MioPan_InputUpdateMouse(struct SDL_Window *window);
+
+// The overlay's say, reported once per UI frame.  `ui_wants_mouse` is the
+// overlay holding the mouse (a menu or tool window open, F1 pressed while
+// aiming); `pointer_over_ui` is the free cursor resting on an overlay item.
+void MioPan_InputSetUiMouse(int ui_wants_mouse, int pointer_over_ui);
+
+// 1 while the cursor is captured for mouse look.
+int MioPan_InputMouseCaptured(void);
+
+// 1 while the game is asking for mouse look, captured or not.
+int MioPan_InputMouseLookRequested(void);
+
+// 1 when the free cursor has not moved for a while and may be hidden.  Never
+// while captured -- relative mode hides it already.
+int MioPan_InputCursorIdle(void);
+
+// Game side.  RequestMouseLook says "the player is aiming this tick" and must
+// be repeated every tick the finder is up; the capture lapses one update after
+// the requests stop.  MouseLook answers this tick's motion in radians -- yaw
+// positive to the right, pitch positive upward, sensitivity and invert already
+// applied -- and returns non-zero when there is any.
+void MioPan_InputRequestMouseLook(void);
+int  MioPan_InputMouseLook(float *yaw, float *pitch);
+
+// Settings, persisted in [input].  Sensitivity is a multiplier on
+// MIOPAN_MOUSE_LOOK_DEG_PER_COUNT and is clamped to the range below.
+#define MIOPAN_MOUSE_LOOK_DEG_PER_COUNT 0.05f
+#define MIOPAN_MOUSE_SENSITIVITY_MIN    0.05f
+#define MIOPAN_MOUSE_SENSITIVITY_MAX    10.0f
+
+int   MioPan_InputGetMouseLook(void);
+void  MioPan_InputSetMouseLook(int enabled);
+float MioPan_InputGetMouseSensitivity(void);
+void  MioPan_InputSetMouseSensitivity(float sensitivity);
+int   MioPan_InputGetMouseInvertX(void);
+void  MioPan_InputSetMouseInvertX(int invert);
+int   MioPan_InputGetMouseInvertY(void);
+void  MioPan_InputSetMouseInvertY(int invert);
+
+// 1 if the mouse settings are all at their defaults.
+int MioPan_InputMouseSettingsAreDefault(void);
+void MioPan_InputResetMouseSettings(void);
 
 #ifdef __cplusplus
 }
