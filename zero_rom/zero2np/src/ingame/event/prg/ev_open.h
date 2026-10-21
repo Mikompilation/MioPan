@@ -49,4 +49,12 @@ void SetSave_EvCtrlCenter(MC_SAVE_DATA *data);
 void EvCtrlCenterSavePtrFixup(int to_host);
 void EvDbgDispCenter(void);
 
+/* PORT: read access to ev_cond_wrk[] for the overlay's event browser
+ * (miopan/miopan_ui/miopan_event_jump.cpp), which walks condition streams
+ * itself to describe and fast-forward events.  A label outside the table
+ * answers 0 / nullptr -- including EV_COND_OR and EV_COND_END, which the
+ * caller handles. */
+int         EvCondGetSize(int cond_label);
+const char *EvCondGetName(int cond_label);
+
 #endif /* _INGAME_EVENT_PRG_EV_OPEN_H */

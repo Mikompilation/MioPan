@@ -282,4 +282,23 @@ void SetSave_EvSavePosStream(MC_SAVE_DATA *data);
 void SetSave_EvSaveEffDither(MC_SAVE_DATA *data);
 void SetSave_EvSaveScreenEffect(MC_SAVE_DATA *data);
 
+/* --------------------------------------------------------------------------
+ *  PORT: read access to ev_exe_wrk[] for the overlay's event browser
+ *  (miopan/miopan_ui/miopan_event_jump.cpp), which walks event programs to
+ *  say what an event does.  An opcode outside the table -- EV_END included --
+ *  answers 0 / nullptr.
+ * ------------------------------------------------------------------------ */
+
+int         EvMacroGetSize(int com);
+const char *EvMacroGetName(int com);
+
+/* PORT: hand back every lock a cutscene takes, the way its own tail would --
+ * PLYR_PAD(1), PHOTO_UNLOCK, MENU_UNLOCK, PAUSE_UNLOCK, EV_CAM(0).  For the
+ * same browser's event jump, which skips events: the one it skips can be the
+ * one that returns a lock.  Chapter 1's own init takes the pad with
+ * PLYR_PAD(0) and only the opening movie's event gives it back, so skipping
+ * the opening leaves the game in event mode for good.  Only safe once no
+ * event program is running -- nothing is holding these on purpose then. */
+void        EvMacroReleaseLocks(void);
+
 #endif /* _INGAME_EVENT_PRG_EV_MACRO_H */

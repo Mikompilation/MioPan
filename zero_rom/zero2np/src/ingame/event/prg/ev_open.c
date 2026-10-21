@@ -1441,3 +1441,22 @@ void EvDbgDispCenter(void)                                              /* 2536 
 
     printf("***** Event Control Center Regist Num [%d / %d] *****\n", regist_num, EV_CTRL_CENTER_MAX); /* 2556 */
 }
+
+/* PORT ADDITION -- no ROM counterpart.  See ev_open.h. */
+int EvCondGetSize(int cond_label)
+{
+    if ((u_int)cond_label >= EV_COND_MAX) {
+        return 0;
+    }
+
+    return ev_cond_wrk[cond_label].cond_size;
+}
+
+const char *EvCondGetName(int cond_label)
+{
+    if ((u_int)cond_label >= EV_COND_MAX) {
+        return nullptr;
+    }
+
+    return ev_cond_wrk[cond_label].label_name;
+}

@@ -5324,3 +5324,49 @@ void EvDbg_EventGhostPrint(void)
         }
     }
 }                                                                       /* 8690 */
+
+/* PORT ADDITION -- no ROM counterpart.  See ev_macro.h. */
+void EvMacroReleaseLocks(void)
+{
+    /* PLYR_PAD(1) once per PLYR_PAD(0) still outstanding -- EvPlyrPad()'s
+     * own pair of writes. */
+    while (evPlyrLockCnt > 0) {
+        IngameEventMsgDispReq(0);
+        evPlyrLockCnt--;
+    }
+
+    /* Anything else still holding event mode open.  300 is the counter's own
+     * warning limit (IngameEventMsgDispReq). */
+    for (int i = 0; i < 300 && IngameDecideNextPhase() == GID_EVENTMSG_DISP; i++) {
+        IngameEventMsgDispReq(0);
+    }
+
+    while (plyr_wrk.finder_lock_cnt > 0) {      /* PHOTO_UNLOCK */
+        PlayerFinderUnlock();
+    }
+    while (ingame_wrk.MenuIsLocked() > 0) {     /* MENU_UNLOCK  */
+        ingame_wrk.MenuUnlock();
+    }
+    while (ingame_wrk.PauseIsLocked() > 0) {    /* PAUSE_UNLOCK */
+        ingame_wrk.PauseUnlock();
+    }
+    EventCameraCut();                           /* EV_CAM(0)    */
+}
+
+int EvMacroGetSize(int com)
+{
+    if ((u_int)com >= EV_MACRO_LABEL_MAX) {
+        return 0;
+    }
+
+    return ev_exe_wrk[com].ev_dat_size;
+}
+
+const char *EvMacroGetName(int com)
+{
+    if ((u_int)com >= EV_MACRO_LABEL_MAX) {
+        return nullptr;
+    }
+
+    return ev_exe_wrk[com].label_name;
+}

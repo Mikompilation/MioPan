@@ -1,5 +1,6 @@
 #include "miopan_ui.h"
 #include "miopan_ui_assists.h"
+#include "miopan_ui_events.h"
 #include "../os/miopan_pacing.h"
 #include "../rendering/miopan_renderer.h"
 #include "../miopan_config.h"
@@ -2650,6 +2651,7 @@ void DrawDebugMenu()
     ImGui::Separator();
 
     ImGui::TextDisabled("Developer");
+    MioPanUi::DrawEventsMenuItem();
     MioPanUi::DrawDeveloperItems();
 
     ImGui::EndMenu();
@@ -3473,6 +3475,8 @@ void Draw()
     UpdateUiMouse();
 
     DrawMainMenuBar();
+    /* Every frame, open or not: it also steps the event-jump driver. */
+    MioPanUi::DrawEventsWindow();
     if (!g_show_performance_summary)
     {
         DrawProfilerGraphs();
