@@ -726,6 +726,12 @@ void MioPan_RendererDrawTexturedTriangles2D(const sceGsTex0 *tex0,
  * the SetDrawEnv() that supplies the matching TEST and ZBUF. */
 void MioPan_RendererSetGs2dDepth(unsigned int gs_z);
 
+/* A still of the page on screen -- the last presented frame, whole window,
+ * before the host UI -- frozen under GS block `addr`, and drawn back over the
+ * whole frame by MioPan_RendererDrawCapturedScreen() at that point in the
+ * queue.  The host half of the pause screens' frame-buffer copies (see
+ * g2d_draw.c's LocalCopyLtoL()): it answers on the tick it is asked, because
+ * the renderer keeps the displayed page from every present. */
 void MioPan_RendererCaptureScreen(unsigned int addr);
 
 /* Read the last presented frame back into EE memory as PS2 PSMCT32 words

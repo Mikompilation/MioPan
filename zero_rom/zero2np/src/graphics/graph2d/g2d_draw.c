@@ -1219,14 +1219,23 @@ int LocalCopyLtoBGetSize(int type)
 // capture texture per GS block.  An effect that later samples that block as a
 // texture is served from the capture -- see MioPan_RendererCaptureGsBlock().
 //
-// Only the direction the effects actually use is bridged: frame buffer (or a
-// previous capture) into a scratch page.  A copy whose *destination* is a frame
-// buffer is a blit back onto the screen -- pause.c and photo.c do that -- and
-// is a different operation the renderer has its own path for
-// (MioPan_RendererDrawCapturedScreen); those are left alone.
+// The direction the effects use is frame buffer (or a previous capture) into a
+// scratch page.  The pause screens use the other one as well: a whole-page
+// copy of the *displayed* buffer into 0x2bc0 when they open, and a whole-page
+// copy of 0x2bc0 back into the buffer being drawn every paused frame.  That
+// pair goes to the renderer's still (MioPan_RendererCaptureScreen /
+// MioPan_RendererDrawCapturedScreen) rather than to a capture slot, because
+// the open runs before its tick has drawn anything: "the frame so far" is
+// empty there, and only the renderer has kept the page on screen.  photo.c's
+// frame buffer to frame buffer copies are left alone.
 
 // GS block addresses of the two 640x448 display buffers.
 #define G2D_IS_FRAMEBUFFER_BLOCK(a) ((a) == 0x0000 || (a) == 0x1180)
+
+// The one on screen this tick, which every pause screen copies from: the ROM
+// reaches it as ((count + 1) & 1) * 0x1180, the buffer that is not being drawn.
+#define G2D_DISPLAYED_FRAMEBUFFER_BLOCK() \
+    ((int)((((u_int)sys_wrk.count + 1U) & 1U) * 0x1180U))
 
 // Destination rect of a LocalCopyLtoB / LocalCopyBtoL "type", matching the
 // sceGsSetDefStoreImage / BITBLTBUF strips the two builders emit above.
@@ -1813,13 +1822,34 @@ void LocalCopyLtoL(int type, int addr1, int addr2)
     // effect stretches it back over the screen.
     if (G2D_IS_FRAMEBUFFER_BLOCK(addr1) && !G2D_IS_FRAMEBUFFER_BLOCK(addr2))
     {
-        MioPan_RendererCaptureGsBlock((unsigned int)addr2,
-                                      MIOPAN_GS_CAPTURE_LIVE,
-                                      scpp->dw, scpp->dh);
+        // A whole-page copy of the page on screen is a pause screen opening
+        // (pause.c, mission_pause.c): freeze the page into a still.  A capture
+        // slot here would copy the frame drawn so far, which this early in the
+        // tick is the clear colour -- and would declare a 640-wide slot at
+        // 0x2bc0 that then answers menu.c's backdrop sprite, which samples the
+        // same page at the same width.
+        if (type == 0 && addr1 == G2D_DISPLAYED_FRAMEBUFFER_BLOCK())
+        {
+            MioPan_RendererCaptureScreen((unsigned int)addr2);
+        }
+        else
+        {
+            MioPan_RendererCaptureGsBlock((unsigned int)addr2,
+                                          MIOPAN_GS_CAPTURE_LIVE,
+                                          scpp->dw, scpp->dh);
+        }
         // ...and record the same thing for the read-back path: the whole
         // frame, at this type's destination size.  That is what lets a later
         // LOCAL->HOST store of addr2 know it is holding a squashed screen.
         G2dRegisterScreenPage(addr2, 0, 0, 640, 448, scpp->dw, scpp->dh);
+    }
+    else if (type == 0 && !G2D_IS_FRAMEBUFFER_BLOCK(addr1) &&
+             G2D_IS_FRAMEBUFFER_BLOCK(addr2))
+    {
+        // The paused frame's background: the still put back, here in the
+        // queue so the menu draws over it.  A no-op unless addr1 holds one.
+        MioPan_RendererDrawCapturedScreen((unsigned int)addr1,
+                                          0x80, 0x80, 0x80, 0x80);
     }
 
     if (addr2 < 0)

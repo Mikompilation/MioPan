@@ -969,7 +969,32 @@ Uint32 g_pause_capture_width;
 Uint32 g_pause_capture_height;
 unsigned int g_pause_capture_addr;
 bool g_pause_capture_valid;
-bool g_pause_capture_pending;
+
+/*
+ * The displayed page -- the last presented frame, at full size, so a pause
+ * screen can freeze it.
+ *
+ * pause.c and mission_pause.c open by copying `(count + 1) & 1`, the page on
+ * screen, into the VRAM scratch at 0x2bc0, and every paused frame copies it
+ * back before the menu is drawn over it.  On the PS2 that page is the other
+ * half of the double buffer and is simply still there.  Here nothing of it
+ * survives the present: the copy runs from init_Story_Pause(), at the top of
+ * the next tick and before that tick has drawn anything, so a capture of "the
+ * frame so far" is the clear colour -- which is what the pause background was.
+ *
+ * So the finished scene is kept here on every presented frame, and
+ * MioPan_RendererCaptureScreen() takes the still by swapping this texture
+ * with g_pause_capture_texture rather than copying it.  Full size, not the
+ * screen mirror's 640x448: the still is drawn back over the whole window, wide
+ * ones included, at the resolution the game was running at.  That is one
+ * same-size blit per presented frame, and the reason this is not armed on
+ * demand is the screen mirror's -- by the time the game asks, the frame it
+ * wants has already been presented.
+ */
+SDL_GPUTexture *g_displayed_page_texture;
+Uint32 g_displayed_page_width;
+Uint32 g_displayed_page_height;
+bool g_displayed_page_valid;
 
 /*
  * The screen mirror -- the last presented frame, kept at the PS2's own
@@ -6117,23 +6142,30 @@ bool EnsureOutputTexture(Uint32 width, Uint32 height)
     return true;
 }
 
-bool EnsurePauseCaptureTexture(Uint32 width, Uint32 height)
+/*
+ * Nothing samples the texture in this slot: it is only ever a blit
+ * destination, and a still is drawn from g_pause_capture_texture, which this
+ * one becomes by swap.  So it can be reallocated here, at record time, without
+ * leaving a queued draw holding a released texture.
+ */
+bool EnsureDisplayedPageTexture(Uint32 width, Uint32 height)
 {
-    if (width == 0 || height == 0)
+    if (width == 0 || height == 0 ||
+        g_scene_format == SDL_GPU_TEXTUREFORMAT_INVALID)
     {
         return false;
     }
 
-    if (g_pause_capture_texture != nullptr &&
-        g_pause_capture_width == width && g_pause_capture_height == height)
+    if (g_displayed_page_texture != nullptr &&
+        g_displayed_page_width == width && g_displayed_page_height == height)
     {
         return true;
     }
 
-    if (g_pause_capture_texture != nullptr)
+    if (g_displayed_page_texture != nullptr)
     {
-        SDL_ReleaseGPUTexture(g_device, g_pause_capture_texture);
-        g_pause_capture_texture = nullptr;
+        SDL_ReleaseGPUTexture(g_device, g_displayed_page_texture);
+        g_displayed_page_texture = nullptr;
     }
 
     SDL_GPUTextureCreateInfo info{};
@@ -6147,17 +6179,17 @@ bool EnsurePauseCaptureTexture(Uint32 width, Uint32 height)
     info.num_levels = 1;
     info.sample_count = SDL_GPU_SAMPLECOUNT_1;
 
-    g_pause_capture_texture = SDL_CreateGPUTexture(g_device, &info);
-    if (g_pause_capture_texture == nullptr)
+    g_displayed_page_texture = SDL_CreateGPUTexture(g_device, &info);
+    if (g_displayed_page_texture == nullptr)
     {
-        LogSdlError("SDL_CreateGPUTexture(pause capture)");
-        g_pause_capture_width = 0;
-        g_pause_capture_height = 0;
+        LogSdlError("SDL_CreateGPUTexture(displayed page)");
+        g_displayed_page_width = 0;
+        g_displayed_page_height = 0;
         return false;
     }
 
-    g_pause_capture_width = width;
-    g_pause_capture_height = height;
+    g_displayed_page_width = width;
+    g_displayed_page_height = height;
     return true;
 }
 
@@ -6363,36 +6395,33 @@ bool RecordGsCapture(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *live,
     return true;
 }
 
-bool RecordPauseScreenCapture(SDL_GPUCommandBuffer *cmd,
-                              SDL_GPUTexture *source,
-                              Uint32 width, Uint32 height)
+/*
+ * Keep the displayed page: the finished frame, before the host UI pass, at the
+ * size it was rendered.  A blit rather than a texture copy because in the
+ * direct path `source` is the swapchain image itself, which the screen mirror
+ * below already blits from; at 1:1 with NEAREST it is the same bytes.
+ */
+bool RecordDisplayedPage(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *source,
+                         Uint32 width, Uint32 height)
 {
-    if (!g_pause_capture_pending)
-    {
-        return false;
-    }
-
-    g_pause_capture_pending = false;
-    g_pause_capture_valid = false;
+    g_displayed_page_valid = false;
     if (cmd == nullptr || source == nullptr ||
-        !EnsurePauseCaptureTexture(width, height))
+        !EnsureDisplayedPageTexture(width, height))
     {
         return false;
     }
 
-    SDL_GPUTextureLocation src{};
-    src.texture = source;
-    SDL_GPUTextureLocation dst{};
-    dst.texture = g_pause_capture_texture;
-
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
-    if (copy == nullptr)
-    {
-        LogSdlError("SDL_BeginGPUCopyPass(pause capture)");
-        return false;
-    }
-    SDL_CopyGPUTextureToTexture(copy, &src, &dst, width, height, 1, false);
-    SDL_EndGPUCopyPass(copy);
+    SDL_GPUBlitInfo blit{};
+    blit.source.texture = source;
+    blit.source.w = width;
+    blit.source.h = height;
+    blit.destination.texture = g_displayed_page_texture;
+    blit.destination.w = width;
+    blit.destination.h = height;
+    blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+    blit.filter = SDL_GPU_FILTER_NEAREST;
+    blit.cycle = false;
+    SDL_BlitGPUTexture(cmd, &blit);
     return true;
 }
 
@@ -10260,9 +10289,8 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
      * them, which is why they already sat in front of the UI pass. */
     if (!repeat)
     {
-        *capture_recorded = RecordPauseScreenCapture(cmd, scene_texture,
-                                                     render_width,
-                                                     render_height);
+        *capture_recorded = RecordDisplayedPage(cmd, scene_texture,
+                                                render_width, render_height);
         *mirror_recorded = RecordScreenMirror(cmd, scene_texture, render_width,
                                               render_height);
     }
@@ -10514,10 +10542,6 @@ bool PresentFrame(bool repeat, float geometry_t = -1.0f)
     if (!submitted)
     {
         LogSdlError("SDL_SubmitGPUCommandBuffer");
-        if (capture_recorded)
-        {
-            g_pause_capture_valid = false;
-        }
     }
     else
     {
@@ -10527,7 +10551,7 @@ bool PresentFrame(bool repeat, float geometry_t = -1.0f)
                           mesh_upload.colour_bytes, mesh_upload.animated_bytes);
         if (capture_recorded)
         {
-            g_pause_capture_valid = true;
+            g_displayed_page_valid = true;
         }
         if (mirror_recorded)
         {
@@ -11575,7 +11599,7 @@ void MioPan_RendererEndFrame(void)
     MioPanUi::EndFrame();
     presented = false;
     present_due = g_frame_active && ShouldPresentFrame();
-    if (g_frame_active && !present_due && !g_pause_capture_pending &&
+    if (g_frame_active && !present_due &&
         (!g_pending_texture_uploads.empty() ||
          HasPendingMeshCacheEntries()))
     {
@@ -11600,7 +11624,7 @@ void MioPan_RendererEndFrame(void)
                                   "SDL_SubmitGPUCommandBuffer(texture batch)");
         }
     }
-    if (g_frame_active && (present_due || g_pause_capture_pending))
+    if (g_frame_active && present_due)
     {
         presented = PresentLogicalFrame();
     }
@@ -11777,6 +11801,16 @@ void MioPan_RendererCaptureGsBlock(unsigned int dst_addr,
     g_capture_slots[(size_t)dst_slot].valid = true;
 }
 
+/*
+ * Freeze the displayed page into GS block `addr` -- the host half of a copy of
+ * the page on screen into a scratch block, as pause.c's PauseInDispCaptuer()
+ * does.  See g_displayed_page_texture for why this cannot be a capture slot.
+ *
+ * A swap, not a copy, so it costs nothing and can run anywhere in the tick: the
+ * displayed page becomes the still, and the old still's texture is what the
+ * next present writes the scene into.  With nothing presented since the last
+ * still, the page on screen *is* that still, so only its address moves.
+ */
 void MioPan_RendererCaptureScreen(unsigned int addr)
 {
     if (!EnsureRenderer())
@@ -11784,9 +11818,15 @@ void MioPan_RendererCaptureScreen(unsigned int addr)
         return;
     }
 
+    if (g_displayed_page_valid)
+    {
+        std::swap(g_pause_capture_texture, g_displayed_page_texture);
+        std::swap(g_pause_capture_width, g_displayed_page_width);
+        std::swap(g_pause_capture_height, g_displayed_page_height);
+        g_displayed_page_valid = false;
+        g_pause_capture_valid = true;
+    }
     g_pause_capture_addr = addr;
-    g_pause_capture_valid = false;
-    g_pause_capture_pending = true;
 }
 
 /*
@@ -11958,6 +11998,12 @@ int MioPan_RendererReadbackScreen(unsigned char *dst, int dst_pitch,
     return 1;
 }
 
+/*
+ * Draw the still frozen into `addr` back over the whole frame, at this point in
+ * the queue -- the host half of the copy back into the page being drawn, as
+ * pause.c's PauseCaptureDataDisp() does every paused frame.  Does nothing if
+ * `addr` holds no still, which is the old behaviour of that copy.
+ */
 void MioPan_RendererDrawCapturedScreen(unsigned int addr,
                                        unsigned char r,
                                        unsigned char g,
@@ -11997,8 +12043,20 @@ void MioPan_RendererDrawCapturedScreen(unsigned int addr,
                       (float)g_pause_capture_height,
                       Ps2ColorToFloat(r), Ps2ColorToFloat(g),
                       Ps2ColorToFloat(b), Ps2AlphaToFloat(a));
+
+    /* Not aspect-preserved: the still is the whole window, including the
+     * extra world a wide one shows, so 0..640x448 has to span all of it.
+     *
+     * And a replace, not whatever ALPHA and ZMSK the last draw left set: the
+     * ROM's LocalCopyLtoL() sprite has ABE clear and writes no depth. */
+    const GsBlendMode saved_blend = g_gs_blend_mode;
+    const bool saved_depth_write = g_gs_depth_write;
+    g_gs_blend_mode = GS_BLEND_SRC_ONLY;
+    g_gs_depth_write = false;
     QueueQuad(g_pause_capture_texture, (int)g_pause_capture_width,
               (int)g_pause_capture_height, vertices, false);
+    g_gs_blend_mode = saved_blend;
+    g_gs_depth_write = saved_depth_write;
 }
 
 void MioPan_RendererDrawFontQuad(const float *xy,
