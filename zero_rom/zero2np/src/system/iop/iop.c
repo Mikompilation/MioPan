@@ -394,15 +394,16 @@ static void *iopCommand(unsigned int command, void *data, int size)
          * "StreamAutoIsPreload() Wait Other Stream End" and the scene never
          * loads.  snd_stream.c's note on that arm says the fix belongs here.
          *
-         * The ROM's StreamAbort() relied on TerminateThread() actually killing
-         * the two stream threads, which the host shim cannot do -- it only
-         * signals their wake semaphore.  Releasing the stream on that
-         * assumption freed the ring buffer and zeroed rb_top under threads that
-         * were still running, and the voice thread then handed sceSdVoiceTrans()
-         * a bare ring offset; that is what made the IOP crash in a different
-         * place every run.  StreamAbort() has been rewritten to escalate the
-         * cooperative stop and wait for the threads instead, leaking what they
-         * hold if they will not leave.  See the comment on it in iop_stream.c.
+         * The ROM's StreamAbort() relied on TerminateThread() killing the two
+         * stream threads on the spot.  The host's is cooperative -- the target
+         * goes dormant at its next blocking call -- so releasing the stream
+         * straight after it would free the ring buffer and zero rb_top under
+         * threads still about to run, and the voice thread would hand
+         * sceSdVoiceTrans() a bare ring offset; that is what once made the IOP
+         * crash in a different place every run.  StreamAbort() therefore waits
+         * for the threads to go dormant before it releases anything, and leaks
+         * what they hold only if even a terminate cannot reach them.  See the
+         * comment on it in iop_stream.c.
          *
          * Still a rescue path, though, not a licence to leave the reason the
          * release was missed unfixed. */
@@ -820,9 +821,8 @@ void iopReqRead(unsigned int offset_sector, unsigned int read_sector_num,
  * record.  `pname` is only ever read by the host-PC path, so it goes unused
  * here. */
 /* PORT: iopRead()'s body without its ExitThread(), so iopReqRead() can run the
- * read on the calling thread.  ExitThread() cannot be part of it: on this host
- * it marks the CALLING thread exited, and the caller here is a live stream or
- * ring-buffer thread, which would then be relaunched underneath itself. */
+ * read on the calling thread.  ExitThread() cannot be part of it: it ends the
+ * CALLING thread, and the caller here is a live stream or ring-buffer thread. */
 static void iopReadOnce(void)
 {
     MyCdRead(iop_read_wrk.offset_sector, iop_read_wrk.read_sector_num,

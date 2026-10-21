@@ -71,9 +71,10 @@
 #define RB_NUM              0x40
 #define RB_1READ_SLOTS      16
 
-/* PORT: how long StreamAbort() gives the stream's threads to get themselves out
- * before it gives up on them.  Spent on the RPC thread, so the EE stalls for it;
- * a thread that is going to notice its wake does so in single-digit ms. */
+/* PORT: how long each stage of StreamAbort() gives the stream's threads to go
+ * dormant before it moves on.  Spent on the RPC thread, so the EE stalls for it;
+ * a thread that is going to notice its wake does so in single-digit ms, and a
+ * terminate lands within one WaitSema() slice or one DelayThread(). */
 #define ABORT_POLL_US       2000
 #define ABORT_WAIT_US       300000
 
@@ -360,8 +361,14 @@ void StreamStart(STREAM_START *p)
     PrintIOPMem("after start iopstream");
 
     /* Only the reader starts here; it starts the voice thread once the ring
-     * has enough in it to play from. */
-    StartThread(stp->read_th_idx, 0);
+     * has enough in it to play from.
+     *
+     * PORT: say so if it will not start.  That can only be a slot StreamAbort()
+     * had to abandon, whose stranded reader is still alive -- and the stream
+     * then never leaves PRE_LOAD, which looks like a silent hang otherwise. */
+    if (StartThread(stp->read_th_idx, 0) != 0)
+        printf("iop: StreamStart() wrk %d reader still running -- stream will not play\n",
+               p->wrk_id);
 }
 
 /* --------------------------------------------------------------------------
@@ -500,36 +507,69 @@ void StreamStop(STREAM_STOP *p)
     SignalSema(sema_Voice_array[stp->irq_core]);
 }
 
+/* PORT: StreamAbort()'s wait.  "Dormant" rather than read_end/voice_end,
+ * because those are raised on the way INTO the release, and the release itself
+ * can be what is stuck.  Bounded, because it runs on the RPC thread and the EE
+ * is held for as long as it takes. */
+static int StreamThreadsDormant(STREAM_WRK *stp)
+{
+    ThreadInfo info;
+
+    ReferThreadStatus(stp->read_th_idx, &info);
+    if (info.status != THS_DORMANT)
+        return 0;
+
+    ReferThreadStatus(stp->voice_th_idx, &info);
+    return info.status == THS_DORMANT;
+}
+
+static int StreamWaitThreadsDormant(STREAM_WRK *stp)
+{
+    int waited;
+
+    for (waited = 0; waited < ABORT_WAIT_US; waited += ABORT_POLL_US)
+    {
+        if (StreamThreadsDormant(stp))
+            return 1;
+
+        DelayThread(ABORT_POLL_US);
+    }
+
+    return StreamThreadsDormant(stp);
+}
+
 /* PORT: the ROM's StreamAbort() calls TerminateThread() on both stream threads
- * and then releases the stream itself, on the assumption that nothing is left
- * running.  That assumption does not survive the host: SDL cannot kill a thread
- * and MioPan_IopTerminateThread() only signals its wake semaphore, so both
- * threads are still alive -- and, having just been signalled, are about to run.
- * StreamReleaseSub() then frees the ring buffer and sets rb_top to 0 under them,
- * the voice thread comes round to StreamTransSub(), and rb_top + rb_voice *
- * rb_size hands sceSdVoiceTrans() a bare offset like 0x12000.  Nothing is mapped
- * there, so the memcpy faults -- at a different place every run, depending on
- * where the two threads happened to be when the abort landed.  That is the
- * "IOP crashes inconsistently" symptom.
+ * and releases the stream straight after, on the assumption that nothing is
+ * left running.  TerminateThread() is cooperative on this host -- the target
+ * goes dormant at its next blocking call, not on the spot -- so releasing at
+ * once would free the ring buffer and zero rb_top under threads that are about
+ * to run, and the voice thread would then hand sceSdVoiceTrans() a bare offset
+ * like 0x12000.  That made the IOP crash in a different place every run.
  *
- * So abort escalates the cooperative stop instead of pre-empting it, and the
- * threads do their own release exactly as they do for StreamStop().  It still
- * differs from StreamStop() in the two ways that matter on an error path: it
- * signals BOTH voice semaphores rather than only irq_core's (irq_core is a
- * stream-slot index, not a core, and the two agree only by convention), and it
- * waits for the threads to actually get out.
+ * So the abort goes in three stages, each only if the one before failed:
  *
- * If they do not get out, they are genuinely wedged and there is no safe way to
- * reclaim what they hold.  The slot is then handed back to the EE anyway -- that
- * is the whole point of the command -- but `abandoned` keeps StreamReleaseSub()
- * from freeing the ring buffer out from under them.  Leaking it is the price of
- * not being able to kill a thread; a stranded thread writing into memory that is
- * still its own is survivable, and one writing to 0x12000 is not. */
+ *   1. Escalate the cooperative stop -- `stop`, a wake for both threads, and
+ *      BOTH voice semaphores rather than only irq_core's (irq_core is a
+ *      stream-slot index, not a core, and the two agree only by convention) --
+ *      and wait for the threads to go dormant.  They release the stream
+ *      themselves, exactly as for StreamStop().
+ *   2. TerminateThread() them, as the ROM did, and wait for that to land.  A
+ *      thread parked anywhere -- a wait that never re-tests `stop`, or
+ *      StreamReleaseSub()'s own stop-block loop -- is cut off there, and the
+ *      release it did not get to is done here.  Both threads are dormant
+ *      afterwards, so the next StreamStart() relaunches them normally and the
+ *      slot is genuinely usable again.
+ *   3. If even that does not land, a thread is stuck where no wake reaches it
+ *      (spinning, or inside a host call) and there is no safe way to reclaim
+ *      what it holds.  The slot is handed back to the EE anyway -- that is the
+ *      whole point of the command -- but `abandoned` keeps StreamReleaseSub()
+ *      from freeing the ring buffer out from under it.  A stranded thread
+ *      writing into memory that is still its own is survivable; one writing to
+ *      0x12000 is not. */
 void StreamAbort(STREAM_STOP *p)
 {
     STREAM_WRK *stp = &stream_wrk[p->wrk_id];
     int         i;
-    int         waited;
 
     printf("*************ABORT STREAM***********\n");
 
@@ -566,30 +606,29 @@ void StreamAbort(STREAM_STOP *p)
     for (i = 0; i < STREAM_WRK_NUM; i++)
         SignalSema(sema_Voice_array[i]);
 
-    /* Bounded: this runs on the RPC thread, so the EE is blocked for as long as
-     * it takes.  A thread that is going to notice does so in a few milliseconds;
-     * anything past that is wedged and more waiting will not help. */
-    for (waited = 0; waited < ABORT_WAIT_US; waited += ABORT_POLL_US)
+    if (!StreamWaitThreadsDormant(stp))
     {
-        if (stp->read_end && stp->voice_end)
-            break;
+        printf("iop: ABORT wrk %d threads did not stop (read_end=%d voice_end=%d)"
+               " -- terminating\n", stp->id, stp->read_end, stp->voice_end);
 
-        DelayThread(ABORT_POLL_US);
+        TerminateThread(stp->read_th_idx);
+        TerminateThread(stp->voice_th_idx);
+
+        if (!StreamWaitThreadsDormant(stp))
+        {
+            printf("iop: ABORT wrk %d threads did not exit -- abandoning\n", stp->id);
+
+            stp->abandoned = 1;
+            StreamReleaseSub(stp);
+            return;
+        }
     }
 
-    if (stp->read_end && stp->voice_end)
-    {
-        /* Both got out, so whichever finished second has already released the
-         * stream the ordinary way.  Nothing left to do. */
-        printf("ABORT STREAM %d released cleanly after %d us\n", stp->id, waited);
-        return;
-    }
+    /* Still in use only if the threads were cut off before they released it. */
+    if (stp->use)
+        StreamReleaseSub(stp);
 
-    printf("iop: ABORT wrk %d threads did not exit (read_end=%d voice_end=%d)"
-           " -- abandoning\n", stp->id, stp->read_end, stp->voice_end);
-
-    stp->abandoned = 1;
-    StreamReleaseSub(stp);
+    printf("ABORT STREAM %d released\n", stp->id);
 }
 
 void StreamVolSet(STREAM_SETVOL *p)
@@ -1200,7 +1239,11 @@ void SetStreamLoopFlgSub(STREAM_WRK *stp, SPU_BLOCK_DATA *data, int id, int loop
 }
 
 /* Both exits do the same thing from opposite ends: raise your own bit, and if
- * the other thread has already raised its own, do the release. */
+ * the other thread has already raised its own, do the release.
+ *
+ * Neither returns.  StreamVoiceThread() calls VoiceThreadExit() from the middle
+ * of its body and depends on that; on this host it is MioPan_IopExitThread()
+ * that makes it so -- see IopThreadMain() in iop_host.cpp. */
 void VoiceThreadExit(STREAM_WRK *stp)
 {
     stp->voice_end = 1;

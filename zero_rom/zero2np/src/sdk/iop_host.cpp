@@ -63,6 +63,7 @@ extern "C" __declspec(dllimport) size_t __stdcall VirtualQuery(
 #include <SDL3/SDL_thread.h>
 #include <SDL3/SDL_timer.h>
 
+#include <setjmp.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -81,7 +82,12 @@ typedef struct
     int             started;
     int             exited;
     int             starting;        /* a relaunch is joining the old instance */
+    volatile int    terminate;       /* TerminateThread(): go dormant at the next block */
+    jmp_buf        *exit_jmp;        /* where ExitThread() lands; NULL off the body */
 } IopThread;
+
+/* How often a thread parked in WaitSema() looks for a pending terminate. */
+#define IOP_TERMINATE_POLL_MS 10
 
 typedef struct
 {
@@ -234,9 +240,26 @@ static IopTimer *FindTimer(int timer_id)
  *  Threads
  * ------------------------------------------------------------------------ */
 
+/* Abandons the calling IOP thread's body: ExitThread(), and a TerminateThread()
+ * noticed inside a blocking call.  Both mean "this thread is dormant now", and
+ * on the IOP neither one returned to the code that asked. */
+[[noreturn]] static void IopThreadLeave(IopThread *th)
+{
+    longjmp(*th->exit_jmp, 1);
+}
+
+/* Called by the blocking primitives once they have stopped blocking, with the
+ * BKL already given back -- so a thread cut off here is holding nothing. */
+static void IopCheckTerminate(IopThread *th)
+{
+    if (th != NULL && th->terminate && th->exit_jmp != NULL)
+        IopThreadLeave(th);
+}
+
 static int SDLCALL IopThreadMain(void *data)
 {
     IopThread *th = (IopThread *)data;
+    jmp_buf    exit_jmp;
 
     SDL_SetTLS(&iop_thread_tls, th, NULL);
 
@@ -251,12 +274,33 @@ static int SDLCALL IopThreadMain(void *data)
      * primitive, so the ROM's own scheduling points still work. */
     MioPan_IopBklEnter();
 
-    if (th->entry != NULL)
-        ((void (*)(void))th->entry)();
+    /* PORT: ExitThread() lands here instead of returning to its caller.  On the
+     * IOP it never returned, and the ROM's thread bodies rely on that:
+     * StreamVoiceThread() calls VoiceThreadExit() from three places in the
+     * middle of its body with nothing after the call.  While ExitThread() simply
+     * returned, a voice thread whose stream was stopped before it was ever
+     * played released the slot and then ran on -- through StreamTransSub() on
+     * the freed ring, over the next stream's STREAM_WRK once that one started,
+     * and into SleepThread() for good, flagged exited while still alive.  The
+     * next StartThread() on it then joined a thread that would never end, the
+     * stream reader doing the starting hung inside it, and the slot was never
+     * released again: "StreamAutoIsPreload() Wait Other Stream End" for ever.
+     * It took streams started and cut short in quick succession -- a cutscene,
+     * an event sound, the next cutscene. */
+    th->exit_jmp = &exit_jmp;
 
-    th->exited = 1;
+    if (setjmp(exit_jmp) == 0)
+    {
+        if (th->entry != NULL)
+            ((void (*)(void))th->entry)();
+    }
 
-    MioPan_IopBklLeave();
+    th->exit_jmp = NULL;
+    th->exited   = 1;
+
+    /* Every level, whatever depth the body left at: a terminate is acted on
+     * inside a blocking call, which has already given the lock back. */
+    MioPan_IopBklSuspend();
     return 0;
 }
 
@@ -369,14 +413,13 @@ int MioPan_IopStartThread(int thid, void *arg)
     /* A finished thread has to be relaunchable, which means joining the old
      * instance before spawning the new one.
      *
-     * That join MUST NOT happen under iop_table_lock, nor under the BKL.
-     * ExitThread() sets `exited` from inside the thread body, so a thread can
-     * be flagged exited while it is still unwinding -- and an IOP thread's
-     * unwind runs the ROM's release path (StreamReleaseSub -> FreeSysMemory,
-     * DeleteSema), which takes the table lock and needs the BKL.  Joining while
-     * holding either deadlocks the pair, and every other IOP thread then piles
-     * up behind it.  Observed at the end of a scene, where a stream's threads
-     * exit just as the next stream starts one.
+     * That join MUST NOT happen under iop_table_lock, nor under the BKL.  The
+     * old instance still has to give the BKL back on its way out of
+     * IopThreadMain, and a join held under the table lock would stop every
+     * other IOP thread for its duration.  It is short now -- `exited` is only
+     * raised once the body is over, by IopThreadMain itself -- but it was once
+     * a deadlock, back when ExitThread() raised it from inside a body that then
+     * carried on running the ROM's release path.
      *
      * `starting` keeps the slot claimed across the unlocked window so a second
      * StartThread() cannot spawn a duplicate. */
@@ -392,7 +435,15 @@ int MioPan_IopStartThread(int thid, void *arg)
     MioPan_IopBklResume(join_bkl);
 
     IopLock();
-    th->exited = 0;
+    th->exited    = 0;
+    th->terminate = 0;
+
+    /* As on the IOP, a new instance starts with no wakeups banked: a
+     * WakeupThread() or TerminateThread() aimed at the old one must not make
+     * the new one's first SleepThread() return at once. */
+    while (SDL_TryWaitSemaphore(th->wake))
+        ;
+
     th->thread = SDL_CreateThread(IopThreadMain, "iop", th);
     th->starting = 0;
     if (th->thread == NULL)
@@ -407,33 +458,43 @@ int MioPan_IopStartThread(int thid, void *arg)
     return 0;
 }
 
+/* Does not return on an IOP thread -- see IopThreadMain.  Anywhere else (the
+ * EE's thread, inside an RPC handler) there is no IOP thread to end, and it
+ * returns as before. */
 int MioPan_IopExitThread(void)
 {
     IopThread *th = (IopThread *)SDL_GetTLS(&iop_thread_tls);
-    if (th != NULL)
-        th->exited = 1;
 
-    /* The ROM's threads call this as their last statement and never return
-     * from it; here the entry function simply unwinds and IopThreadMain ends. */
+    if (th != NULL && th->exit_jmp != NULL)
+        IopThreadLeave(th);
+
     return 0;
 }
 
+/* Cooperative, because SDL has no thread kill and nothing can safely cut a host
+ * thread from outside.  The target is flagged and woken, and goes dormant the
+ * next time it is parked in WaitSema, SleepThread or DelayThread -- the only
+ * places an IOP thread could have been switched away from anyway -- abandoning
+ * its body exactly as ExitThread() does.  A thread spinning without ever
+ * blocking, or stuck inside a host call, is out of reach; StreamAbort() falls
+ * back to abandoning the slot for that.
+ *
+ * As on the IOP, a thread cannot terminate itself: that is ExitThread().
+ * PCMStreamRelease() aims this at its own thread and goes on to report the
+ * stream ended, so the self case has to stay a no-op.  ReleaseRingBufSub()
+ * aims it at a reader that has already finished, which is a no-op too. */
 int MioPan_IopTerminateThread(int thid)
 {
-    /* SDL has no thread kill, and there is nowhere safe to cut an IOP thread
-     * anyway -- it could be holding the ring buffer.  So this only nudges the
-     * thread and returns; the thread lives on.
-     *
-     * StreamAbort() is the only caller, and unlike in the ROM it IS reachable
-     * here (the port wired up iopCommand()'s missing REQ_STREAM_ABORT case).
-     * It has been rewritten to suit: it no longer assumes the threads are gone
-     * afterwards, waits for them to exit on their own, and leaks what they hold
-     * if they do not.  Anything else added here must make the same assumption --
-     * that this call changes nothing except that the thread has been woken. */
+    IopThread *self = (IopThread *)SDL_GetTLS(&iop_thread_tls);
+
     IopLock();
     IopThread *th = FindThread(thid);
-    if (th != NULL && th->wake != NULL)
-        SDL_SignalSemaphore(th->wake);
+    if (th != NULL && th != self && th->started && !th->exited)
+    {
+        th->terminate = 1;
+        if (th->wake != NULL)
+            SDL_SignalSemaphore(th->wake);
+    }
     IopUnlock();
 
     return 0;
@@ -466,6 +527,11 @@ int MioPan_IopReferThreadStatus(int thid, ThreadInfo *info)
     info->initPriority = th->priority;
     info->currentPriority = th->priority;
 
+    /* Only the two states the host can tell apart; a relaunch in progress
+     * counts as running, since a new instance is about to be. */
+    info->status = (th->starting || (th->started && !th->exited))
+                 ? THS_RUN : THS_DORMANT;
+
     return 0;
 }
 
@@ -488,6 +554,7 @@ int MioPan_IopSleepThread(void)
 
     bkl = MioPan_IopBklSuspend();
     SDL_WaitSemaphore(th->wake);
+    IopCheckTerminate(th);          /* TerminateThread() wakes us to see this */
     MioPan_IopBklResume(bkl);
 
     return iop_shutdown ? -1 : 0;
@@ -515,6 +582,7 @@ int MioPan_IopDelayThread(int usec)
      * spin for ever. */
     int bkl = MioPan_IopBklSuspend();
     SDL_DelayNS((Uint64)(usec > 0 ? usec : 0) * 1000ULL);
+    IopCheckTerminate((IopThread *)SDL_GetTLS(&iop_thread_tls));
     MioPan_IopBklResume(bkl);
 
     return 0;
@@ -600,10 +668,32 @@ int MioPan_IopWaitSema(int semid)
     if (iop_shutdown)
         return -1;
 
+    IopThread *th = (IopThread *)SDL_GetTLS(&iop_thread_tls);
+
     /* A blocked IOP thread was not running, so it must not be holding the
      * CPU: this is one of the ROM's own scheduling points. */
     int bkl = MioPan_IopBklSuspend();
-    SDL_WaitSemaphore(s->sem);
+
+    /* An IOP thread waits in slices so a TerminateThread() can reach it --
+     * signalling the semaphore instead would hand the wake to whichever thread
+     * happened to be waiting on it.  Only a genuine block is a cut point: a
+     * wait satisfied on arrival returns normally even with a terminate
+     * pending, so a thread is never cut off holding what it just took. */
+    if (th == NULL)
+    {
+        SDL_WaitSemaphore(s->sem);
+    }
+    else
+    {
+        while (!SDL_WaitSemaphoreTimeout(s->sem, IOP_TERMINATE_POLL_MS))
+        {
+            if (iop_shutdown)
+                break;
+
+            IopCheckTerminate(th);
+        }
+    }
+
     MioPan_IopBklResume(bkl);
 
     return iop_shutdown ? -1 : semid;
