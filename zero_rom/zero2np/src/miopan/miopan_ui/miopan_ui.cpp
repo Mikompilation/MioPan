@@ -3543,14 +3543,15 @@ void Draw()
          * one last frame, so a low figure means the draw list keeps changing
          * shape rather than that anything is wrong. */
         ImGui::Text("Game %.1f FPS | Present %.1f FPS | present/frame %.2f | "
-                    "cam %s/tick | geo %s",
+                    "cam %s/tick | cuts %u | geo %s",
                     g_performance_stats.game_fps,
                     g_performance_stats.present_fps,
                     g_performance_stats.game_fps > 0.0
                         ? g_performance_stats.present_fps /
                               g_performance_stats.game_fps
                         : 0.0,
-                    camera_note, geometry_note);
+                    camera_note, MioPan_RendererGetSmoothingCuts(),
+                    geometry_note);
         if (!g_summary_fps_only)
         {
             DrawPerformanceDetail(profiler);

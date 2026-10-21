@@ -660,13 +660,40 @@ unconditional last `WaitSema()`; see Part 6. Going higher would mean editing
 `vfunc()`, which is reconstructed game code, for a benefit that stops at the
 display's refresh anyway.
 
-One thing could still be worth doing on it: **a cut-detection guard**, if a
-fixed-angle cut ever reads badly. `g_prev` and the new camera are unrelated
-across a cut, so the in-between is a meaningless intermediate; `cam` spikes on
-exactly those frames, so the fix is a threshold on that figure and presenting
-the true camera twice instead. Nothing has been seen that needs it. (Increment
-4's `BlendModelMatrix` does carry the equivalent guard for objects, because a
-per-draw rotation cut is not visible in any summary figure.)
+### The cut guard — done
+
+Seen by the user (2026-10-21): with smoothing on, a camera cut showed one
+present of wrong geometry. `g_prev` and the new camera are unrelated across a
+cut, so the in-between was a view nobody set up, with the world dragged through
+it by the motion blend. Before the game's first camera the renderer holds an
+**all-zero view matrix**, finite and "valid", so the first room frame after a
+load blended from that too.
+
+`CameraPairIsCut()` (beside `BlendModelMatrix`) calls a cut when either view's
+rotation block is not a rotation (`ViewRotationIsRigid()` — this is what catches
+the zero matrix), the eye moved more than `kSmoothingCutMove` (300 units), the
+orientation turned more than 30°, or either focal scale changed more than 15%.
+`PresentLogicalFrame()` then presents the tick's own frame every time — no
+camera blend and so no geometry blend — while keeping the presents and their
+field waits, so pacing does not hitch, and the true camera still becomes the
+next tick's previous. Separately, `ModelJumped()` (in `ReprojectDrawsAt()`) and
+a per-draw check in `ApplyGeometryVertexBlend()` leave unblended any object
+that moved more than `kGeometryMaxTickJump` (200 units) in one tick.
+
+The thresholds come from a per-tick log of driven runs in chapters 1 and 3:
+following Mio at a walk the camera moved ≤ 10.5 units and ≤ 0.4° a tick; the
+real cuts moved 1599–4521 units and turned 58–173°; the fastest object moved 53
+units a tick. With the guard on, every cut tick and nothing else was flagged.
+**Not measured: finder turning and zoom** — scripted input could not raise the
+finder in either chapter. A false positive only costs one tick unsmoothed.
+
+The summary line now reads `… | cam 12.4/tick | cuts 3 | geo 96%`. `cuts`
+counts cut ticks since startup, only when there is a real camera to cut to; it
+should step once per visible cut and never while the camera merely moves.
+
+(Increment 4's `BlendModelMatrix` still carries its own >90° rotation guard;
+`ModelJumped()` is kept outside it so `tools/renderer/modelblend_test.cpp`'s
+verbatim copy stays valid.)
 
 ### Increment 4 — interpolated geometry
 
@@ -716,7 +743,7 @@ increment 3's behaviour — the failure mode is invisible, not wrong.
 paired**, and it is what says whether this is doing anything:
 
 ```
-Game 30.0 FPS | Present 60.0 FPS | present/frame 2.00 | cam 12.4/tick | geo 96%
+Game 30.0 FPS | Present 60.0 FPS | present/frame 2.00 | cam 12.4/tick | cuts 3 | geo 96%
 ```
 
 `geo --` is off or no corresponding previous frame; a low figure means the draw

@@ -1168,6 +1168,9 @@ bool g_interpolate_presents = true;
  * camera pans that have something to interpolate.
  */
 float g_camera_motion = -1.0f;
+/* Smoothed ticks presented unblended because their camera pair was a cut
+ * (CameraPairIsCut()), since startup.  MioPan_RendererGetSmoothingCuts(). */
+unsigned int g_smoothing_cuts;
 /*
  * Geometry smoothing -- the second half of an in-between frame.
  *
@@ -1831,6 +1834,107 @@ float Dot3(const float *a, const float *b)
  * and short of 180, where the slerp arc stops being defined at all.
  */
 constexpr float kGeometryMaxTickRotationCos = 0.70710678f;
+
+/*
+ * Beyond any of these, the cameras of two consecutive ticks are not one camera
+ * moving but a cut -- a fixed angle handing over to the next, an event shot
+ * change, a room coming up after a load -- and an in-between blended from them
+ * would show a view nobody set up, with the world swung through it.
+ *
+ * Measured in chapters 1 and 3 with smoothing on: a camera following Mio at a
+ * walk and through her turns moved at most 10.5 units and 0.4 degrees a tick,
+ * with the projection unchanged.  The cuts in the same runs moved 1599 to 4521
+ * units, turned 58 to 173 degrees, and two of them changed the projection as
+ * well.  The move and turn thresholds sit more than an order of magnitude from
+ * the motion and well inside the cuts; the focal one is there for a shot
+ * change that only zooms.  Finder turning and zoom were not in the sample.  A
+ * false positive costs one tick presented unsmoothed, a false negative a
+ * visibly wrong frame, so the thresholds lean towards calling a cut.
+ */
+constexpr double kSmoothingCutMove = 300.0;
+constexpr double kSmoothingCutTurnCos = 0.86602540378; /* 30 degrees */
+constexpr float kSmoothingCutFocalChange = 0.15f;
+
+/* An object that moved further than this in one tick did not move, it was put
+ * somewhere else -- an event placing a character, a ghost appearing at its
+ * next spot -- and blending it would drag it across the room for one present.
+ * Measured the same way: the fastest thing on screen, Mio walking, moved 53
+ * units a tick. */
+constexpr float kGeometryMaxTickJump = 200.0f;
+
+/* The upper-left 3x3 of a view matrix is a rotation: rows of unit length,
+ * mutually perpendicular, right-handed.  RotationRowsToQuat() assumes it, and
+ * a camera that is not one -- the all-zero matrix the renderer holds before the
+ * game's first, which looks like a perfectly finite camera -- has no
+ * orientation to blend from. */
+bool ViewRotationIsRigid(const float *view)
+{
+    const float *rows[3] = {&view[0], &view[4], &view[8]};
+    for (int i = 0; i < 3; i++)
+    {
+        if (std::fabs(Dot3(rows[i], rows[i]) - 1.0f) > 0.01f)
+        {
+            return false;
+        }
+        if (std::fabs(Dot3(rows[i], rows[(i + 1) % 3])) > 0.01f)
+        {
+            return false;
+        }
+    }
+    const float cross[3] = {
+        rows[0][1] * rows[1][2] - rows[0][2] * rows[1][1],
+        rows[0][2] * rows[1][0] - rows[0][0] * rows[1][2],
+        rows[0][0] * rows[1][1] - rows[0][1] * rows[1][0],
+    };
+    return Dot3(cross, rows[2]) > 0.99f;
+}
+
+/*
+ * Whether the camera pair a smoothed tick would interpolate between is a cut
+ * rather than one camera moving (see kSmoothingCutMove).  `move` is the eye
+ * distance the caller already measured.
+ */
+bool CameraPairIsCut(const float *from_view, const float *from_projection,
+                     const float *to_view, const float *to_projection,
+                     double move)
+{
+    if (!ViewRotationIsRigid(from_view) || !ViewRotationIsRigid(to_view))
+    {
+        return true;
+    }
+    if (!(move <= kSmoothingCutMove))
+    {
+        return true;
+    }
+
+    /* cos of the angle between the two orientations, from the Frobenius
+     * product of the rotation blocks: trace(Ra Rb^T) = 1 + 2 cos(theta). */
+    double trace = 0.0;
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 3; col++)
+        {
+            trace += (double)from_view[row * 4 + col] *
+                     (double)to_view[row * 4 + col];
+        }
+    }
+    if ((trace - 1.0) * 0.5 < kSmoothingCutTurnCos)
+    {
+        return true;
+    }
+
+    /* The focal scales, x and y, of a perspective projection. */
+    for (int i = 0; i < 2; i++)
+    {
+        const float a = std::fabs(from_projection[i * 5]);
+        const float b = std::fabs(to_projection[i * 5]);
+        if (std::fabs(a - b) > kSmoothingCutFocalChange * std::max(a, b))
+        {
+            return true;
+        }
+    }
+    return false;
+}
 
 /*
  * Blend two object transforms.
@@ -8113,6 +8217,27 @@ void ApplyGeometryVertexBlend(float t)
             continue;
         }
 
+        /* A draw any of whose vertices jumped rather than moved keeps the
+         * frame's own positions, which is what g_vertices still holds for it:
+         * the decision depends only on the two snapshots, so every present of
+         * the tick skips it alike and none of them ever wrote a blend there. */
+        bool jumped = false;
+        for (size_t vertex = first; vertex < first + count && !jumped;
+             vertex++)
+        {
+            const float *from = &g_geo_prev_positions[vertex * 4u];
+            const float *to = &g_geo_curr_positions[vertex * 4u];
+            const float dx = to[0] - from[0];
+            const float dy = to[1] - from[1];
+            const float dz = to[2] - from[2];
+            jumped = !(dx * dx + dy * dy + dz * dz <=
+                       kGeometryMaxTickJump * kGeometryMaxTickJump);
+        }
+        if (jumped)
+        {
+            continue;
+        }
+
         for (size_t vertex = first; vertex < first + count; vertex++)
         {
             const float *from = &g_geo_prev_positions[vertex * 4u];
@@ -8138,6 +8263,18 @@ void ApplyGeometryVertexBlend(float t)
  * why a transform cannot be lerped element-wise, and the geometry-smoothing
  * state block for why a skinned block is not among them.
  */
+/* Whether a rigidly bound block's position jumped rather than moved between
+ * the two ticks (see kGeometryMaxTickJump).  Kept out of BlendModelMatrix(),
+ * whose maths tools/renderer/modelblend_test.cpp verifies verbatim. */
+bool ModelJumped(const float *from, const float *to)
+{
+    const float dx = to[12] - from[12];
+    const float dy = to[13] - from[13];
+    const float dz = to[14] - from[14];
+    return !(dx * dx + dy * dy + dz * dz <=
+             kGeometryMaxTickJump * kGeometryMaxTickJump);
+}
+
 int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
 {
     if (view == nullptr || projection == nullptr || !g_frame_active ||
@@ -8176,7 +8313,8 @@ int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
             continue;
         }
 
-        if (blend_models && i < g_geo_match_count)
+        if (blend_models && i < g_geo_match_count &&
+            !ModelJumped(g_geo_prev_draws[i].model, draw.model))
         {
             float model[16];
             if (BlendModelMatrix(g_geo_prev_draws[i].model, draw.model,
@@ -10842,7 +10980,7 @@ bool PresentLogicalFrame()
     /* Held aside before the first reprojection replaces it. */
     float true_view[16];
     float true_projection[16];
-    const bool interpolate =
+    bool interpolate =
         g_interpolate_presents && MioPan_RendererHavePreviousCamera() != 0;
     if (interpolate)
     {
@@ -10860,7 +10998,27 @@ bool PresentLogicalFrame()
         const double dx = to_eye[0] - from_eye[0];
         const double dy = to_eye[1] - from_eye[1];
         const double dz = to_eye[2] - from_eye[2];
-        g_camera_motion = (float)std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double move = std::sqrt(dx * dx + dy * dy + dz * dz);
+        g_camera_motion = (float)move;
+
+        /* A cut is presented as the frame it is, every present of the tick:
+         * no camera blend, and so no geometry blend either.  Nothing else
+         * changes -- the presents and their field waits still happen, so the
+         * pacing does not hitch on the cut, and this frame's true camera is
+         * still what the next one blends from. */
+        if (CameraPairIsCut(g_prev_3d_view, g_prev_3d_projection, true_view,
+                            true_projection, move))
+        {
+            interpolate = false;
+            /* Counted only when there is a real camera to cut to.  Before the
+             * game sets its first one -- boot, logos, the title -- every tick
+             * pairs two all-zero matrices, and counting those would bury the
+             * cuts the figure exists to show. */
+            if (ViewRotationIsRigid(true_view))
+            {
+                g_smoothing_cuts++;
+            }
+        }
     }
     else
     {
@@ -11811,6 +11969,11 @@ int MioPan_RendererGetPresentInterpolation(void)
 float MioPan_RendererGetCameraMotion(void)
 {
     return g_camera_motion;
+}
+
+unsigned int MioPan_RendererGetSmoothingCuts(void)
+{
+    return g_smoothing_cuts;
 }
 
 void MioPan_RendererSetGeometryInterpolation(int enable)

@@ -961,6 +961,14 @@ int MioPan_RendererGetPresentInterpolation(void);
  * has nothing to show.  Reported beside the FPS figures. */
 float MioPan_RendererGetCameraMotion(void);
 
+/* Smoothed ticks presented without interpolation because the camera cut
+ * between them -- a fixed angle handing over, a shot change, a room coming up
+ * after a load -- counted since startup.  An in-between blended across a cut
+ * would show a view nobody set up, so a cut tick presents its own frame every
+ * time instead.  Reported beside the camera motion; it should step once per
+ * visible cut and stay put while the camera merely moves. */
+unsigned int MioPan_RendererGetSmoothingCuts(void);
+
 /* The second half of an in-between: move the world as well as the eye.
  *
  * A reprojected camera does not move anything the camera is looking at, so
