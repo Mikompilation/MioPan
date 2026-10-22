@@ -82,6 +82,9 @@ typedef struct MioPan_ConfigRenderer
     /* Model textures resolved once, their GS uploads then skipped.  See
      * MioPan_RendererSetResidentTextures(). */
     int   resident_textures;     /* 0 off, 1 on                              */
+    /* Textures kept as the bytes the game sent, GS memory written only when
+     * read.  See MioPan_GsSetByReference() in gs/miopan_gs_c.h. */
+    int   gs_by_reference;       /* 0 off, 1 on                              */
     /* Character, item and other runtime meshes sent as indexed streams.  See
      * MioPan_RendererBeginIndexedMeshStream(). */
     int   indexed_streams;       /* 0 off, 1 on                              */

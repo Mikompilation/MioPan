@@ -93,6 +93,9 @@ MioPan_Config miopan_config = {
         /* On, for the same reason: the textures are the ones the GS path
          * resolves, only no longer re-sent. */
         /* .resident_textures = */ 1,
+        /* On: the same bytes reach every read, only no longer rearranged
+         * into GS memory on every send.  Off is the A/B. */
+        /* .gs_by_reference   = */ 1,
         /* On: the same triangles, each vertex sent once instead of once per
          * triangle it is a corner of.  Off is the A/B. */
         /* .indexed_streams   = */ 1,
@@ -1005,6 +1008,7 @@ static void ConfigLoadOnce(void)
     ReadFloat("render", "alpha_cutoff", &r->alpha_cutoff);
     ReadInt("render", "resident_meshes", &r->resident_meshes);
     ReadInt("render", "resident_textures", &r->resident_textures);
+    ReadInt("render", "gs_by_reference", &r->gs_by_reference);
     ReadInt("render", "indexed_streams", &r->indexed_streams);
     /* After aspect_ratio, so a "21:9" written in `aspect` wins over a stale
      * ratio left in the companion key. */
@@ -1219,6 +1223,12 @@ int MioPan_ConfigSave(void)
         ";   uploading them to the emulated GS every frame. 0 re-sends and\n"
         ";   re-hashes them every draw, as the PS2 did -- the A/B.\n"
         "resident_textures = %d\n"
+        "; Keep every texture as the bytes the game sent, and rearrange it\n"
+        ";   into the emulated GS's memory layout only when something reads\n"
+        ";   it there. Menus re-send their whole texture pack before nearly\n"
+        ";   every sprite, which is what made them slow. 0 rearranges every\n"
+        ";   send as it arrives, as the GS did -- the A/B.\n"
+        "gs_by_reference = %d\n"
         "; Send characters, ghosts and items once per vertex, with their strips\n"
         ";   as indices, and merge neighbouring parts that share state into one\n"
         ";   draw. 0 sends every triangle's three corners -- the A/B.\n"
@@ -1359,6 +1369,7 @@ int MioPan_ConfigSave(void)
         (double)r->alpha_cutoff,
         r->resident_meshes,
         r->resident_textures,
+        r->gs_by_reference,
         r->indexed_streams,
         EnumToName(kLightingModes, r->lighting_mode),
         EnumToName(kAnimatedLighting, r->animated_lighting),
@@ -1483,6 +1494,7 @@ void MioPan_ConfigApply(void)
     MioPan_RendererSetAlphaCutoff(r->alpha_cutoff);
     MioPan_RendererSetResidentMeshes(r->resident_meshes);
     MioPan_RendererSetResidentTextures(r->resident_textures);
+    MioPan_GsSetByReference(r->gs_by_reference);
     MioPan_RendererSetIndexedStreams(r->indexed_streams);
     MioPan_RendererSetFinderMask(r->finder_mask, r->finder_mask_blur,
                                  r->finder_mask_darken, r->finder_mask_tint,
@@ -1550,6 +1562,7 @@ void MioPan_ConfigCapture(void)
     r->alpha_cutoff = MioPan_RendererGetAlphaCutoff();
     r->resident_meshes = MioPan_RendererGetResidentMeshes();
     r->resident_textures = MioPan_RendererGetResidentTextures();
+    r->gs_by_reference = MioPan_GsGetByReference();
     r->indexed_streams = MioPan_RendererGetIndexedStreams();
     r->window_mode = MioPan_RendererGetWindowMode();
     /* The requested mode, not the granted one, for the same reason as MSAA:

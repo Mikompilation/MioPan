@@ -57,6 +57,10 @@ struct PerformanceStats
     int resident_texture_replays;
     std::size_t gs_uploads;
     std::size_t gs_upload_bytes;
+    /* Of those, the sends GS memory already held, and the bytes actually
+     * rearranged into GS memory. */
+    std::size_t gs_unchanged;
+    std::size_t gs_written_bytes;
     /* Logical frames in the stats window, to turn the counts above into
      * per-frame figures. */
     int window_frames;

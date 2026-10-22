@@ -1315,7 +1315,7 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 39 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 40 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
@@ -2600,6 +2600,23 @@ void DrawDiagnosticsMenu()
             "did -- the A/B if a texture looks wrong.");
     }
 
+    ImGui::TextDisabled("GS memory");
+    bool gs_by_reference = MioPan_GsGetByReference() != 0;
+    if (ImGui::MenuItem("Keep sent textures by reference", nullptr,
+                        &gs_by_reference))
+    {
+        MioPan_GsSetByReference(gs_by_reference ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Every texture is kept as the bytes the game sent and decoded\n"
+            "from them; the emulated GS memory is written only where\n"
+            "something reads it back, and a send of what is already there\n"
+            "is dropped. Off rearranges every send into GS memory as it\n"
+            "arrives, as the GS did -- the A/B if a menu looks wrong.");
+    }
+
     ImGui::TextDisabled("Characters and items");
     bool indexed_streams = MioPan_RendererGetIndexedStreams() != 0;
     if (ImGui::MenuItem("Send each vertex once", nullptr, &indexed_streams))
@@ -2846,9 +2863,12 @@ void DrawPerformanceDetail(const MioPanProfilerStats &profiler)
                     g_performance_stats.resident_creates);
         /* What still reaches the emulated GS, and the model uploads that no
          * longer do. */
-        ImGui::Text("GS uploads %.1f/frame %.0f KB/frame | model TRI2 skipped %.1f/frame replayed %.1f/frame | bound %d",
+        ImGui::Text("GS uploads %.1f/frame %.0f KB/frame (%.1f unchanged, %.0f KB written) | model TRI2 skipped %.1f/frame replayed %.1f/frame | bound %d",
                     (double)g_performance_stats.gs_uploads / frames,
                     (double)g_performance_stats.gs_upload_bytes / frames /
+                        1024.0,
+                    (double)g_performance_stats.gs_unchanged / frames,
+                    (double)g_performance_stats.gs_written_bytes / frames /
                         1024.0,
                     (double)g_performance_stats.resident_texture_skips /
                         frames,

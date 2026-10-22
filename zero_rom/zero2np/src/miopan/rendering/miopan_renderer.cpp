@@ -1485,6 +1485,8 @@ int g_resident_texture_skips;
 int g_resident_texture_replays;
 uint64_t g_window_gs_uploads;
 uint64_t g_window_gs_upload_bytes;
+uint64_t g_window_gs_unchanged;
+uint64_t g_window_gs_written_bytes;
 /* MioPan_RendererGetFrameIndex(). */
 unsigned long long g_frame_index;
 
@@ -10905,6 +10907,8 @@ void UpdatePerformanceStats(bool presented)
      * zeroed right after this call. */
     g_window_gs_uploads += MioPan_GsGetUploadCountLive();
     g_window_gs_upload_bytes += MioPan_GsGetUploadBytesLive();
+    g_window_gs_unchanged += MioPan_GsGetUnchangedCountLive();
+    g_window_gs_written_bytes += MioPan_GsGetWrittenBytesLive();
 
     if (presented)
     {
@@ -10980,6 +10984,8 @@ void UpdatePerformanceStats(bool presented)
     stats.resident_texture_replays = g_resident_texture_replays;
     stats.gs_uploads = (size_t)g_window_gs_uploads;
     stats.gs_upload_bytes = (size_t)g_window_gs_upload_bytes;
+    stats.gs_unchanged = (size_t)g_window_gs_unchanged;
+    stats.gs_written_bytes = (size_t)g_window_gs_written_bytes;
     stats.window_frames = g_fps_game_frames;
     stats.texture_l1_hits = g_texture_l1_hits;
     stats.texture_l1_lookups = g_texture_l1_lookups;
@@ -11032,6 +11038,8 @@ void UpdatePerformanceStats(bool presented)
     g_resident_texture_replays = 0;
     g_window_gs_uploads = 0;
     g_window_gs_upload_bytes = 0;
+    g_window_gs_unchanged = 0;
+    g_window_gs_written_bytes = 0;
 }
 
 /*

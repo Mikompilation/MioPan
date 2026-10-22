@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <iterator>
+#include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace MioPan::GS
@@ -115,12 +118,17 @@ struct GsFrameMetrics
     /* 64-bit because these run for the whole session: the live totals below
      * are deltaed by the caller, and a 32-bit byte count wraps in under two
      * minutes at the upload rates a busy room sustains. */
-    uint64_t upload_count;
-    uint64_t upload_bytes;
-    double upload_ms;
-    uint64_t download_count;
-    uint64_t download_bytes;
-    double download_ms;
+    uint64_t upload_count = 0;
+    uint64_t upload_bytes = 0;
+    double upload_ms = 0.0;
+    uint64_t download_count = 0;
+    uint64_t download_bytes = 0;
+    double download_ms = 0.0;
+    /* Uploads that found GS memory already holding what they send, and the
+     * bytes actually rearranged into GS memory -- by an eager upload, or by a
+     * by-reference block written out because something read it there. */
+    uint64_t unchanged_count = 0;
+    uint64_t written_bytes = 0;
 };
 
 struct GsUploadRegion
@@ -129,8 +137,8 @@ struct GsUploadRegion
     int size;
 };
 
-static GsFrameMetrics g_gs_frame_metrics = {0, 0, 0.0, 0, 0, 0.0};
-static GsFrameMetrics g_gs_last_frame = {0, 0, 0.0, 0, 0, 0.0};
+static GsFrameMetrics g_gs_frame_metrics;
+static GsFrameMetrics g_gs_last_frame;
 static std::vector<GsUploadRegion> g_pending_uploads;
 static std::vector<unsigned char> g_texture_buffer;
 static bool g_first_upload_done = false;
@@ -1156,11 +1164,1212 @@ bool UploadCoverage::Covers(const sceGsTex0 &tex0) const
 }
 }
 
+/*
+ * GS memory by reference.
+ *
+ * The game sends its textures again and again -- the load menu re-sends its
+ * whole pack before nearly every sprite, 422 transfers and 4.7 MB a frame --
+ * and rearranging each one into the GS's swizzled layout was 90% of that
+ * screen's frame.  Here a transfer is kept as the bytes it sent, and GS memory
+ * is written only where something reads it in a way those bytes cannot answer.
+ *
+ * The unit is the 256-byte block.  A transfer that writes every nibble of a
+ * block owns it: the block's content is that transfer's cell of it, kept with
+ * the transfer, and mem_ is stale there until Materialize() writes it out.  A
+ * block a transfer writes only part of is written at once, after any owner has
+ * been written out under it.  Every block therefore holds exactly what the
+ * eager path would have put there; only where that content lives differs.
+ *
+ * Knowing which transfer last wrote each block buys three things:
+ *  - a transfer whose every block was last written by an identical transfer
+ *    (same bytes, same rectangle) changes nothing, and is dropped without a
+ *    write or a texture invalidation;
+ *  - a texture's identity is the sequence of its blocks' writers, so looking
+ *    one up reads no texels;
+ *  - a texture whose blocks are owned by transfers in its own layout decodes
+ *    straight from what those transfers sent.
+ *
+ * MioPan_GsSetByReference(0) is the A/B: every transfer rearranged into GS
+ * memory as it arrives, and every read from there, as before.
+ */
+namespace
+{
+using MioPan::GS::BlockCell;
+using MioPan::GS::PixelNibbles;
+using MioPan::GS::kGsBlockCount;
+
+/* A transfer's rectangle, or a read's, in one format. */
+struct GsRect
+{
+    int psm;
+    int bp;
+    int bw;
+    int x;
+    int y;
+    int w;
+    int h;
+
+    bool operator==(const GsRect &other) const
+    {
+        return psm == other.psm && bp == other.bp && bw == other.bw &&
+               x == other.x && y == other.y && w == other.w && h == other.h;
+    }
+};
+
+struct GsRectHash
+{
+    size_t operator()(const GsRect &rect) const
+    {
+        return (size_t)HashBytes(&rect, (int)sizeof(rect), 0);
+    }
+};
+
+/* The part of a rectangle that one block holds -- every pixel of an aligned
+ * cell lands in the same block (BlockCell()). */
+struct GsCell
+{
+    int block;          /* -1 past the end of GS memory: never written, reads 0 */
+    uint16_t x0;
+    uint16_t y0;
+    uint16_t x1;
+    uint16_t y1;
+    uint16_t cx;        /* the aligned cell's origin, so a cell can be matched */
+    uint16_t cy;        /* across rectangles of one format, base and width */
+    bool full;          /* writes every nibble of the block */
+};
+
+using GsFootprint = std::vector<GsCell>;
+
+/* Bytes a transfer sent, shared by every transfer that sent the same ones. */
+struct GsContent
+{
+    std::vector<unsigned char> bytes;
+    uint64_t hash = 0;
+    int refs = 0;              /* deferred transfers holding it */
+    uint64_t last_used = 0;    /* g_content_frame it was last sent or let go */
+};
+
+/* A transfer that owns blocks it has not written. */
+struct GsDeferred
+{
+    GsRect rect = {};
+    std::shared_ptr<const GsFootprint> footprint;
+    GsContent *content = nullptr;
+    uint64_t id = 0;
+    int live = 0;              /* blocks it still owns */
+};
+
+struct GsBlock
+{
+    uint64_t writer;           /* id of the last transfer to write any of it */
+    int cell;                  /* the cell of that transfer's footprint */
+    int owner;                 /* g_deferred index holding it; -1: mem_ does */
+    bool full;                 /* that transfer wrote every nibble of it */
+};
+
+/* Footprints are kept per rectangle: a pack re-sent every frame sends the same
+ * few dozen, and building one costs a swizzle lookup per cell. */
+constexpr size_t kFootprintCellLimit = 1u << 20;
+/* Sent bytes nothing owns any more stay this long, so content that comes and
+ * goes -- two packs taking turns in one VRAM range -- is not copied again. */
+constexpr size_t kIdleContentBudget = 32u << 20;
+constexpr uint64_t kOutOfRangeToken = 0x6a09e667f3bcc909ull;
+
+bool g_by_reference = true;
+std::vector<GsBlock> g_blocks((size_t)kGsBlockCount, GsBlock{0, 0, -1, false});
+std::vector<GsDeferred> g_deferred;
+std::vector<int> g_deferred_free;
+std::unordered_map<uint64_t, int> g_deferred_by_id;
+std::unordered_map<GsRect, std::shared_ptr<const GsFootprint>, GsRectHash>
+    g_footprints;
+size_t g_footprint_cells = 0;
+std::unordered_map<uint64_t, std::unique_ptr<GsContent>> g_contents;
+/* The content a source address held the last time it was sent, so a re-send
+ * from the same buffer costs a memcmp rather than a hash. */
+struct GsSourceHint
+{
+    uint64_t key;
+    int size;
+};
+std::unordered_map<const unsigned char *, GsSourceHint> g_source_hints;
+uint64_t g_content_frame = 0;
+
+std::shared_ptr<const GsFootprint> FootprintOf(const GsRect &rect)
+{
+    const auto found = g_footprints.find(rect);
+    if (found != g_footprints.end())
+    {
+        return found->second;
+    }
+
+    int cw;
+    int ch;
+    bool fills;
+    if (rect.w <= 0 || rect.h <= 0 || !BlockCell(rect.psm, &cw, &ch, &fills))
+    {
+        return nullptr;
+    }
+
+    auto footprint = std::make_shared<GsFootprint>();
+    footprint->reserve((size_t)((rect.w + cw - 1) / cw + 1) *
+                       (size_t)((rect.h + ch - 1) / ch + 1));
+    for (int cy = rect.y - rect.y % ch; cy < rect.y + rect.h; cy += ch)
+    {
+        for (int cx = rect.x - rect.x % cw; cx < rect.x + rect.w; cx += cw)
+        {
+            GsCell cell;
+            const int x0 = std::max(cx, rect.x);
+            const int x1 = std::min(cx + cw, rect.x + rect.w);
+            const int y0 = std::max(cy, rect.y);
+            const int y1 = std::min(cy + ch, rect.y + rect.h);
+            int first = 0;
+            PixelNibbles(rect.psm, rect.bp, rect.bw, x0, y0, &first);
+            cell.block = first >> 9;
+            if (cell.block < 0 || cell.block >= kGsBlockCount)
+            {
+                cell.block = -1;
+            }
+            cell.x0 = (uint16_t)x0;
+            cell.y0 = (uint16_t)y0;
+            cell.x1 = (uint16_t)x1;
+            cell.y1 = (uint16_t)y1;
+            cell.cx = (uint16_t)cx;
+            cell.cy = (uint16_t)cy;
+            cell.full = fills && x0 == cx && y0 == cy && x1 == cx + cw &&
+                        y1 == cy + ch;
+            footprint->push_back(cell);
+        }
+    }
+
+    /* Deferred transfers hold their footprints themselves, so dropping the
+     * cache costs only rebuilding what is still sent. */
+    if (g_footprint_cells + footprint->size() > kFootprintCellLimit)
+    {
+        g_footprints.clear();
+        g_footprint_cells = 0;
+    }
+    g_footprint_cells += footprint->size();
+    g_footprints.emplace(rect, footprint);
+    return footprint;
+}
+
+/* Rearrange part of a transfer into GS memory exactly as the eager
+ * GSHelper::Upload* do: pixel (x, y) is the transfer's pixel
+ * (x - rect.x, y - rect.y), counted row by row from its first.  One loop per
+ * format, so the format is not re-decided for every pixel. */
+void WriteRect(const GsRect &rect, const unsigned char *src, int x0, int y0,
+               int x1, int y1)
+{
+    const int bp = rect.bp;
+    const int bw = rect.bw;
+    const int psm = rect.psm;
+    for (int y = y0; y < y1; ++y)
+    {
+        const int first = (y - rect.y) * rect.w + (x0 - rect.x);
+        switch ((MioPan::GS::PixelStorageFormat)psm)
+        {
+            case PSMZ32:
+            case PSMCT32:
+            {
+                const unsigned char *p = src + (size_t)first * 4;
+                for (int x = x0; x < x1; ++x, p += 4)
+                {
+                    const int addr = GetPixelAddressPSMCT32(bp, bw, x, y);
+                    WriteGsByte(addr + 0, p[0]);
+                    WriteGsByte(addr + 1, p[1]);
+                    WriteGsByte(addr + 2, p[2]);
+                    WriteGsByte(addr + 3, p[3]);
+                }
+                break;
+            }
+            case PSMZ24:
+            case PSMCT24:
+            {
+                const unsigned char *p = src + (size_t)first * 3;
+                for (int x = x0; x < x1; ++x, p += 3)
+                {
+                    const int addr = GetPixelAddressPSMCT32(bp, bw, x, y);
+                    WriteGsByte(addr + 0, p[0]);
+                    WriteGsByte(addr + 1, p[1]);
+                    WriteGsByte(addr + 2, p[2]);
+                }
+                break;
+            }
+            case PSMZ16:
+            case PSMZ16S:
+            case PSMCT16:
+            case PSMCT16S:
+            {
+                const unsigned char *p = src + (size_t)first * 2;
+                for (int x = x0; x < x1; ++x, p += 2)
+                {
+                    const int addr = GetPixelAddressPSMCT16(bp, bw, x, y);
+                    WriteGsByte(addr + 0, p[0]);
+                    WriteGsByte(addr + 1, p[1]);
+                }
+                break;
+            }
+            case PSMT8:
+            {
+                const unsigned char *p = src + first;
+                for (int x = x0; x < x1; ++x, ++p)
+                {
+                    WriteGsByte(GetPixelAddressPSMT8(bp, bw, x, y), *p);
+                }
+                break;
+            }
+            case PSMT8H:
+            {
+                const unsigned char *p = src + first;
+                for (int x = x0; x < x1; ++x, ++p)
+                {
+                    WriteGsByte(GetPixelAddressPSMCT32(bp, bw, x, y) + 3, *p);
+                }
+                break;
+            }
+            case PSMT4:
+            {
+                int i = first;
+                for (int x = x0; x < x1; ++x, ++i)
+                {
+                    const int nibble = (src[i >> 1] >> ((i & 1) << 2)) & 0x0f;
+                    const int addr = GetPixelAddressPSMT4(bp, bw, x, y);
+                    const int shift = (addr & 1) << 2;
+                    const unsigned char old = ReadGsByte(addr >> 1);
+                    WriteGsByte(addr >> 1, (unsigned char)((nibble << shift) |
+                                                           (old & (0xf0 >> shift))));
+                }
+                break;
+            }
+            case PSMT4HL:
+            case PSMT4HH:
+            {
+                const bool low = psm == PSMT4HL;
+                int i = first;
+                for (int x = x0; x < x1; ++x, ++i)
+                {
+                    const int nibble = (src[i >> 1] >> ((i & 1) << 2)) & 0x0f;
+                    const int p32 = GetPixelAddressPSMCT32(bp, bw, x, y) + 3;
+                    const unsigned char old = ReadGsByte(p32);
+                    WriteGsByte(p32, low ? (unsigned char)((old & 0xf0) | nibble)
+                                         : (unsigned char)((old & 0x0f) |
+                                                           (nibble << 4)));
+                }
+                break;
+            }
+            default:
+                return;
+        }
+    }
+    g_gs_frame_metrics.written_bytes +=
+        (uint64_t)TextureByteSize(psm, x1 - x0, y1 - y0);
+}
+
+void Release(int index)
+{
+    GsDeferred &deferred = g_deferred[(size_t)index];
+    if (--deferred.live > 0)
+    {
+        return;
+    }
+    deferred.content->refs--;
+    deferred.content->last_used = g_content_frame;
+    g_deferred_by_id.erase(deferred.id);
+    deferred.footprint.reset();
+    deferred.content = nullptr;
+    g_deferred_free.push_back(index);
+}
+
+/* Where each pixel of an aligned cell lands inside its block, for the formats
+ * whose cell fills one: a byte offset, or a nibble offset for 4-bit.  Every
+ * block has the same inner layout, so this is read once off the address
+ * functions at block 0. */
+struct GsCellLayout
+{
+    int cw = 0;
+    int ch = 0;
+    int bytes_per_pixel = 0;   /* 0: 4-bit, offsets are nibbles */
+    std::vector<uint16_t> offset;
+};
+
+bool BuildCellLayout(GsCellLayout &layout, int cw, int ch, int bytes_per_pixel,
+                     int (*address)(int, int, int, int), int limit)
+{
+    layout.cw = cw;
+    layout.ch = ch;
+    layout.bytes_per_pixel = bytes_per_pixel;
+    layout.offset.resize((size_t)cw * (size_t)ch);
+    for (int y = 0; y < ch; y++)
+    {
+        for (int x = 0; x < cw; x++)
+        {
+            const int offset = address(0, 1, x, y);
+            if (offset < 0 || offset + std::max(bytes_per_pixel, 1) > limit)
+            {
+                return false;
+            }
+            layout.offset[(size_t)(y * cw + x)] = (uint16_t)offset;
+        }
+    }
+    return true;
+}
+
+const GsCellLayout *CellLayoutOf(int psm)
+{
+    static GsCellLayout ct32;
+    static GsCellLayout ct16;
+    static GsCellLayout t8;
+    static GsCellLayout t4;
+    static bool ok32 = BuildCellLayout(ct32, 8, 8, 4, GetPixelAddressPSMCT32, 256);
+    static bool ok16 = BuildCellLayout(ct16, 16, 8, 2, GetPixelAddressPSMCT16, 256);
+    static bool ok8 = BuildCellLayout(t8, 16, 16, 1, GetPixelAddressPSMT8, 256);
+    static bool ok4 = BuildCellLayout(t4, 32, 16, 0, GetPixelAddressPSMT4, 512);
+    switch ((MioPan::GS::PixelStorageFormat)psm)
+    {
+        case PSMZ32:
+        case PSMCT32:
+            return ok32 ? &ct32 : nullptr;
+        case PSMZ16:
+        case PSMZ16S:
+        case PSMCT16:
+        case PSMCT16S:
+            return ok16 ? &ct16 : nullptr;
+        case PSMT8:
+            return ok8 ? &t8 : nullptr;
+        case PSMT4:
+            return ok4 ? &t4 : nullptr;
+        default:
+            return nullptr;
+    }
+}
+
+/* A whole owned cell written into its block through CellLayoutOf() -- what
+ * WriteRect() does, without an address computation per pixel. */
+bool WriteCellFast(const GsDeferred &deferred, const GsCell &cell, int block)
+{
+    const GsCellLayout *layout = CellLayoutOf(deferred.rect.psm);
+    if (layout == nullptr || !cell.full)
+    {
+        return false;
+    }
+    unsigned char *dst = MioPan::GS::gsHelper.mem_.data() + (size_t)block * 256;
+    const unsigned char *src = deferred.content->bytes.data();
+    const GsRect &rect = deferred.rect;
+    const int cw = layout->cw;
+    for (int py = 0; py < layout->ch; py++)
+    {
+        const int first = (cell.cy + py - rect.y) * rect.w + (cell.cx - rect.x);
+        const uint16_t *offset = layout->offset.data() + (size_t)py * (size_t)cw;
+        switch (layout->bytes_per_pixel)
+        {
+            case 4:
+            {
+                const unsigned char *p = src + (size_t)first * 4;
+                for (int px = 0; px < cw; px++, p += 4)
+                {
+                    unsigned char *d = dst + offset[px];
+                    d[0] = p[0];
+                    d[1] = p[1];
+                    d[2] = p[2];
+                    d[3] = p[3];
+                }
+                break;
+            }
+            case 2:
+            {
+                const unsigned char *p = src + (size_t)first * 2;
+                for (int px = 0; px < cw; px++, p += 2)
+                {
+                    unsigned char *d = dst + offset[px];
+                    d[0] = p[0];
+                    d[1] = p[1];
+                }
+                break;
+            }
+            case 1:
+            {
+                const unsigned char *p = src + first;
+                for (int px = 0; px < cw; px++)
+                {
+                    dst[offset[px]] = p[px];
+                }
+                break;
+            }
+            default:
+                for (int px = 0; px < cw; px++)
+                {
+                    const int i = first + px;
+                    const int nibble = (src[i >> 1] >> ((i & 1) << 2)) & 0x0f;
+                    const int at = offset[px];
+                    const int shift = (at & 1) << 2;
+                    unsigned char &d = dst[at >> 1];
+                    d = (unsigned char)((nibble << shift) | (d & (0xf0 >> shift)));
+                }
+                break;
+        }
+    }
+    g_gs_frame_metrics.written_bytes += 256;
+    return true;
+}
+
+/* Write an owned block's content out to mem_ and let its owner go. */
+void Materialize(int block)
+{
+    GsBlock &state = g_blocks[(size_t)block];
+    if (state.owner < 0)
+    {
+        return;
+    }
+    const int index = state.owner;
+    const GsDeferred &deferred = g_deferred[(size_t)index];
+    const GsCell &cell = (*deferred.footprint)[(size_t)state.cell];
+    if (!WriteCellFast(deferred, cell, block))
+    {
+        WriteRect(deferred.rect, deferred.content->bytes.data(), cell.x0,
+                  cell.y0, cell.x1, cell.y1);
+    }
+    state.owner = -1;
+    Release(index);
+}
+
+void MaterializeRect(const GsRect &rect)
+{
+    const auto footprint = FootprintOf(rect);
+    if (footprint == nullptr)
+    {
+        return;
+    }
+    for (const GsCell &cell : *footprint)
+    {
+        if (cell.block >= 0)
+        {
+            Materialize(cell.block);
+        }
+    }
+}
+
+void MaterializeAll()
+{
+    for (int block = 0; block < kGsBlockCount; block++)
+    {
+        Materialize(block);
+    }
+}
+
+/* Forget every writer: what mem_ holds is all there is.  For a mode switch
+ * (after MaterializeAll()) and for a cleared GS. */
+void ForgetWriters()
+{
+    for (GsBlock &state : g_blocks)
+    {
+        state = GsBlock{0, 0, -1, false};
+    }
+    g_deferred.clear();
+    g_deferred_free.clear();
+    g_deferred_by_id.clear();
+    for (auto &entry : g_contents)
+    {
+        entry.second->refs = 0;
+    }
+}
+
+uint64_t ContentKey(uint64_t hash, int size)
+{
+    return hash ^ ((uint64_t)(uint32_t)size * 0x9e3779b97f4a7c15ull);
+}
+
+GsContent *ContentOf(const unsigned char *image, int size)
+{
+    const auto hint = g_source_hints.find(image);
+    if (hint != g_source_hints.end() && hint->second.size == size)
+    {
+        const auto found = g_contents.find(hint->second.key);
+        if (found != g_contents.end() &&
+            std::memcmp(found->second->bytes.data(), image, (size_t)size) == 0)
+        {
+            found->second->last_used = g_content_frame;
+            return found->second.get();
+        }
+    }
+
+    const uint64_t hash = HashBytes(image, size, 0);
+    uint64_t key = ContentKey(hash, size);
+    /* A different content under the key is a 64-bit collision; step past it
+     * rather than share bytes that differ. */
+    for (;;)
+    {
+        const auto found = g_contents.find(key);
+        if (found == g_contents.end())
+        {
+            auto content = std::make_unique<GsContent>();
+            content->bytes.assign(image, image + size);
+            content->hash = hash;
+            content->last_used = g_content_frame;
+            GsContent *result = content.get();
+            g_contents.emplace(key, std::move(content));
+            g_source_hints[image] = {key, size};
+            return result;
+        }
+        if (found->second->bytes.size() == (size_t)size &&
+            std::memcmp(found->second->bytes.data(), image, (size_t)size) == 0)
+        {
+            found->second->last_used = g_content_frame;
+            g_source_hints[image] = {key, size};
+            return found->second.get();
+        }
+        key++;
+    }
+}
+
+/* Once a frame: drop the longest-idle content past the budget, and the hints
+ * that named it. */
+void TrimContent()
+{
+    g_content_frame++;
+
+    /* Hints only save a hash; a game that sends from ever-new addresses just
+     * starts them over. */
+    if (g_source_hints.size() >= 16384)
+    {
+        g_source_hints.clear();
+    }
+
+    size_t idle = 0;
+    for (const auto &entry : g_contents)
+    {
+        if (entry.second->refs == 0)
+        {
+            idle += entry.second->bytes.size();
+        }
+    }
+    if (idle <= kIdleContentBudget)
+    {
+        return;
+    }
+
+    std::vector<std::pair<uint64_t, uint64_t>> by_age;
+    for (const auto &entry : g_contents)
+    {
+        if (entry.second->refs == 0)
+        {
+            by_age.emplace_back(entry.second->last_used, entry.first);
+        }
+    }
+    std::sort(by_age.begin(), by_age.end());
+    for (const auto &aged : by_age)
+    {
+        if (idle <= kIdleContentBudget / 2)
+        {
+            break;
+        }
+        const auto found = g_contents.find(aged.second);
+        idle -= found->second->bytes.size();
+        g_contents.erase(found);
+    }
+    for (auto it = g_source_hints.begin(); it != g_source_hints.end();)
+    {
+        it = g_contents.count(it->second.key) == 0 ? g_source_hints.erase(it)
+                                                   : std::next(it);
+    }
+}
+
+int DeferredFor(uint64_t id, const GsRect &rect,
+                const std::shared_ptr<const GsFootprint> &footprint,
+                GsContent *content)
+{
+    const auto found = g_deferred_by_id.find(id);
+    if (found != g_deferred_by_id.end())
+    {
+        return found->second;
+    }
+    int index;
+    if (!g_deferred_free.empty())
+    {
+        index = g_deferred_free.back();
+        g_deferred_free.pop_back();
+    }
+    else
+    {
+        index = (int)g_deferred.size();
+        g_deferred.emplace_back();
+    }
+    GsDeferred &deferred = g_deferred[(size_t)index];
+    deferred.rect = rect;
+    deferred.footprint = footprint;
+    deferred.content = content;
+    deferred.id = id;
+    deferred.live = 0;
+    content->refs++;
+    g_deferred_by_id.emplace(id, index);
+    return index;
+}
+
+/* MioPan_GsStore() from GS memory as it stands. */
+void StoreFromGs(unsigned char *out, int spsm, int sbp, int sbw, int x, int y,
+                 int w, int h)
+{
+    switch ((MioPan::GS::PixelStorageFormat)spsm)
+    {
+        case PSMZ32:
+        case PSMCT32:
+            MioPan::GS::gsHelper.DownloadPSMCT32(out, sbp, sbw, x, y, w, h);
+            break;
+        case PSMZ24:
+        case PSMCT24:
+            MioPan::GS::gsHelper.StorePSMCT24(out, sbp, sbw, x, y, w, h);
+            break;
+        case PSMZ16:
+        case PSMZ16S:
+        case PSMCT16:
+        case PSMCT16S:
+            MioPan::GS::gsHelper.StorePSMCT16(out, sbp, sbw, x, y, w, h);
+            break;
+        case PSMT8:
+        case PSMT8H:
+            MioPan::GS::gsHelper.StorePSMT8(out, sbp, sbw, x, y, w, h);
+            break;
+        case PSMT4:
+        case PSMT4HL:
+        case PSMT4HH:
+            MioPan::GS::gsHelper.StorePSMT4(out, sbp, sbw, x, y, w, h);
+            break;
+        default:
+        {
+            const int size = TextureByteSize(spsm, w, h);
+            if (size > 0)
+            {
+                std::memset(out, 0, (size_t)size);
+            }
+            break;
+        }
+    }
+}
+
+/* MioPan_GsUpload() as the GS did it: rearranged into GS memory at once. */
+void UploadEager(const sceGsLoadImage &load, const unsigned char *image)
+{
+    switch ((MioPan::GS::PixelStorageFormat)load.bitbltbuf.DPSM)
+    {
+        case PSMZ32:
+        case PSMCT32:
+            MioPan::GS::gsHelper.UploadPSMCT32(
+                load.bitbltbuf.DBP, load.bitbltbuf.DBW,
+                load.trxpos.DSAX, load.trxpos.DSAY,
+                (int)load.trxreg.RRW, (int)load.trxreg.RRH, image);
+            break;
+        case PSMZ24:
+        case PSMCT24:
+            MioPan::GS::gsHelper.UploadPSMCT24(
+                load.bitbltbuf.DBP, load.bitbltbuf.DBW,
+                load.trxpos.DSAX, load.trxpos.DSAY,
+                (int)load.trxreg.RRW, (int)load.trxreg.RRH, image);
+            break;
+        case PSMZ16:
+        case PSMZ16S:
+        case PSMCT16:
+        case PSMCT16S:
+            MioPan::GS::gsHelper.UploadPSMCT16(
+                load.bitbltbuf.DBP, load.bitbltbuf.DBW,
+                load.trxpos.DSAX, load.trxpos.DSAY,
+                (int)load.trxreg.RRW, (int)load.trxreg.RRH, image);
+            break;
+        case PSMT4:
+        case PSMT4HL:
+        case PSMT4HH:
+            MioPan::GS::gsHelper.UploadPSMT4(
+                load.bitbltbuf.DBP, load.bitbltbuf.DBW,
+                load.trxpos.DSAX, load.trxpos.DSAY,
+                (int)load.trxreg.RRW, (int)load.trxreg.RRH, image,
+                (int)load.bitbltbuf.DPSM);
+            break;
+        case PSMT8:
+        case PSMT8H:
+            MioPan::GS::gsHelper.UploadPSMT8(
+                load.bitbltbuf.DBP, load.bitbltbuf.DBW,
+                load.trxpos.DSAX, load.trxpos.DSAY,
+                (int)load.trxreg.RRW, (int)load.trxreg.RRH, image,
+                (int)load.bitbltbuf.DPSM);
+            break;
+        default:
+            break;
+    }
+}
+
+/* MioPan_GsUpload() by reference.  Returns whether GS memory changed. */
+bool UploadByReference(const sceGsLoadImage &load, const unsigned char *image)
+{
+    const GsRect rect = {(int)load.bitbltbuf.DPSM, (int)load.bitbltbuf.DBP,
+                         (int)load.bitbltbuf.DBW,  (int)load.trxpos.DSAX,
+                         (int)load.trxpos.DSAY,    (int)load.trxreg.RRW,
+                         (int)load.trxreg.RRH};
+    const int size = TextureByteSize(rect.psm, rect.w, rect.h);
+    const auto footprint = size > 0 ? FootprintOf(rect) : nullptr;
+    if (footprint == nullptr)
+    {
+        /* A format the eager path writes nothing for either. */
+        return false;
+    }
+
+    GsContent *content = ContentOf(image, size);
+    uint64_t id = HashBytes(&rect, (int)sizeof(rect), content->hash);
+    id = id != 0 ? id : 1;
+
+    /* Raw pointers: these loops run per block of every transfer, and an
+     * unoptimised build does not inline vector indexing. */
+    GsBlock *blocks = g_blocks.data();
+    const GsCell *cells = footprint->data();
+    const int count = (int)footprint->size();
+
+    bool unchanged = true;
+    for (int i = 0; i < count && unchanged; i++)
+    {
+        if (cells[i].block >= 0)
+        {
+            const GsBlock &state = blocks[cells[i].block];
+            unchanged = state.writer == id && state.cell == i;
+        }
+    }
+    if (unchanged)
+    {
+        g_gs_frame_metrics.unchanged_count++;
+        return false;
+    }
+
+    int owner = -1;
+    for (int i = 0; i < count; i++)
+    {
+        const GsCell &cell = cells[i];
+        if (cell.block < 0)
+        {
+            continue;
+        }
+        GsBlock &state = blocks[cell.block];
+        if (cell.full)
+        {
+            if (owner < 0)
+            {
+                owner = DeferredFor(id, rect, footprint, content);
+            }
+            if (state.owner != owner)
+            {
+                if (state.owner >= 0)
+                {
+                    Release(state.owner);
+                }
+                state.owner = owner;
+                g_deferred[(size_t)owner].live++;
+            }
+        }
+        else
+        {
+            Materialize(cell.block);
+            WriteRect(rect, image, cell.x0, cell.y0, cell.x1, cell.y1);
+        }
+        state.writer = id;
+        state.cell = i;
+        state.full = cell.full;
+    }
+    return true;
+}
+
+/* What a block holds, as a token: who wrote all of it, or its bytes when no
+ * one transfer did. */
+uint64_t BlockToken(int block)
+{
+    if (block < 0)
+    {
+        return kOutOfRangeToken;
+    }
+    const GsBlock &state = g_blocks[(size_t)block];
+    if (state.full)
+    {
+        const uint64_t writer[2] = {state.writer, (uint64_t)(uint32_t)state.cell};
+        return HashBytes(writer, (int)sizeof(writer), 0);
+    }
+    /* Not owned -- only a full write is deferred -- so mem_ is current. */
+    return HashBytes(&MioPan::GS::gsHelper.mem_[(size_t)block * 256], 256,
+                     kOutOfRangeToken);
+}
+
+bool IsIndexedPsm(int psm)
+{
+    return psm == PSMT8 || psm == PSMT8H || psm == PSMT4 || psm == PSMT4HL ||
+           psm == PSMT4HH;
+}
+
+/* The CLUT entries a decode of this TEX0 reads: all 256 for 8-bit, the
+ * CSA-selected 8x2 for 4-bit -- as the palette loops below address them. */
+GsRect ClutRect(const sceGsTex0 *tex0)
+{
+    const int cbw = GetTex0BufferWidth(tex0);
+    if (tex0->PSM == PSMT8 || tex0->PSM == PSMT8H)
+    {
+        return {PSMCT32, (int)tex0->CBP, cbw, 0, 0, 16, 16};
+    }
+    return {PSMCT32, (int)tex0->CBP, cbw, ((int)tex0->CSA & 1) << 3,
+            (int)tex0->CSA & 0x0e, 8, 2};
+}
+
+GsRect TextureRect(const sceGsTex0 *tex0)
+{
+    return {(int)tex0->PSM, (int)tex0->TBP0, (int)tex0->TBW, 0, 0,
+            1 << tex0->TW, 1 << tex0->TH};
+}
+
+void AppendTokens(const GsRect &rect, std::vector<uint64_t> &tokens)
+{
+    const auto footprint = FootprintOf(rect);
+    if (footprint == nullptr)
+    {
+        return;
+    }
+    const size_t start = tokens.size();
+    tokens.resize(start + footprint->size());
+    uint64_t *out = tokens.data() + start;
+    for (const GsCell &cell : *footprint)
+    {
+        *out++ = BlockToken(cell.block);
+    }
+}
+
+/* MioPan_GetTextureHash() by reference: the TEX0 and the tokens of every
+ * block its texels and CLUT occupy.  Equal identities mean equal decodes. */
+uint64_t TextureIdentity(const sceGsTex0 *tex0)
+{
+    static std::vector<uint64_t> tokens;
+    tokens.clear();
+    AppendTokens(TextureRect(tex0), tokens);
+    if (IsIndexedPsm((int)tex0->PSM))
+    {
+        AppendTokens(ClutRect(tex0), tokens);
+    }
+    uint64_t tex0_value = 0;
+    std::memcpy(&tex0_value, tex0, sizeof(tex0_value));
+    tokens.push_back(tex0_value);
+    const uint64_t hash =
+        HashBytes(tokens.data(), (int)(tokens.size() * sizeof(uint64_t)), 0);
+    return hash != 0 ? hash : 1;
+}
+
+/* The palette DownloadImagePSMT8/4 resolve, from mem_ -- the caller writes
+ * the CLUT's blocks out first. */
+void ResolvePalette(const sceGsTex0 *tex0, unsigned char (*palette)[4])
+{
+    const int cbp = (int)tex0->CBP;
+    const int cbw = GetTex0BufferWidth(tex0);
+    const bool eight = tex0->PSM == PSMT8 || tex0->PSM == PSMT8H;
+    const int count = eight ? 256 : 16;
+    const int csa = (int)tex0->CSA;
+    for (int i = 0; i < count; i++)
+    {
+        int cx;
+        int cy;
+        if (eight)
+        {
+            cy = (i & 0xe0) >> 4;
+            cx = i & 0x07;
+            if (i & 0x08)
+            {
+                cy++;
+            }
+            if (i & 0x10)
+            {
+                cx += 8;
+            }
+        }
+        else
+        {
+            cy = ((i >> 3) & 1) + (csa & 0x0e);
+            cx = (i & 0x07) + ((csa & 1) << 3);
+        }
+        const int p = GetPixelAddressPSMCT32(cbp, cbw, cx, cy);
+        palette[i][0] = ReadGsByte(p + 0);
+        palette[i][1] = ReadGsByte(p + 1);
+        palette[i][2] = ReadGsByte(p + 2);
+        palette[i][3] = ReadGsByte(p + 3);
+    }
+}
+
+/* One row of texels from GS memory, as the eager decoders read them. */
+void DecodeGsRow(const sceGsTex0 *tex0, int y, int x0, int x1,
+                 const unsigned char (*palette)[4], unsigned char *out)
+{
+    const int tbp = (int)tex0->TBP0;
+    const int tbw = (int)tex0->TBW;
+    switch ((MioPan::GS::PixelStorageFormat)tex0->PSM)
+    {
+        case PSMCT32:
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                const int addr = GetPixelAddressPSMCT32(tbp, tbw, x, y);
+                out[0] = ReadGsByte(addr + 0);
+                out[1] = ReadGsByte(addr + 1);
+                out[2] = ReadGsByte(addr + 2);
+                out[3] = ReadGsByte(addr + 3);
+            }
+            break;
+        case PSMCT24:
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                const int addr = GetPixelAddressPSMCT32(tbp, tbw, x, y);
+                out[0] = ReadGsByte(addr + 0);
+                out[1] = ReadGsByte(addr + 1);
+                out[2] = ReadGsByte(addr + 2);
+                /* PSMCT24 has no stored alpha component.  TEXA supplies TA0
+                 * on the GS; use the normal opaque value here until the
+                 * shared draw-environment register is host-tracked. */
+                out[3] = 0x80;
+            }
+            break;
+        case PSMCT16:
+        case PSMCT16S:
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                const int addr = GetPixelAddressPSMCT16(tbp, tbw, x, y);
+                MioPan::GS::ExpandPSMCT16Pixel(
+                    (uint16_t)(ReadGsByte(addr + 0) | (ReadGsByte(addr + 1) << 8)),
+                    out);
+            }
+            break;
+        case PSMT4:
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                const int addr = GetPixelAddressPSMT4(tbp, tbw, x, y);
+                std::memcpy(out,
+                            palette[(ReadGsByte(addr >> 1) >> ((addr & 1) << 2)) &
+                                    0x0f],
+                            4);
+            }
+            break;
+        case PSMT4HL:
+        case PSMT4HH:
+        {
+            const int shift = tex0->PSM == PSMT4HL ? 0 : 4;
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                const int byte =
+                    ReadGsByte(GetPixelAddressPSMCT32(tbp, tbw, x, y) + 3);
+                std::memcpy(out, palette[(byte >> shift) & 0x0f], 4);
+            }
+            break;
+        }
+        case PSMT8:
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                std::memcpy(out,
+                            palette[ReadGsByte(GetPixelAddressPSMT8(tbp, tbw, x, y))],
+                            4);
+            }
+            break;
+        case PSMT8H:
+            for (int x = x0; x < x1; x++, out += 4)
+            {
+                std::memcpy(
+                    out,
+                    palette[ReadGsByte(GetPixelAddressPSMCT32(tbp, tbw, x, y) + 3)],
+                    4);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/* The same row from the bytes a transfer sent: `i` is its pixel index. */
+void DecodeSourceRow(int psm, const unsigned char *src, int i, int count,
+                     const unsigned char (*palette)[4], unsigned char *out)
+{
+    switch ((MioPan::GS::PixelStorageFormat)psm)
+    {
+        case PSMCT32:
+            std::memcpy(out, src + (size_t)i * 4, (size_t)count * 4);
+            break;
+        case PSMCT24:
+            for (int k = 0; k < count; k++, out += 4)
+            {
+                const unsigned char *p = src + (size_t)(i + k) * 3;
+                out[0] = p[0];
+                out[1] = p[1];
+                out[2] = p[2];
+                out[3] = 0x80;
+            }
+            break;
+        case PSMCT16:
+        case PSMCT16S:
+            for (int k = 0; k < count; k++, out += 4)
+            {
+                const unsigned char *p = src + (size_t)(i + k) * 2;
+                MioPan::GS::ExpandPSMCT16Pixel((uint16_t)(p[0] | (p[1] << 8)), out);
+            }
+            break;
+        case PSMT8:
+            for (int k = 0; k < count; k++, out += 4)
+            {
+                std::memcpy(out, palette[src[i + k]], 4);
+            }
+            break;
+        case PSMT4:
+            for (int k = 0; k < count; k++, out += 4)
+            {
+                const int n = i + k;
+                std::memcpy(out, palette[(src[n >> 1] >> ((n & 1) << 2)) & 0x0f], 4);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/* The transfer a texture cell can be read from directly: the block's owner,
+ * sent in the texture's own format, base and width, holding this very cell.
+ * Its pixel (x - rect.x, y - rect.y) is then the texel at (x, y). */
+const GsDeferred *DirectSource(const GsCell &cell, const sceGsTex0 *tex0)
+{
+    if (cell.block < 0)
+    {
+        return nullptr;
+    }
+    const GsBlock &state = g_blocks[(size_t)cell.block];
+    if (state.owner < 0)
+    {
+        return nullptr;
+    }
+    const GsDeferred &deferred = g_deferred[(size_t)state.owner];
+    if (deferred.rect.psm != (int)tex0->PSM || deferred.rect.bp != (int)tex0->TBP0 ||
+        deferred.rect.bw != (int)tex0->TBW)
+    {
+        return nullptr;
+    }
+    const GsCell &owned = (*deferred.footprint)[(size_t)state.cell];
+    return owned.cx == cell.cx && owned.cy == cell.cy ? &deferred : nullptr;
+}
+
+bool IsDecodablePsm(int psm)
+{
+    return psm == PSMCT32 || psm == PSMCT24 || psm == PSMCT16 ||
+           psm == PSMCT16S || IsIndexedPsm(psm);
+}
+
+/* MioPan_GsDownloadTexture()'s texels by reference, before the alpha fix-up:
+ * cell by cell, from the sending transfer where DirectSource() finds one and
+ * from GS memory -- written out first -- where it does not. */
+bool DecodeEager(const sceGsTex0 *tex0, int width, int height,
+                 unsigned char *out);
+
+bool DecodeByReference(const sceGsTex0 *tex0, int width, int height,
+                       unsigned char *out)
+{
+    const int psm = (int)tex0->PSM;
+    if (!IsDecodablePsm(psm))
+    {
+        return false;
+    }
+    unsigned char palette[256][4] = {};
+    if (IsIndexedPsm(psm))
+    {
+        MaterializeRect(ClutRect(tex0));
+        ResolvePalette(tex0, palette);
+    }
+    const auto footprint = FootprintOf({psm, (int)tex0->TBP0, (int)tex0->TBW, 0, 0,
+                                        width, height});
+    if (footprint == nullptr)
+    {
+        return false;
+    }
+    /* Nothing to read directly -- a bank sent as one raw 32-bit rectangle and
+     * read back as 8-bit textures is the usual case -- so write its blocks out
+     * and decode the whole texture the eager way, row by row. */
+    bool any_direct = false;
+    for (const GsCell &cell : *footprint)
+    {
+        if (DirectSource(cell, tex0) != nullptr)
+        {
+            any_direct = true;
+            break;
+        }
+    }
+    if (!any_direct)
+    {
+        for (const GsCell &cell : *footprint)
+        {
+            if (cell.block >= 0)
+            {
+                Materialize(cell.block);
+            }
+        }
+        return DecodeEager(tex0, width, height, out);
+    }
+    for (const GsCell &cell : *footprint)
+    {
+        const GsDeferred *direct = DirectSource(cell, tex0);
+        if (direct == nullptr && cell.block >= 0)
+        {
+            Materialize(cell.block);
+        }
+        for (int y = cell.y0; y < cell.y1; y++)
+        {
+            unsigned char *row = out + ((size_t)y * (size_t)width + cell.x0) * 4;
+            if (direct != nullptr)
+            {
+                const int i = (y - direct->rect.y) * direct->rect.w +
+                              (cell.x0 - direct->rect.x);
+                DecodeSourceRow(psm, direct->content->bytes.data(), i,
+                                cell.x1 - cell.x0, palette, row);
+            }
+            else
+            {
+                DecodeGsRow(tex0, y, cell.x0, cell.x1, palette, row);
+            }
+        }
+    }
+    return true;
+}
+
+/* The eager decoders, reading GS memory as it stands. */
+bool DecodeEager(const sceGsTex0 *tex0, int width, int height,
+                 unsigned char *out)
+{
+    switch ((MioPan::GS::PixelStorageFormat)tex0->PSM)
+    {
+        case PSMCT32:
+            MioPan::GS::gsHelper.DownloadPSMCT32(out, tex0->TBP0, tex0->TBW, 0, 0,
+                                                 width, height);
+            return true;
+        case PSMCT24:
+        case PSMCT16:
+        case PSMCT16S:
+            for (int y = 0; y < height; y++)
+            {
+                DecodeGsRow(tex0, y, 0, width, nullptr,
+                            out + (size_t)y * (size_t)width * 4);
+            }
+            return true;
+        case PSMT4:
+        case PSMT4HL:
+        case PSMT4HH:
+            MioPan::GS::gsHelper.DownloadImagePSMT4(
+                out, tex0->TBP0, tex0->TBW, 0, 0, width, height, tex0->CBP,
+                GetTex0BufferWidth(tex0), tex0->CSA, -1, (int)tex0->PSM);
+            return true;
+        case PSMT8:
+        case PSMT8H:
+            MioPan::GS::gsHelper.DownloadImagePSMT8(
+                out, tex0->TBP0, tex0->TBW, 0, 0, width, height, tex0->CBP,
+                GetTex0BufferWidth(tex0), -1, (int)tex0->PSM);
+            return true;
+        default:
+            return false;
+    }
+}
+}
+
+
 extern "C" {
 
 void MioPan_GsClear(void)
 {
     MioPan::GS::gsHelper.Clear();
+    ForgetWriters();
     g_first_upload_done = false;
     g_pending_uploads.clear();
     g_pending_uploads.push_back({0, MioPan::GS::kGsVramSize});
@@ -1194,64 +2403,34 @@ void MioPan_GsUpload(sceGsLoadImage *image_load, unsigned char *image)
         g_upload_observer(image_load, g_upload_observer_user);
     }
 
+    const uint64_t t0 = NowNs();
+    const int upload_w = (int)image_load->trxreg.RRW;
+    const int upload_h = (int)image_load->trxreg.RRH;
+    const int upload_bytes =
+        TextureByteSize((int)image_load->bitbltbuf.DPSM, upload_w, upload_h);
+    g_gs_frame_metrics.upload_count++;
+    g_gs_frame_metrics.upload_bytes += upload_bytes;
+
+    /* Counted above either way: callers read the count as "something was
+     * sent", which an unchanged transfer still was.  Only a change to GS
+     * memory invalidates the textures cached from it. */
+    bool changed = true;
+    if (g_by_reference)
+    {
+        changed = UploadByReference(*image_load, image);
+    }
+    else
+    {
+        UploadEager(*image_load, image);
+        g_gs_frame_metrics.written_bytes += upload_bytes;
+    }
     int up_addr;
     int up_size;
-    if (GetUploadRegion(image_load, &up_addr, &up_size))
+    if (changed && GetUploadRegion(image_load, &up_addr, &up_size))
     {
         g_pending_uploads.push_back({up_addr, up_size});
     }
 
-    const uint64_t t0 = NowNs();
-    const int upload_w = (int)image_load->trxreg.RRW;
-    const int upload_h = (int)image_load->trxreg.RRH;
-
-    switch ((MioPan::GS::PixelStorageFormat)image_load->bitbltbuf.DPSM)
-    {
-        case PSMZ32:
-        case PSMCT32:
-            MioPan::GS::gsHelper.UploadPSMCT32(
-                image_load->bitbltbuf.DBP, image_load->bitbltbuf.DBW,
-                image_load->trxpos.DSAX, image_load->trxpos.DSAY,
-                upload_w, upload_h, image);
-            break;
-        case PSMZ24:
-        case PSMCT24:
-            MioPan::GS::gsHelper.UploadPSMCT24(
-                image_load->bitbltbuf.DBP, image_load->bitbltbuf.DBW,
-                image_load->trxpos.DSAX, image_load->trxpos.DSAY,
-                upload_w, upload_h, image);
-            break;
-        case PSMZ16:
-        case PSMZ16S:
-        case PSMCT16:
-        case PSMCT16S:
-            MioPan::GS::gsHelper.UploadPSMCT16(
-                image_load->bitbltbuf.DBP, image_load->bitbltbuf.DBW,
-                image_load->trxpos.DSAX, image_load->trxpos.DSAY,
-                upload_w, upload_h, image);
-            break;
-        case PSMT4:
-        case PSMT4HL:
-        case PSMT4HH:
-            MioPan::GS::gsHelper.UploadPSMT4(
-                image_load->bitbltbuf.DBP, image_load->bitbltbuf.DBW,
-                image_load->trxpos.DSAX, image_load->trxpos.DSAY,
-                upload_w, upload_h, image, (int)image_load->bitbltbuf.DPSM);
-            break;
-        case PSMT8:
-        case PSMT8H:
-            MioPan::GS::gsHelper.UploadPSMT8(
-                image_load->bitbltbuf.DBP, image_load->bitbltbuf.DBW,
-                image_load->trxpos.DSAX, image_load->trxpos.DSAY,
-                upload_w, upload_h, image, (int)image_load->bitbltbuf.DPSM);
-            break;
-        default:
-            break;
-    }
-
-    g_gs_frame_metrics.upload_count++;
-    g_gs_frame_metrics.upload_bytes +=
-        TextureByteSize((int)image_load->bitbltbuf.DPSM, upload_w, upload_h);
     g_gs_frame_metrics.upload_ms += (double)(NowNs() - t0) / 1000000.0;
 }
 
@@ -1269,40 +2448,18 @@ void MioPan_GsStore(sceGsStoreImage *sp, unsigned char *out)
     const int y = (int)sp->trxpos.SSAY;
     const int w = (int)sp->trxreg.RRW;
     const int h = (int)sp->trxreg.RRH;
-    const int size = TextureByteSize(spsm, w, h);
 
-    switch ((MioPan::GS::PixelStorageFormat)spsm)
+    /* The EE gets GS memory's own bytes, so the blocks it reads are written
+     * out first -- in the layout the read below addresses, which for the "H"
+     * formats is the packed 8- and 4-bit one, not where their uploads go. */
+    if (g_by_reference)
     {
-        case PSMZ32:
-        case PSMCT32:
-            MioPan::GS::gsHelper.DownloadPSMCT32(out, sbp, sbw, x, y, w, h);
-            break;
-        case PSMZ24:
-        case PSMCT24:
-            MioPan::GS::gsHelper.StorePSMCT24(out, sbp, sbw, x, y, w, h);
-            break;
-        case PSMZ16:
-        case PSMZ16S:
-        case PSMCT16:
-        case PSMCT16S:
-            MioPan::GS::gsHelper.StorePSMCT16(out, sbp, sbw, x, y, w, h);
-            break;
-        case PSMT8:
-        case PSMT8H:
-            MioPan::GS::gsHelper.StorePSMT8(out, sbp, sbw, x, y, w, h);
-            break;
-        case PSMT4:
-        case PSMT4HL:
-        case PSMT4HH:
-            MioPan::GS::gsHelper.StorePSMT4(out, sbp, sbw, x, y, w, h);
-            break;
-        default:
-            if (size > 0)
-            {
-                std::memset(out, 0, (size_t)size);
-            }
-            break;
+        const int read_psm = spsm == PSMT8H ? (int)PSMT8
+                             : (spsm == PSMT4HL || spsm == PSMT4HH) ? (int)PSMT4
+                                                                     : spsm;
+        MaterializeRect({read_psm, sbp, sbw, x, y, w, h});
     }
+    StoreFromGs(out, spsm, sbp, sbw, x, y, w, h);
 }
 
 /*
@@ -1591,77 +2748,11 @@ unsigned char *MioPan_GsDownloadTexture(sceGsTex0 *tex0, uint64_t *hash)
     }
 
     g_texture_buffer.resize((size_t)width * (size_t)height * 4);
-
-    switch ((MioPan::GS::PixelStorageFormat)tex0->PSM)
+    if (!(g_by_reference
+              ? DecodeByReference(tex0, width, height, g_texture_buffer.data())
+              : DecodeEager(tex0, width, height, g_texture_buffer.data())))
     {
-        case PSMCT32:
-            MioPan::GS::gsHelper.DownloadPSMCT32(
-                g_texture_buffer.data(), tex0->TBP0, tex0->TBW, 0, 0,
-                width, height);
-            break;
-        case PSMCT24:
-        {
-            int dst_addr = 0;
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    const int addr =
-                        GetPixelAddressPSMCT32(tex0->TBP0, tex0->TBW, x, y);
-                    g_texture_buffer[(size_t)dst_addr + 0] = ReadGsByte(addr + 0);
-                    g_texture_buffer[(size_t)dst_addr + 1] = ReadGsByte(addr + 1);
-                    g_texture_buffer[(size_t)dst_addr + 2] = ReadGsByte(addr + 2);
-                    /*
-                     * PSMCT24 has no stored alpha component.  TEXA supplies
-                     * TA0 on the GS; use the normal opaque value here until
-                     * the shared draw-environment register is host-tracked.
-                     */
-                    g_texture_buffer[(size_t)dst_addr + 3] = 0x80;
-                    dst_addr += 4;
-                }
-            }
-            break;
-        }
-        case PSMCT16:
-        case PSMCT16S:
-        {
-            int dst_addr = 0;
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    const int addr = GetPixelAddressPSMCT16(tex0->TBP0, tex0->TBW, x, y);
-                    const uint16_t p =
-                        (uint16_t)ReadGsByte(addr + 0) |
-                        ((uint16_t)ReadGsByte(addr + 1) << 8);
-                    MioPan::GS::ExpandPSMCT16Pixel(p, &g_texture_buffer[(size_t)dst_addr]);
-                    dst_addr += 4;
-                }
-            }
-            break;
-        }
-        case PSMT4:
-        case PSMT4HL:
-        case PSMT4HH:
-        {
-            const int clut_width = GetTex0BufferWidth(tex0);
-            MioPan::GS::gsHelper.DownloadImagePSMT4(
-                g_texture_buffer.data(), tex0->TBP0, tex0->TBW, 0, 0,
-                width, height, tex0->CBP, clut_width, tex0->CSA, -1,
-                (int)tex0->PSM);
-            break;
-        }
-        case PSMT8:
-        case PSMT8H:
-        {
-            const int clut_width = GetTex0BufferWidth(tex0);
-            MioPan::GS::gsHelper.DownloadImagePSMT8(
-                g_texture_buffer.data(), tex0->TBP0, tex0->TBW, 0, 0,
-                width, height, tex0->CBP, clut_width, -1, (int)tex0->PSM);
-            break;
-        }
-        default:
-            return nullptr;
+        return nullptr;
     }
 
     for (size_t i = 3; i < g_texture_buffer.size(); i += 4)
@@ -1696,6 +2787,11 @@ uint64_t MioPan_GetTextureHash(sceGsTex0 *tex0)
         return 0;
     }
 
+    if (g_by_reference)
+    {
+        return TextureIdentity(tex0);
+    }
+
     uint64_t tex0_value = 0;
     std::memcpy(&tex0_value, tex0, sizeof(tex0_value));
 
@@ -1713,7 +2809,38 @@ uint64_t MioPan_GetTextureHash(sceGsTex0 *tex0)
 void MioPan_GsResetFrameMetrics(void)
 {
     g_gs_last_frame = g_gs_frame_metrics;
-    g_gs_frame_metrics = {0, 0, 0.0, 0, 0, 0.0};
+    g_gs_frame_metrics = {};
+    TrimContent();
+}
+
+void MioPan_GsSetByReference(int enable)
+{
+    const bool by_reference = enable != 0;
+    if (by_reference == g_by_reference)
+    {
+        return;
+    }
+    /* Either way GS memory has to hold everything first: the eager path reads
+     * only mem_, and the writers the reference path tracked are about to go
+     * stale -- the eager path keeps none. */
+    MaterializeAll();
+    ForgetWriters();
+    g_by_reference = by_reference;
+}
+
+int MioPan_GsGetByReference(void)
+{
+    return g_by_reference ? 1 : 0;
+}
+
+uint64_t MioPan_GsGetUnchangedCountLive(void)
+{
+    return g_gs_frame_metrics.unchanged_count;
+}
+
+uint64_t MioPan_GsGetWrittenBytesLive(void)
+{
+    return g_gs_frame_metrics.written_bytes;
 }
 
 int MioPan_GsGetUploadCount(void) { return (int)g_gs_last_frame.upload_count; }

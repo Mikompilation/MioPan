@@ -21,6 +21,13 @@ void MioPan_GsSetUploadSuppressed(int suppressed);
 void MioPan_GsSetUploadObserver(void (*observer)(const sceGsLoadImage *image,
                                                  void *user),
                                 void *user);
+/* GS memory by reference (the default): a transfer is kept as the bytes it
+ * sent and rearranged into GS memory only when something reads it there; a
+ * transfer of what GS memory already holds is dropped; textures decode from
+ * what was sent.  0 is the A/B -- every transfer swizzled in as it arrives.
+ * See the block above UploadByReference() in miopan_gs.cpp. */
+void MioPan_GsSetByReference(int enable);
+int MioPan_GsGetByReference(void);
 void MioPan_GsStore(sceGsStoreImage *sp, unsigned char *out);
 unsigned char *MioPan_GsDownloadTexture(sceGsTex0 *tex0, uint64_t *hash);
 uint64_t MioPan_GetTextureHash(sceGsTex0 *tex0);
@@ -29,6 +36,10 @@ void MioPan_GsResetFrameMetrics(void);
 int MioPan_GsGetUploadCount(void);
 uint64_t MioPan_GsGetUploadCountLive(void);
 uint64_t MioPan_GsGetUploadBytesLive(void);
+/* This frame's transfers that found GS memory already holding what they sent,
+ * and the bytes actually rearranged into GS memory. */
+uint64_t MioPan_GsGetUnchangedCountLive(void);
+uint64_t MioPan_GsGetWrittenBytesLive(void);
 int MioPan_GsGetUploadBytes(void);
 float MioPan_GsGetUploadMs(void);
 int MioPan_GsGetDownloadCount(void);
