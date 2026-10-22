@@ -1247,6 +1247,156 @@ it: extract those definitions with `sed`, replace
 
 The same three apply to the field loop's repeat and are fixed there too.
 
+### Effects the CPU projected — fixed (2026-10-22)
+
+Reported at 120 Hz: "new items on the ground, candles, flames … jump around
+and have micro-stutter".  **The effect layer projects on the CPU, with the
+tick's camera**, so nothing in increments 1–4 moved it: `ReprojectDrawsAt()`
+re-aims only draws with a `model` (`transform_mesh`).  Under an in-between
+camera the world moved and the effects stayed where the tick's camera had put
+them — a sawtooth of up to one tick of camera motion, reset at every tick.
+
+Two shapes of CPU-placed draw, two answers (`DrawCommand::follow`; `model`
+holds the view-projection of the camera that placed the draw):
+
+| | what reaches the renderer | follow |
+|---|---|---|
+| `CAMERA_FOLLOW_CLIP` | clip coordinates through `matWorldClipObject` (graphics.c's `ProjectWorldToHostClip()`): `RendererPacket3D[UV]` → `MioPan_RendererDrawBillboardTriangles()` — item sparkles (`Set3DPosTexure`), candle flames (`CandleFlameHostQuad`), torch cores, enemy effects; `RendererGouraudTriangles3D`; the clip-line bridge (rain) | whole draw by `inverse(VP_tick) × VP_present` |
+| `CAMERA_FOLLOW_ANCHOR` | 2D sprites the effect code laid out around one projected point — `SubHalo()` halos (`SetEffSQITex`), `draw_distortion_particles2()` fire/smoke/dust particles, the flat heat-haze diamonds | translated by the point's own NDC step |
+
+Both are applied in `sprite.vert` (`uClipZ.y` = 1, matrix in `mvp`, which the
+sprite path reads for nothing else); `CameraFollowTransform()` computes it per
+draw at record time from whatever camera that present installed.  Facts that
+make it work, so they need not be re-derived:
+
+- **A CLIP vertex can be re-aimed whole only because its z is the meshes' own
+  depth row** (`ReversedDepthRow()`; the bridges already rebuilt it from w for
+  depth precision).  x, y, w of `matWorldClipObject` are exactly
+  `g_3d_view_projection`'s, and with that z the clip vector *is*
+  `world × VP`, so the world point (whose w = 1 is carried in z) comes back
+  out of the inverse.  A symmetric-z vertex would come back wrong.  Dividing
+  through by w (the line bridge does) changes nothing — it is the same
+  projective point.
+- **The relative matrix is formed in double** (`InvertMatrix4()`, a general
+  inverse — `InvertAffineRowMajor()` cannot take a perspective matrix) and
+  cached per (from, to) pair, since a frame's draws share one camera.
+- **Identity when the present's camera is the queue camera** — `memcmp` of the
+  view-projections — so a present that lands on the tick, and every
+  unsmoothed one, goes out exactly as queued.
+- **Anchored sprites translate in the NDC the shader sees**, after
+  `ApplyOriginalAspectToVertices()` has fitted the 640x448 frame to the
+  window.  That is the same NDC the meshes' widened projection gives the
+  anchor: `matWorldScreen` is not widened but `matViewClipObject` is
+  (`gra3dApplyCamera()`), and the shrink is exactly `1 / view_extend`.
+- **`MioPan_RendererBeginAnchor()` / `EndAnchor()` is a span**, read by
+  `QueueQuad()` / `QueueTriangleList()` (halos are two quads); BeginFrame
+  closes one left open.  `RendererBeginWorldAnchor(world)` in graphics.c is
+  the world-point form.
+- **Most effect code projects with `matWorldClipPolygon`, not
+  `matWorldClipObject`** — the GS guard-band volume, whose x and y are 6x and
+  8x smaller (1920/1792 against 320/224).  Every `local_clip` handed to
+  `draw_distortion_particles[2]()` is one.  Fed to `BeginAnchor()` as it
+  was, the dust sprites' centres measured exactly 6.000x / 8.000x off their
+  anchors and would have followed at a sixth of the motion.  So the particles
+  use `MioPan_RendererBeginScreenAnchor(x, y, w)`: where the sprite is
+  actually drawn, in 640x448 frame pixels, plus clip w (both volumes share
+  it).  Those exact ratios are also what confirmed the 2D frame and the
+  widened 3D projection agree on NDC.
+- **The refracting heat haze is deliberately not anchored.**  It samples the
+  frame capture at the tick's screen position; moving the diamond without
+  its sample point would shear the picture it shows.
+
+**It only shows while the camera moves** — in practice, while Mio does (user),
+since the follow cameras track her.  A still scene proves nothing.
+
+Verified two ways, with temporary env-gated hooks (removed; rebuild them):
+
+- *Turned camera:* every reprojected present's view turned 3° about its own
+  y axis inside `BlendCameraBetween()`, plus a kill switch for the follow;
+  PrintWindow crops.  Chapter 2's opening room (`StartChapter(1)`, "There is
+  something on the floor"): with follow the item sparkle stays on the paper on
+  the desk; without, it is left at the desk's edge, half cut by the depth
+  test.  Chapter 6's opener (`StartChapter(5)`, a candle on a stand in the
+  foreground): the flame stays on the wick; without, ~85 px beside it.
+- *Walking:* Square held and the left stick turning a full circle every 90
+  input ticks (`MioPan_InputButtonHeld` / `MioPan_InputStickValue`
+  overridden for input ticks 1000..1700), in that candle room, 240 Hz.  A
+  per-present trace from `DrawQueuedSprites()` logged the first CLIP and
+  first ANCHOR draw: the world point (`inverse(model)` × vertex), where it was
+  drawn, and where the present's own camera puts the world point.
+
+| ~1,560 presents with the camera moving the flame | follow off | follow on |
+|---|---|---|
+| candle flame vs where the world puts it | mean 4.5 px, p95 12.6, max 16.6 | 0.00 (max 0.03) |
+| presents where the flame stood still while the world moved | 1,370 | 0 |
+| dust sprites (5,828 presents) vs the world | mean 4.3 px, p95 12.8, max 19.1 | 0.000 |
+
+Not seen in a driven run: `SubHalo()` halos — no surveyed opening room
+(`StartChapter(0..6)`, 60 s in) drew one.  They are anchored by their world
+point through `matWorldClipObject`, the volume the 6x/8x check above showed
+lands on the drawn sprite.
+
+Not covered: lens flares (`effect_obj.c` `efrenz`, laid out along a line
+through the screen centre, so a single anchor is wrong for them), and the
+effects' own motion, which stays at 30 Hz — particles have no correspondence
+between ticks to blend.
+
+### The sky — fixed (2026-10-22)
+
+`MapSky.c` draws three CPU-placed 2D layers, none of them through the scene
+camera, so it is `CAMERA_FOLLOW_SKY` with per-frame state of its own
+(`SkyFollow`, `thread_local`, handed to the presenter like the rest of the
+frame):
+
+| layer | how the game places it | how an in-between follows |
+|---|---|---|
+| dome | 23x23 grid, camera-centred, turned by `RotY(-yaw) RotX(-pitch)` and projected through `MapSkyPers`, a **fixed 0.774 rad FOV of its own** | homography `H = S^-1 (Vc Vq^T) S` on (x, y, w), `S` = rotation x view->screen x GS->frame->window fit |
+| horizon strip | scrolled by `(yaw_old - yaw_new) x scale x 255 x speed` px, top on the projected horizon (squashed by `move_y/256`) | the horizon point through `H`: down by its step x squash; across by the **turned angle**, `atan(x cos p / f)`, times the scroll rate |
+| fog band | solid fill from the window top to the strip's bottom | affine in y: top fixed, bottom with the strip |
+
+Facts that make it work:
+
+- **The sky's camera is assumed to turn with the scene camera**, whatever
+  fixed basis change lies between `RotY RotX` and the renderer's view matrix:
+  `R_sky_c = Vc Vq^T R_q`.  Measured, it holds exactly (below).  `Vq` is the
+  frame's camera *as the frame ends* (`SealSkyFollow()` in EndFrame), because
+  `MapSkyProc()` runs ahead of the room.
+- **`MapSkyPers` projects a direction like any point along it** — its row 3
+  feeds only z — so the camera-centred dome is pure directions and `H` is
+  exact for every vertex.  `MioPan_RendererSetSkyCamera()` refuses a screen
+  matrix where that is not so.
+- **The strip scrolls by angle, the dome by tan(angle) / cos(pitch).**  Taking
+  the strip's step as "the dome's step at the horizon x rate / focal length"
+  overshot by 1/cos(p) — 9-22% with the camera looking up — and the
+  difference landed at every tick boundary.
+- **The host bridge used to drop the GS's 1/16-pixel precision** (`x / 16`
+  in integer, and `(int)MapSkyX` for the scroll), so the strip and every dome
+  vertex snapped to whole 640x448-frame pixels — about 3 output pixels on a
+  1417-high window — every tick, smoothing or not.  The bridge now divides in
+  float and adds back the scroll's fraction (`MapSkyHostScrollFrac`).  This
+  also changes unsmoothed rendering: the sky is now sub-pixel steady.
+
+Verified on chapter 1's ev1563 (`StartChapter(0)`, START at ticks 1000 /
+1330 / 1630, `JumpToEvent(1563)` at frame 1250 — the overlook with open cloud
+and braziers, an event camera pan, then a walk in circles at input ticks
+2300..2900), 240 Hz, tracing per present a fixed sky direction through the
+dome follow and the strip's drawn position.  Ratio of the step that crosses a
+tick boundary, and of the in-tick steps, to an even step:
+
+| | follow off | follow on |
+|---|---|---|
+| dome, x / y (~430 moving tick pairs) | in-tick 0, boundary 8.0 | in-tick 1.000, boundary 0.999-1.000 (p5-p95 within 5%) |
+| strip x | in-tick 0, boundary 8.0 | 1.000 / 1.002 |
+| strip y | in-tick 0, boundary 8.0 | 0.994 / 1.04, residual 0.05 px median: the game's own 1/16-px horizon |
+| boundary error vs an even step, output px, median | 0.2-1.6 | 0.001-0.05 |
+
+Plus a still with every in-between turned 6° and pitched -4°: the clouds
+turn with the camera with no cracks between cells and no gap at the
+horizon.  One run of ~11 on this route died (access violation) in
+`MakeTim2Direct()` (tim2.c:1122) during the soft reset `JumpToEvent()`
+forces, and did not come back in two reruns.  Probably the pre-existing
+room-load crash noted under the current state; not investigated.
+
 ### Known imprecisions (prototype)
 
 - The pause still, the photo mirror and the depth-probe download are taken on

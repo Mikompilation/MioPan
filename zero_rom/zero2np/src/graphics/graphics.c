@@ -261,6 +261,25 @@ static void HostPoint4(float *out, const float *position)
     out[3] = 1.0f;
 }
 
+/* PORT-ONLY.  MioPan_RendererBeginAnchor() for a world point, projected the
+ * way the billboard bridges project theirs.  Close it with
+ * MioPan_RendererEndAnchor(). */
+void RendererBeginWorldAnchor(const float *world)
+{
+    float point[4];
+    float clip[4];
+
+    if (world == NULL)
+    {
+        return;
+    }
+    HostPoint4(point, world);
+    if (ProjectWorldToHostClip(clip, point))
+    {
+        MioPan_RendererBeginAnchor(clip);
+    }
+}
+
 /* PORT-ONLY.  Host counterpart of a world-space GS line: projects both ends
  * and hands SDL a screen-space quad, gouraud from endpoint 1 to endpoint 2.
  * Colours are raw PS2 0..128 components.  Non-static so the effect packet

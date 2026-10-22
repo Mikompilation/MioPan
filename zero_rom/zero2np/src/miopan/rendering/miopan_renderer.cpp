@@ -326,6 +326,16 @@ enum DrawSource
     DRAW_SOURCE_COUNT
 };
 
+/* How a draw the CPU put on screen itself follows a reprojected camera -- see
+ * DrawCommand::follow. */
+enum CameraFollow
+{
+    CAMERA_FOLLOW_NONE = 0,
+    CAMERA_FOLLOW_CLIP,
+    CAMERA_FOLLOW_ANCHOR,
+    CAMERA_FOLLOW_SKY,
+};
+
 struct DrawSourceFrameMetrics
 {
     uint64_t commands = 0;
@@ -368,6 +378,29 @@ struct DrawCommand
      * world-space bridges, which rebuild z from w with the meshes' own depth
      * row -- see ReversedDepthRow().  Reaches the shader as uClipZ.x. */
     bool clip_z_reversed = false;
+    /*
+     * Placed on screen by the CPU, through the camera live when the draw was
+     * queued, rather than by a model matrix -- so ReprojectDrawsAt() cannot
+     * re-aim it, and under an in-between camera it stays where the tick's own
+     * camera put it while the world moves on, which reads as the effect
+     * jumping about at the tick rate.  `model` holds that camera's
+     * view-projection instead (such a draw has no model of its own).
+     *
+     *   CLIP    the vertices are that camera's clip coordinates, with the
+     *           host's reversed z -- the world-space effect bridges -- and
+     *           the whole draw is carried to the present's camera.
+     *   ANCHOR  a 2D sprite the effect code placed around one world point,
+     *           whose clip position under that camera is `anchor`; it moves
+     *           as far as that point does on screen.
+     *   SKY     one of MapSky.c's layers, `follow_layer`, which are not
+     *           projected through the scene's camera at all -- see
+     *           SkyFollow.  `model` is unused.
+     *
+     * See CameraFollowTransform(), which sprite.vert applies (uClipZ.y).
+     */
+    CameraFollow follow = CAMERA_FOLLOW_NONE;
+    int follow_layer = 0;
+    float anchor[4];
     bool indexed_mesh;
     bool animated_mesh;
     bool fragment_lighting;
@@ -1569,6 +1602,99 @@ unsigned int g_gs_2d_z = 0xffffffu;
  * as depth-less as it was before any of this existed.
  */
 bool g_gs_2d_depth_armed;
+/*
+ * The world point the screen-space draws being queued belong to, between
+ * MioPan_RendererBeginAnchor() and MioPan_RendererEndAnchor(): its clip
+ * position, z rebuilt with the meshes' reversed depth row, and the
+ * view-projection of the camera that put it there.  A span rather than
+ * one-shot because a halo is two quads and some bridges queue more than one
+ * draw per call; BeginFrame() closes one left open.
+ */
+bool g_quad_anchor_armed;
+float g_quad_anchor[4];
+float g_quad_anchor_view_projection[16];
+
+/*
+ * The sky's camera, for the draws MapSky.c tags CAMERA_FOLLOW_SKY.
+ *
+ * The sky is not projected through the scene's camera.  MapSky.c turns a
+ * camera-centred dome by the camera's yaw and pitch and projects it through
+ * a fixed-FOV matrix of its own; it scrolls a horizon strip by the yaw turned
+ * through since the last tick, at a rate of the area's choosing, and sets it
+ * on the projected horizon; and it fills a fog band down to that strip.  So an
+ * in-between camera is followed by turning the sky's own camera by however
+ * far the scene's has turned, and moving the strip and band with the horizon
+ * that turn moves.
+ *
+ * `to_screen` takes a world-aligned direction to homogeneous final NDC,
+ * (x w, y w, w), under the tick's sky camera: its rotation, its view->screen,
+ * then GS pixels -> 640x448 frame -> the window fit
+ * (ApplyOriginalAspectToVertices()).  `from_screen` is the inverse.  `view` is
+ * the scene camera's rotation as the frame ends, sealed by EndFrame
+ * (SealSkyFollow()) -- MapSky.c runs ahead of the room, before the frame's
+ * camera need be final.  The strip and band also carry the tick's horizon
+ * point in final NDC, before the area's squash; how far the strip moves for a
+ * step of it (`strip_scroll` across, `strip_squash` down); and for the band,
+ * the NDC of its fixed top and its bottom, which rides on the strip.
+ *
+ * Per frame, so thread_local and handed to the presenter with the rest of
+ * the frame (HandOverFrameState() / ExchangePresenterState()).
+ */
+enum
+{
+    SKY_FOLLOW_DOME = 0,
+    SKY_FOLLOW_STRIP,
+    SKY_FOLLOW_BAND,
+    SKY_FOLLOW_LAYERS
+};
+
+struct SkyFollow
+{
+    bool valid;
+    double to_screen[9];
+    double from_screen[9];
+    float view[9];
+    float horizon[2];
+    /* The sky's focal lengths in final NDC: NDC per unit of tan(angle) off
+     * its axis, across and down. */
+    float focal[2];
+    float strip_scroll;
+    float strip_squash;
+    float band_top;
+    float band_bottom;
+};
+
+thread_local SkyFollow g_sky_follow[SKY_FOLLOW_LAYERS];
+/* Game thread: this frame's sky camera as MioPan_RendererSetSkyCamera() left
+ * it, and the layer MioPan_RendererBeginSkyLayer() has open, or -1. */
+SkyFollow g_sky_camera;
+int g_sky_layer_armed = -1;
+
+/* The sky is drawn ahead of the room, possibly before the frame's camera is
+ * final, so the rotation its draws are followed from is taken as the frame
+ * ends -- the camera the frame's own present shows.  Called by EndFrame. */
+void SealSkyFollow()
+{
+    g_sky_layer_armed = -1;
+    for (SkyFollow &sky : g_sky_follow)
+    {
+        if (!g_3d_camera_valid)
+        {
+            sky.valid = false;
+        }
+        if (!sky.valid)
+        {
+            continue;
+        }
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 3; col++)
+            {
+                sky.view[row * 3 + col] = g_3d_view[row * 4 + col];
+            }
+        }
+    }
+}
 bool g_dbg_no_2d_depth;
 GsScissor g_gs_scissor = {0, 0, kLogicalWidth - 1, kLogicalHeight - 1};
 
@@ -1727,6 +1853,115 @@ bool InvertAffineRowMajor(const float *m, float *out)
                                  m[14] * r[6 + col]);
     }
     out[15] = 1.0f;
+    return true;
+}
+
+/* The inverse of any invertible 4x4, row-major, all in double -- for the
+ * perspective view-projections InvertAffineRowMajor() cannot take.
+ * Gauss-Jordan with partial pivoting.  False for a singular matrix. */
+bool InvertMatrix4(const double *m, double *out)
+{
+    double a[4][8];
+
+    for (int row = 0; row < 4; row++)
+    {
+        for (int col = 0; col < 4; col++)
+        {
+            a[row][col] = m[row * 4 + col];
+            a[row][col + 4] = row == col ? 1.0 : 0.0;
+        }
+    }
+
+    for (int col = 0; col < 4; col++)
+    {
+        int pivot = col;
+        for (int row = col + 1; row < 4; row++)
+        {
+            if (std::fabs(a[row][col]) > std::fabs(a[pivot][col]))
+            {
+                pivot = row;
+            }
+        }
+        if (!(std::fabs(a[pivot][col]) > 0.0))
+        {
+            return false;
+        }
+        if (pivot != col)
+        {
+            for (int k = 0; k < 8; k++)
+            {
+                std::swap(a[pivot][k], a[col][k]);
+            }
+        }
+
+        const double scale = 1.0 / a[col][col];
+        for (int k = 0; k < 8; k++)
+        {
+            a[col][k] *= scale;
+        }
+        for (int row = 0; row < 4; row++)
+        {
+            const double factor = a[row][col];
+            if (row == col || factor == 0.0)
+            {
+                continue;
+            }
+            for (int k = 0; k < 8; k++)
+            {
+                a[row][k] -= factor * a[col][k];
+            }
+        }
+    }
+
+    for (int row = 0; row < 4; row++)
+    {
+        for (int col = 0; col < 4; col++)
+        {
+            out[row * 4 + col] = a[row][col + 4];
+        }
+    }
+    return true;
+}
+
+/* 3x3 helpers, row-major, in double: out = a x b, and the inverse.  The
+ * product may write over either operand. */
+void MulMatrix3(double *out, const double *a, const double *b)
+{
+    double r[9];
+
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 3; col++)
+        {
+            r[row * 3 + col] = a[row * 3 + 0] * b[0 * 3 + col] +
+                               a[row * 3 + 1] * b[1 * 3 + col] +
+                               a[row * 3 + 2] * b[2 * 3 + col];
+        }
+    }
+    std::memcpy(out, r, sizeof(r));
+}
+
+bool InvertMatrix3(const double *m, double *out)
+{
+    const double c00 = m[4] * m[8] - m[5] * m[7];
+    const double c01 = m[5] * m[6] - m[3] * m[8];
+    const double c02 = m[3] * m[7] - m[4] * m[6];
+    const double det = m[0] * c00 + m[1] * c01 + m[2] * c02;
+
+    if (!(std::fabs(det) > 0.0) || !std::isfinite(det))
+    {
+        return false;
+    }
+    const double s = 1.0 / det;
+    out[0] = c00 * s;
+    out[1] = (m[2] * m[7] - m[1] * m[8]) * s;
+    out[2] = (m[1] * m[5] - m[2] * m[4]) * s;
+    out[3] = c01 * s;
+    out[4] = (m[0] * m[8] - m[2] * m[6]) * s;
+    out[5] = (m[2] * m[3] - m[0] * m[5]) * s;
+    out[6] = c02 * s;
+    out[7] = (m[1] * m[6] - m[0] * m[7]) * s;
+    out[8] = (m[0] * m[4] - m[1] * m[3]) * s;
     return true;
 }
 
@@ -8689,6 +8924,265 @@ bool CasterTransformAt(size_t index, const DrawCommand &draw, float *model,
     return MatrixIsFinite(mvp);
 }
 
+/*
+ * The matrix that carries a draw the CPU placed on screen (DrawCommand::follow)
+ * from the camera that placed it to the one installed for this present, for
+ * sprite.vert to apply to its vertices.
+ *
+ * False -- and the draw goes out exactly as queued -- when the two are the same
+ * camera: every present that is not reprojected, and the one that lands on the
+ * tick, where BlendViewMatrix() hands back the frame's own view and the
+ * view-projection is rebuilt from the same bits.  That present stays
+ * bit-identical to an unsmoothed one, for the reason BlendViewMatrix()
+ * short-circuits.
+ *
+ * Clip space to clip space is inverse(from) x to.  It needs the whole
+ * homogeneous world point back, and a CPU-projected vertex keeps its w = 1
+ * only in z -- which is why a draw follows only when its z is the meshes' own
+ * reversed depth row (ReversedDepthRow()).  Then the point lands at its own
+ * depth under the new camera too.  In double: the inverse carries the eye's
+ * ~10^4-unit translation and the product comes out close to identity, so float
+ * would leave most of the motion in its rounding.  A frame's draws share one
+ * camera, so the product is cached.
+ */
+struct CameraFollowCache
+{
+    float from[16];
+    float to[16];
+    double relative[16];
+    bool valid = false;
+    bool usable = false;
+};
+
+thread_local CameraFollowCache g_camera_follow_cache;
+
+/* The scene camera's rotation -- the upper 3x3 of a view matrix. */
+void ViewRotation(const float *view, float *out)
+{
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 3; col++)
+        {
+            out[row * 3 + col] = view[row * 4 + col];
+        }
+    }
+}
+
+/*
+ * CameraFollowTransform() for a sky layer (SkyFollow).
+ *
+ * The scene camera turned from `view` to this present's rotation; a
+ * world-aligned direction now shows where `view` showed the direction
+ * d x Vc x Vq^T, and the sky's own camera is taken to have turned with it --
+ * whatever fixed basis change lies between the two cameras' rotations cancels.
+ * So a point of the tick's sky at homogeneous NDC n moves to
+ *
+ *     n x from_screen x (Vc x Vq^T) x to_screen = n x H
+ *
+ * which for the dome is the whole answer: it is camera-centred, so a turn is
+ * all that moves it, and H is exact for every vertex -- a projective map in
+ * the NDC the shader sees.  The strip and band are not geometry the sky
+ * camera sees; they are placed from the horizon point, so they move by that
+ * point's own step under H: the strip across by `strip_scroll` of it (the
+ * area's scroll rate over the dome's focal length) and down by
+ * `strip_squash` (the area's horizon squash), the band's bottom edge down
+ * with the strip while its top stays at the top of the window.
+ */
+struct SkyFollowCache
+{
+    float view[9];
+    double to_screen[9];
+    double h[9];
+    bool valid = false;
+};
+
+thread_local SkyFollowCache g_sky_follow_cache[SKY_FOLLOW_LAYERS];
+
+bool SkyFollowTransform(const DrawCommand &draw, float *out)
+{
+    if (draw.follow_layer < 0 || draw.follow_layer >= SKY_FOLLOW_LAYERS ||
+        !g_3d_camera_valid)
+    {
+        return false;
+    }
+    const SkyFollow &sky = g_sky_follow[draw.follow_layer];
+    float vc[9];
+    ViewRotation(g_3d_view, vc);
+    if (!sky.valid || std::memcmp(vc, sky.view, sizeof(vc)) == 0)
+    {
+        return false;
+    }
+
+    SkyFollowCache &cache = g_sky_follow_cache[draw.follow_layer];
+    if (!cache.valid || std::memcmp(cache.view, vc, sizeof(vc)) != 0 ||
+        std::memcmp(cache.to_screen, sky.to_screen,
+                    sizeof(cache.to_screen)) != 0)
+    {
+        std::memcpy(cache.view, vc, sizeof(cache.view));
+        std::memcpy(cache.to_screen, sky.to_screen, sizeof(cache.to_screen));
+        double turn[9];
+        for (int row = 0; row < 3; row++)
+        {
+            for (int col = 0; col < 3; col++)
+            {
+                turn[row * 3 + col] =
+                    (double)vc[row * 3 + 0] * sky.view[col * 3 + 0] +
+                    (double)vc[row * 3 + 1] * sky.view[col * 3 + 1] +
+                    (double)vc[row * 3 + 2] * sky.view[col * 3 + 2];
+            }
+        }
+        MulMatrix3(cache.h, sky.from_screen, turn);
+        MulMatrix3(cache.h, cache.h, sky.to_screen);
+        cache.valid = true;
+    }
+    const double *h = cache.h;
+
+    if (draw.follow_layer == SKY_FOLLOW_DOME)
+    {
+        if (draw.vertex_count == 0 || draw.first_vertex >= g_vertices.size())
+        {
+            return false;
+        }
+        /* (x, y, w) through H; z kept at the draw's own NDC depth, which every
+         * vertex of a sky quad shares, by riding on w. */
+        const double z = g_vertices[draw.first_vertex].position[2];
+        const int rows[3] = {0, 1, 3};
+        std::memset(out, 0, sizeof(float) * 16);
+        for (int r = 0; r < 3; r++)
+        {
+            out[rows[r] * 4 + 0] = (float)h[r * 3 + 0];
+            out[rows[r] * 4 + 1] = (float)h[r * 3 + 1];
+            out[rows[r] * 4 + 2] = (float)(z * h[r * 3 + 2]);
+            out[rows[r] * 4 + 3] = (float)h[r * 3 + 2];
+        }
+        return MatrixIsFinite(out);
+    }
+
+    const double hx = sky.horizon[0];
+    const double hy = sky.horizon[1];
+    const double mx = hx * h[0] + hy * h[3] + h[6];
+    const double my = hx * h[1] + hy * h[4] + h[7];
+    const double mw = hx * h[2] + hy * h[5] + h[8];
+    if (!(mw > 0.0))
+    {
+        return false;
+    }
+    const double dy = (my / mw - hy) * sky.strip_squash;
+    SetIdentityMatrix(out);
+    if (draw.follow_layer == SKY_FOLLOW_STRIP)
+    {
+        /* The strip scrolls by the yaw turned through, not by how far the
+         * dome moved: under a camera pitched by p the horizon point of a turn
+         * d lands f tan(d) / cos(p) across, so the turn is recovered from it
+         * with the pitch the new horizon height gives. */
+        const double fx = sky.focal[0];
+        const double fy = sky.focal[1];
+        if (!(std::fabs(fx) > 1e-6) || !(std::fabs(fy) > 1e-6))
+        {
+            return false;
+        }
+        const double tan_p = (my / mw) / fy;
+        const double cos_p = 1.0 / std::sqrt(1.0 + tan_p * tan_p);
+        const double turned = std::atan((mx / mw - hx) * cos_p / fx);
+        out[12] = (float)(sky.strip_scroll * fx * turned);
+        out[13] = (float)dy;
+    }
+    else
+    {
+        const double span = (double)sky.band_bottom - sky.band_top;
+        if (!(std::fabs(span) > 1e-6))
+        {
+            return false;
+        }
+        out[5] = (float)(1.0 + dy / span);
+        out[13] = (float)(-sky.band_top * dy / span);
+    }
+    return MatrixIsFinite(out);
+}
+
+bool CameraFollowTransform(const DrawCommand &draw, float *out)
+{
+    if (draw.follow == CAMERA_FOLLOW_SKY)
+    {
+        return SkyFollowTransform(draw, out);
+    }
+    if (draw.follow == CAMERA_FOLLOW_NONE || !g_3d_camera_valid ||
+        std::memcmp(draw.model, g_3d_view_projection, sizeof(draw.model)) == 0)
+    {
+        return false;
+    }
+
+    CameraFollowCache &cache = g_camera_follow_cache;
+    if (!cache.valid ||
+        std::memcmp(cache.from, draw.model, sizeof(cache.from)) != 0 ||
+        std::memcmp(cache.to, g_3d_view_projection, sizeof(cache.to)) != 0)
+    {
+        std::memcpy(cache.from, draw.model, sizeof(cache.from));
+        std::memcpy(cache.to, g_3d_view_projection, sizeof(cache.to));
+        cache.valid = true;
+
+        double from[16];
+        double inverse[16];
+        for (int i = 0; i < 16; i++)
+        {
+            from[i] = cache.from[i];
+        }
+        cache.usable = InvertMatrix4(from, inverse);
+        for (int row = 0; row < 4 && cache.usable; row++)
+        {
+            for (int col = 0; col < 4; col++)
+            {
+                double v = 0.0;
+                for (int k = 0; k < 4; k++)
+                {
+                    v += inverse[row * 4 + k] * (double)cache.to[k * 4 + col];
+                }
+                cache.relative[row * 4 + col] = v;
+                cache.usable = cache.usable && std::isfinite(v);
+            }
+        }
+    }
+    if (!cache.usable)
+    {
+        return false;
+    }
+
+    if (draw.follow == CAMERA_FOLLOW_CLIP)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            out[i] = (float)cache.relative[i];
+        }
+        return true;
+    }
+
+    /* An anchored sprite keeps its shape -- it was laid out in 2D around the
+     * point -- and moves by the point's own step on screen, in the NDC the
+     * shader sees: the 640x448 frame has been fitted to the window by then
+     * (ApplyOriginalAspectToVertices()), and that is the same NDC the meshes'
+     * projection, widened by the view extend, lands the point in. */
+    double moved[4];
+    for (int col = 0; col < 4; col++)
+    {
+        double v = 0.0;
+        for (int k = 0; k < 4; k++)
+        {
+            v += (double)draw.anchor[k] * cache.relative[k * 4 + col];
+        }
+        moved[col] = v;
+    }
+    /* Behind the eye under either camera: the sprite is not where the point
+     * is, so there is no step to follow. */
+    if (!(draw.anchor[3] > 0.0f) || !(moved[3] > 0.0))
+    {
+        return false;
+    }
+    SetIdentityMatrix(out);
+    out[12] = (float)(moved[0] / moved[3] - draw.anchor[0] / draw.anchor[3]);
+    out[13] = (float)(moved[1] / moved[3] - draw.anchor[1] / draw.anchor[3]);
+    return std::isfinite(out[12]) && std::isfinite(out[13]);
+}
+
 int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
 {
     if (view == nullptr || projection == nullptr || !g_frame_active ||
@@ -9262,6 +9756,8 @@ bool DrawCommandsAreMergeCompatible(const DrawCommand &previous,
             next.preserve_original_aspect ||
         previous.transform_mesh != next.transform_mesh ||
         previous.clip_z_reversed != next.clip_z_reversed ||
+        previous.follow != next.follow ||
+        previous.follow_layer != next.follow_layer ||
         previous.animated_mesh != next.animated_mesh ||
         previous.fragment_lighting != next.fragment_lighting ||
         previous.blend_mode != next.blend_mode ||
@@ -9277,6 +9773,14 @@ bool DrawCommandsAreMergeCompatible(const DrawCommand &previous,
         (std::memcmp(previous.mvp, next.mvp, sizeof(previous.mvp)) != 0 ||
          std::memcmp(previous.model, next.model,
                      sizeof(previous.model)) != 0))
+    {
+        return false;
+    }
+    if (previous.follow != CAMERA_FOLLOW_NONE &&
+        (std::memcmp(previous.model, next.model,
+                     sizeof(previous.model)) != 0 ||
+         std::memcmp(previous.anchor, next.anchor,
+                     sizeof(previous.anchor)) != 0))
     {
         return false;
     }
@@ -9397,6 +9901,39 @@ void FlushDrawSourceMetricsToProfiler()
                               sky.compatible_joins);
 }
 
+/* Tag a draw the CPU placed on screen with the camera that placed it
+ * (DrawCommand::follow): `follow` for a caller whose vertices are clip
+ * coordinates, otherwise the sky layer or the anchor that is open, if there
+ * is one.  A draw with a model is re-aimed by ReprojectDrawsAt() and needs
+ * none of them. */
+void SetCameraFollow(DrawCommand &command, CameraFollow follow)
+{
+    if (command.transform_mesh || !g_3d_camera_valid)
+    {
+        return;
+    }
+    if (follow == CAMERA_FOLLOW_CLIP)
+    {
+        command.follow = CAMERA_FOLLOW_CLIP;
+        std::memcpy(command.model, g_3d_view_projection,
+                    sizeof(command.model));
+        return;
+    }
+    if (g_sky_layer_armed >= 0)
+    {
+        command.follow = CAMERA_FOLLOW_SKY;
+        command.follow_layer = g_sky_layer_armed;
+        return;
+    }
+    if (g_quad_anchor_armed)
+    {
+        command.follow = CAMERA_FOLLOW_ANCHOR;
+        std::memcpy(command.anchor, g_quad_anchor, sizeof(command.anchor));
+        std::memcpy(command.model, g_quad_anchor_view_projection,
+                    sizeof(command.model));
+    }
+}
+
 void QueueQuad(SDL_GPUTexture *texture, int texture_width, int texture_height,
                const SpriteVertex *corners,
                bool preserve_original_aspect = true,
@@ -9433,6 +9970,7 @@ void QueueQuad(SDL_GPUTexture *texture, int texture_width, int texture_height,
     command.preserve_original_aspect = preserve_original_aspect;
     command.clip_z_reversed = clip_z_reversed;
     ApplyGsDrawEnv(command);
+    SetCameraFollow(command, CAMERA_FOLLOW_NONE);
 
     for (int index : indices)
     {
@@ -9447,7 +9985,9 @@ void QueueQuad(SDL_GPUTexture *texture, int texture_width, int texture_height,
  * aspect.  Screen-space callers leave it true.  Passing `mvp` selects the
  * object-space mesh shader and snapshots the camera state for this draw.
  * `clip_z_reversed` says a clip-space caller has already put its z in the
- * host's reversed convention (DrawCommand::clip_z_reversed). */
+ * host's reversed convention (DrawCommand::clip_z_reversed), and `follow`
+ * that its vertices are the live camera's clip coordinates
+ * (DrawCommand::follow). */
 void QueueTriangleList(SDL_GPUTexture *texture, int texture_width,
                        int texture_height, const SpriteVertex *vertices,
                        int vertex_count, bool depth_test = true,
@@ -9456,7 +9996,8 @@ void QueueTriangleList(SDL_GPUTexture *texture, int texture_width,
                        const float *mvp = nullptr,
                        const float *alpha_test = nullptr,
                        DrawSource source = DRAW_SOURCE_GENERIC,
-                       bool clip_z_reversed = false)
+                       bool clip_z_reversed = false,
+                       CameraFollow follow = CAMERA_FOLLOW_NONE)
 {
     if (texture == nullptr || vertices == nullptr || vertex_count <= 0 ||
         g_mesh_stream.token != 0 ||
@@ -9492,6 +10033,7 @@ void QueueTriangleList(SDL_GPUTexture *texture, int texture_width,
     {
         std::memcpy(command.mvp, mvp, sizeof(command.mvp));
     }
+    SetCameraFollow(command, follow);
     /*
      * Only the callers that actually carry GS state opt in.  A 2D or UI draw
      * inherits the real GS's TEST register on hardware too, but nothing on the
@@ -9864,7 +10406,16 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
          * layer and the world-space billboards alike, and only the latter
          * arrive with their depth already reversed. */
         g_uniforms.clipZ[0] = draw.clip_z_reversed ? 1.0f : 0.0f;
-        g_uniforms.clipZ[1] = 0.0f;
+        /* And a draw the CPU placed through the tick's camera is carried to
+         * this present's by mvp, which the sprite path reads for nothing
+         * else. */
+        float follow[16];
+        const bool follows = CameraFollowTransform(draw, follow);
+        if (follows)
+        {
+            std::memcpy(g_uniforms.mvp, follow, sizeof(g_uniforms.mvp));
+        }
+        g_uniforms.clipZ[1] = follows ? 1.0f : 0.0f;
         g_uniforms.clipZ[2] = 0.0f;
         g_uniforms.clipZ[3] = 0.0f;
 
@@ -11738,6 +12289,7 @@ struct FramePacket
     float view_extend_y = 1.0f;
     FrameUploadState upload{};
     DepthProbe depth_probes[MIOPAN_DEPTH_PROBE_SLOTS];
+    SkyFollow sky_follow[SKY_FOLLOW_LAYERS];
     MioPanUi::DrawSnapshot *ui = nullptr;
 
     /* Decided once per tick on the game thread, as the field loop does. */
@@ -12018,6 +12570,7 @@ void HandOverFrameState(FramePacket &packet)
     packet.upload = g_frame_upload;
     std::memcpy(packet.depth_probes, g_depth_probes,
                 sizeof(packet.depth_probes));
+    std::memcpy(packet.sky_follow, g_sky_follow, sizeof(packet.sky_follow));
 }
 
 /* Presenter: exchange everything with `packet`.  Called once to take a packet
@@ -12063,6 +12616,7 @@ void ExchangePresenterState(FramePacket &packet)
     std::swap(g_view_extend_y, packet.view_extend_y);
     std::swap(g_frame_upload, packet.upload);
     std::swap(g_depth_probes, packet.depth_probes);
+    std::swap(g_sky_follow, packet.sky_follow);
 }
 
 /* Game thread: a slot to hand the frame into -- a free one, or failing that
@@ -13617,6 +14171,13 @@ void MioPan_RendererBeginFrame(void)
         CollectInFlightMeshSubmissions();
     }
     AbortActiveMeshStream();
+    g_quad_anchor_armed = false;
+    g_sky_camera.valid = false;
+    g_sky_layer_armed = -1;
+    for (SkyFollow &sky : g_sky_follow)
+    {
+        sky.valid = false;
+    }
     g_draws.clear();
     /* The buffers a repeated present replays are about to be refilled. */
     g_frame_upload = FrameUploadState{};
@@ -13703,6 +14264,7 @@ void MioPan_RendererEndFrame(void)
     /* A malformed decoder path must not leave an unpublished vertex tail in
      * the frame stream.  Normal mesh scopes always commit before this point. */
     AbortActiveMeshStream();
+    SealSkyFollow();
     MioPanUi::Draw();
     MioPanUi::EndFrame();
     presented = false;
@@ -14484,6 +15046,145 @@ static bool ReversedDepthRow(float *z_scale, float *z_offset)
     *z_scale = p[2 * 4 + 2];
     *z_offset = p[3 * 4 + 2];
     return true;
+}
+
+/* Opens an anchor at NDC (x, y) -- the NDC the meshes are drawn in -- and view
+ * depth `w`, under the live camera.  The z is the meshes' own depth row, the
+ * same rebuild the clip-space bridges do: CameraFollowTransform() needs it to
+ * find the world point again. */
+static void ArmQuadAnchor(float ndc_x, float ndc_y, float w)
+{
+    float z_scale;
+    float z_offset;
+
+    g_quad_anchor_armed = false;
+    if (!g_frame_active || !(w > 0.0f) || !std::isfinite(ndc_x) ||
+        !std::isfinite(ndc_y) || !std::isfinite(w) ||
+        !ReversedDepthRow(&z_scale, &z_offset))
+    {
+        return;
+    }
+
+    g_quad_anchor[0] = ndc_x * w;
+    g_quad_anchor[1] = ndc_y * w;
+    g_quad_anchor[2] = w * z_scale + z_offset;
+    g_quad_anchor[3] = w;
+    std::memcpy(g_quad_anchor_view_projection, g_3d_view_projection,
+                sizeof(g_quad_anchor_view_projection));
+    g_quad_anchor_armed = true;
+}
+
+void MioPan_RendererBeginAnchor(const float *clip)
+{
+    g_quad_anchor_armed = false;
+    if (clip != nullptr && clip[3] > 0.0f)
+    {
+        ArmQuadAnchor(clip[0] / clip[3], clip[1] / clip[3], clip[3]);
+    }
+}
+
+void MioPan_RendererBeginScreenAnchor(float x, float y, float view_depth)
+{
+    /* Where a quad written at (x, y) ends up: BuildQuadVertices()'s mapping,
+     * then the fit ApplyOriginalAspectToVertices() gives the 640x448 frame.
+     * That lands on the meshes' NDC because their projection is widened by
+     * the same view extend the fit divides out. */
+    ArmQuadAnchor(ScreenXToClip(x) / g_view_extend_x,
+                  ScreenYToClip(y) / g_view_extend_y, view_depth);
+}
+
+void MioPan_RendererEndAnchor(void)
+{
+    g_quad_anchor_armed = false;
+}
+
+void MioPan_RendererSetSkyCamera(const float *rotation, const float *screen,
+                                 float frame_x, float frame_y,
+                                 const float *horizon, float strip_scroll,
+                                 float strip_squash)
+{
+    g_sky_camera.valid = false;
+    if (rotation == nullptr || screen == nullptr || horizon == nullptr ||
+        !g_frame_active || !MatrixIsFinite(rotation) ||
+        !MatrixIsFinite(screen))
+    {
+        return;
+    }
+
+    /* A point's x, y and w on the GS come out of the screen matrix's columns
+     * 0, 1 and 3, and only its rows 0..2 may feed them: then the matrix
+     * projects a direction the same way it projects any point along it, and
+     * a camera-centred dome is all directions.  True of every view->screen
+     * matrix g3dCalcViewScreenMatrixPerspective() builds; anything else is
+     * not a sky this can follow. */
+    if (screen[12] != 0.0f || screen[13] != 0.0f || screen[15] != 0.0f)
+    {
+        return;
+    }
+
+    double rot[9];
+    double proj[9];
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 3; col++)
+        {
+            rot[row * 3 + col] = rotation[row * 4 + col];
+        }
+        proj[row * 3 + 0] = screen[row * 4 + 0];
+        proj[row * 3 + 1] = screen[row * 4 + 1];
+        proj[row * 3 + 2] = screen[row * 4 + 3];
+    }
+
+    /* GS pixels -> 640x448 frame (less frame_x / frame_y) -> NDC
+     * (ScreenXToClip() / ScreenYToClip()) -> the window fit, all on
+     * homogeneous (x w, y w, w). */
+    const double ex = g_view_extend_x;
+    const double ey = g_view_extend_y;
+    const double fit[9] = {
+        2.0 / ((double)kLogicalWidth * ex), 0.0, 0.0,
+        0.0, -2.0 / ((double)kLogicalHeight * ey), 0.0,
+        (-2.0 * frame_x / (double)kLogicalWidth - 1.0) / ex,
+        (2.0 * frame_y / (double)kLogicalHeight + 1.0) / ey,
+        1.0,
+    };
+
+    MulMatrix3(g_sky_camera.to_screen, rot, proj);
+    MulMatrix3(g_sky_camera.to_screen, g_sky_camera.to_screen, fit);
+    if (!InvertMatrix3(g_sky_camera.to_screen, g_sky_camera.from_screen))
+    {
+        return;
+    }
+    g_sky_camera.horizon[0] =
+        ScreenXToClip(horizon[0] - frame_x) / g_view_extend_x;
+    g_sky_camera.horizon[1] =
+        ScreenYToClip(horizon[1] - frame_y) / g_view_extend_y;
+    g_sky_camera.focal[0] = (float)(proj[0] * fit[0]);
+    g_sky_camera.focal[1] = (float)(-proj[4] * fit[4]);
+    g_sky_camera.strip_scroll = strip_scroll;
+    g_sky_camera.strip_squash = strip_squash;
+    g_sky_camera.valid = std::isfinite(strip_scroll) &&
+                         std::isfinite(strip_squash) &&
+                         std::isfinite(g_sky_camera.horizon[0]) &&
+                         std::isfinite(g_sky_camera.horizon[1]);
+}
+
+void MioPan_RendererBeginSkyLayer(int layer, float band_top, float band_bottom)
+{
+    g_sky_layer_armed = -1;
+    if (!g_sky_camera.valid || layer < 0 || layer >= SKY_FOLLOW_LAYERS)
+    {
+        return;
+    }
+    SkyFollow &sky = g_sky_follow[layer];
+    sky = g_sky_camera;
+    sky.band_top = ScreenYToClip(band_top) / g_view_extend_y;
+    sky.band_bottom = ScreenYToClip(band_bottom) / g_view_extend_y;
+    g_sky_layer_armed = layer;
+}
+
+void MioPan_RendererEndSkyLayer(void)
+{
+    g_sky_layer_armed = -1;
 }
 
 static void DrawTexturedQuadImpl(const sceGsTex0 *tex0,
@@ -15611,9 +16312,13 @@ void MioPan_RendererDrawClipLine(const float *positions,
     {
         return;
     }
+    /* Divided through by w, but still a projective point under the live
+     * camera, so it follows a reprojected one like any clip-space bridge
+     * (DrawCommand::follow) -- the rain's streaks are these. */
     QueueTriangleList(g_white_texture, 1, 1, vertices, 6,
                       depth_test != 0, depth_test != 0, false, nullptr,
-                      nullptr, DRAW_SOURCE_GENERIC, reversed);
+                      nullptr, DRAW_SOURCE_GENERIC, reversed,
+                      reversed ? CAMERA_FOLLOW_CLIP : CAMERA_FOLLOW_NONE);
 }
 
 void MioPan_RendererDrawWorldLine(const float *positions,
@@ -16175,11 +16880,17 @@ static void DrawClipTrianglesImpl(const sceGsTex0 *tex0,
          * game writes is GREATER/AREF=0, GEQUAL/AREF=1 or ALWAYS, so the
          * strictest cutoff reachable is "discard fully transparent" and no
          * value in the ROM can blank a primitive.
+         *
+         * Projected through the live camera on the CPU, so a present under
+         * an in-between camera has to carry it across (DrawCommand::follow).
+         * Only with a reversed z: that is the meshes' own depth row, which
+         * the re-aiming needs to find the world point again.
          */
         QueueTriangleList(texture, texture_width, texture_height,
                           vertices.data(), (int)vertices.size(),
                           depth_test != 0, depth_test != 0, false, nullptr,
-                          g_gs_alpha_test, source, reversed);
+                          g_gs_alpha_test, source, reversed,
+                          reversed ? CAMERA_FOLLOW_CLIP : CAMERA_FOLLOW_NONE);
     }
 }
 

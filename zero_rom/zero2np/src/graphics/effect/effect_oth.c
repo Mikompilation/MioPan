@@ -2714,6 +2714,10 @@ void SubHalo(float *p, int type, int textp, u_int z, u_char r, u_char g, u_char 
 
         rn = rnbk;
 
+        /* PORT: the two sprites are laid out on screen around vpos, so they
+           are tied to it for frame smoothing's in-between cameras. */
+        RendererBeginWorldAnchor(vpos);
+
         /* The monochrome twin sits at the next index, as everywhere in the
            effect layer. */
         SetEffSQITex(textp * 2 + EffWrkMonochroModeGet() + 0xc, ipos, 1,
@@ -2723,6 +2727,8 @@ void SubHalo(float *p, int type, int textp, u_int z, u_char r, u_char g, u_char 
         SetEffSQITex(textp * 2 + EffWrkMonochroModeGet() + 0xc, ipos, 1,
                      f, f, r, g, b,
                      (u_char)((rn + 3) * (u_int)alp / 100));        /* 1531 */
+
+        MioPan_RendererEndAnchor();
     }
 }
 
@@ -3012,7 +3018,17 @@ static int draw_distortion_particles(float (*local_screen)[4], float (*local_cli
                     }
                 }
 
+                /* Tied to the particle for frame smoothing's in-between
+                   cameras, by where it is drawn, as in the sibling.  Only
+                   this flat case: the refracting one below samples the frame
+                   at the tick's own screen position, so moving the diamond
+                   and not its sample point would shear the picture it
+                   shows. */
+                MioPan_RendererBeginScreenAnchor(screen[0] - 2048.0f + 320.0f,
+                                                 screen[1] - 2048.0f + 224.0f,
+                                                 clip[3]);
                 MioPan_RendererDrawSolidTriangles2D(xy, rgba, 12);
+                MioPan_RendererEndAnchor();
             }
             else
             {
@@ -5959,12 +5975,20 @@ int draw_distortion_particles2(float (*matLocalScreen)[4],
                 uv[k * 2 + 1] = stq[c][1] * th;
             }
 
+            /* Laid out on screen around the particle, so tied to it for
+               frame smoothing's in-between cameras -- by where it is drawn,
+               since matLocalClip is the guard-band volume here, not the
+               one the renderer projects with. */
+            MioPan_RendererBeginScreenAnchor(screen[0] - 2048.0f + 320.0f,
+                                             screen[1] - 2048.0f + 224.0f,
+                                             clip[3]);
             MioPan_RendererDrawTexturedQuadDepth(
                 pTx0, (const sceGsTex1 *)&tex1, xy, uv, ndc_z, clip[3],
                 (u_char)(int)p->color[0],
                 (u_char)(int)p->color[1],
                 (u_char)(int)p->color[2],
                 (u_char)(int)p->color[3]);
+            MioPan_RendererEndAnchor();
         }
 
         /* 2149 -- the guard band, read back out of the packet: corner 1 is the

@@ -870,6 +870,54 @@ void MioPan_RendererDrawBillboardTriangles(const sceGsTex0 *tex0,
                                            int vertex_count,
                                            int depth_test,
                                            float ndc_z_bias = 0.0f);
+/* Ties the screen-space draws queued until MioPan_RendererEndAnchor() to one
+ * point in the world: the sprites an effect lays out in 2D around a projected
+ * position -- halos, flame and smoke particles.  Under frame smoothing a
+ * present whose camera is not the tick's moves the draws by however far the
+ * point moves on screen, as the world around them does; without it they stay
+ * where the tick's camera put them and jump about against a world drawn at the
+ * display rate.  A no-op before a perspective camera is installed or for a
+ * point behind the eye.
+ *
+ * `clip` is the point through the camera's matWorldClipObject (z ignored) --
+ * NOT matWorldClipPolygon, the GS guard-band volume most effect code projects
+ * with, whose x and y are 6x and 8x smaller.  For those, the ScreenAnchor form
+ * takes the point where the sprite is actually drawn: (x, y) in the same
+ * 640x448 frame pixels the quad bridges take, and its view depth (clip w,
+ * which both volumes share). */
+void MioPan_RendererBeginAnchor(const float *clip);
+void MioPan_RendererBeginScreenAnchor(float x, float y, float view_depth);
+void MioPan_RendererEndAnchor(void);
+/* The same for MapSky.c, whose three layers are not projected through the
+ * scene's camera: a camera-centred dome turned by the camera's yaw and pitch
+ * and projected through the sky's own fixed-FOV matrix, a horizon strip
+ * scrolled by the yaw and set on the projected horizon, and a fog band down to
+ * that strip.  Frame smoothing turns the sky's camera by however far the
+ * scene's has turned.
+ *
+ * Once a frame, before the layers: `rotation` is the sky's world-aligned ->
+ * sky-view rotation (RotY x RotX, no projection), `screen` its view->screen
+ * matrix (MapSkyPers), and frame_x / frame_y what comes off a GS pixel
+ * position to put it in the 640x448 frame.  `horizon` is the projected
+ * horizon point in GS pixels before the area's squash, `strip_scroll` how far
+ * the strip scrolls for a pixel the dome moves at the horizon (scroll rate
+ * over the dome's focal length) and `strip_squash` the area's squash of the
+ * horizon's height (move_y / 256).
+ *
+ * Then each layer's draws between Begin and End.  The band also gives its top
+ * and bottom edges in frame pixels; the others pass 0. */
+enum
+{
+    MIOPAN_SKY_DOME = 0,
+    MIOPAN_SKY_STRIP = 1,
+    MIOPAN_SKY_BAND = 2
+};
+void MioPan_RendererSetSkyCamera(const float *rotation, const float *screen,
+                                 float frame_x, float frame_y,
+                                 const float *horizon, float strip_scroll,
+                                 float strip_squash);
+void MioPan_RendererBeginSkyLayer(int layer, float band_top, float band_bottom);
+void MioPan_RendererEndSkyLayer(void);
 /* Host shadow of the GS TEST register's alpha-test fields (ATE / ATST / AREF /
  * AFAIL).  The GS held these as global state until something wrote the register
  * again, so this is a plain "last value wins" store; mesh draws snapshot it as

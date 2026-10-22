@@ -893,65 +893,73 @@ SGDPROCUNITHEADER *sgdGetProcUnit(SGDPROCUNITHEADER *pPUHead, int iProcUnitId, i
 }
 
 void sgdGetBoundingBox(SGDFILEHEADER *pFH, float avBB[8][4])
-{
-    /* The 8 corners follow the BB proc-unit header (the union payload); each
-     * corner is grown along its own sign convention so the result is the
-     * tightest AABB enclosing every block's box (negative faces take the min,
-     * positive faces take the max -- see GRA3DBOUNDINGBOXVERTEXINDEX).        */
-    memset(avBB, 0, sizeof(avBB));
+{                                                                       /* 1104 */
+    /* The whole 8x4 box, 0x80 bytes, as the ROM's memset has it.  avBB is an
+     * array parameter, so sizeof(avBB) would be a pointer's size and leave
+     * every corner but the first holding the caller's stack -- which is what
+     * gave map objects a centre at z = -1e20 and lit cloth black. */
+    memset(avBB, 0, sizeof(float[8][4]));                               /* 1109 */
 
-    for (int i = 0; i < pFH->uiNumBlock; i++)
+    for (unsigned int i = 0; i < pFH->uiNumBlock; i++)                  /* 1111 */
     {
         SGDPROCUNITHEADER *pPUHead;
 
-        for (pPUHead = pFH->apProcUnitHead[i]; pPUHead; pPUHead = pPUHead->pNext)
+        for (pPUHead = pFH->apProcUnitHead[i]; pPUHead; pPUHead = pPUHead->pNext) /* 1113, 1115 */
         {
-            if (pPUHead->iCategory == SPC_BOUNDINGBOX)
+            if (pPUHead->iCategory == SPC_BOUNDINGBOX)                  /* 1117 */
             {
-                const float *avCorner = (const float *)&pPUHead->BoundingBoxDesc;
+                /* The 8 corners follow the 0x10-byte proc-unit header, one
+                 * quadword each, in GRA3DBOUNDINGBOXVERTEXINDEX order -- the
+                 * ROM reads them at pPUHead + 0x10 (ROM lines 380-403, a
+                 * helper inlined from this file).  Each corner is grown along
+                 * its own signs: negative faces take the min, positive faces
+                 * the max.  The box starts at zero, not at the first block's
+                 * corners, so it always takes in the model's origin. */
+                float (*avBBDest)[4]      = avBB;
+                const float (*avBBSrc)[4] = (const float (*)[4])(pPUHead + 1); /* 380 */
 
-                /* corner 0 (---): all min */
-                if (avCorner[0]  < avBB[BBVI_MMM][0]) { avBB[BBVI_MMM][0] = avCorner[0];  }
-                if (avCorner[1]  < avBB[BBVI_MMM][1]) { avBB[BBVI_MMM][1] = avCorner[1];  }
-                if (avCorner[2]  < avBB[BBVI_MMM][2]) { avBB[BBVI_MMM][2] = avCorner[2];  }
+                /* corner 0 (---): all min */                           /* 396 */
+                if (avBBSrc[BBVI_MMM][0] < avBBDest[BBVI_MMM][0]) { avBBDest[BBVI_MMM][0] = avBBSrc[BBVI_MMM][0]; }
+                if (avBBSrc[BBVI_MMM][1] < avBBDest[BBVI_MMM][1]) { avBBDest[BBVI_MMM][1] = avBBSrc[BBVI_MMM][1]; }
+                if (avBBSrc[BBVI_MMM][2] < avBBDest[BBVI_MMM][2]) { avBBDest[BBVI_MMM][2] = avBBSrc[BBVI_MMM][2]; }
 
-                /* corner 1 (+--): x max, y/z min */
-                if (avBB[BBVI_PMM][0] < avCorner[4])  { avBB[BBVI_PMM][0] = avCorner[4];  }
-                if (avCorner[5]  < avBB[BBVI_PMM][1]) { avBB[BBVI_PMM][1] = avCorner[5];  }
-                if (avCorner[6]  < avBB[BBVI_PMM][2]) { avBB[BBVI_PMM][2] = avCorner[6];  }
+                /* corner 1 (+--): x max, y/z min */                    /* 397 */
+                if (avBBDest[BBVI_PMM][0] < avBBSrc[BBVI_PMM][0]) { avBBDest[BBVI_PMM][0] = avBBSrc[BBVI_PMM][0]; }
+                if (avBBSrc[BBVI_PMM][1] < avBBDest[BBVI_PMM][1]) { avBBDest[BBVI_PMM][1] = avBBSrc[BBVI_PMM][1]; }
+                if (avBBSrc[BBVI_PMM][2] < avBBDest[BBVI_PMM][2]) { avBBDest[BBVI_PMM][2] = avBBSrc[BBVI_PMM][2]; }
 
-                /* corner 2 (-+-): x min, y max, z min */
-                if (avCorner[12] < avBB[BBVI_MPM][0]) { avBB[BBVI_MPM][0] = avCorner[12]; }
-                if (avBB[BBVI_MPM][1] < avCorner[13]) { avBB[BBVI_MPM][1] = avCorner[13]; }
-                if (avCorner[14] < avBB[BBVI_MPM][2]) { avBB[BBVI_MPM][2] = avCorner[14]; }
+                /* corner 2 (-+-): x min, y max, z min */               /* 398 */
+                if (avBBSrc[BBVI_MPM][0] < avBBDest[BBVI_MPM][0]) { avBBDest[BBVI_MPM][0] = avBBSrc[BBVI_MPM][0]; }
+                if (avBBDest[BBVI_MPM][1] < avBBSrc[BBVI_MPM][1]) { avBBDest[BBVI_MPM][1] = avBBSrc[BBVI_MPM][1]; }
+                if (avBBSrc[BBVI_MPM][2] < avBBDest[BBVI_MPM][2]) { avBBDest[BBVI_MPM][2] = avBBSrc[BBVI_MPM][2]; }
 
-                /* corner 3 (++-): x/y max, z min */
-                if (avBB[BBVI_PPM][0] < avCorner[16]) { avBB[BBVI_PPM][0] = avCorner[16]; }
-                if (avBB[BBVI_PPM][1] < avCorner[17]) { avBB[BBVI_PPM][1] = avCorner[17]; }
-                if (avCorner[18] < avBB[BBVI_PPM][2]) { avBB[BBVI_PPM][2] = avCorner[18]; }
+                /* corner 3 (++-): x/y max, z min */                    /* 399 */
+                if (avBBDest[BBVI_PPM][0] < avBBSrc[BBVI_PPM][0]) { avBBDest[BBVI_PPM][0] = avBBSrc[BBVI_PPM][0]; }
+                if (avBBDest[BBVI_PPM][1] < avBBSrc[BBVI_PPM][1]) { avBBDest[BBVI_PPM][1] = avBBSrc[BBVI_PPM][1]; }
+                if (avBBSrc[BBVI_PPM][2] < avBBDest[BBVI_PPM][2]) { avBBDest[BBVI_PPM][2] = avBBSrc[BBVI_PPM][2]; }
 
-                /* corner 4 (--+): x/y min, z max */
-                if (avCorner[20] < avBB[BBVI_MMP][0]) { avBB[BBVI_MMP][0] = avCorner[20]; }
-                if (avCorner[21] < avBB[BBVI_MMP][1]) { avBB[BBVI_MMP][1] = avCorner[21]; }
-                if (avBB[BBVI_MMP][2] < avCorner[22]) { avBB[BBVI_MMP][2] = avCorner[22]; }
+                /* corner 4 (--+): x/y min, z max */                    /* 400 */
+                if (avBBSrc[BBVI_MMP][0] < avBBDest[BBVI_MMP][0]) { avBBDest[BBVI_MMP][0] = avBBSrc[BBVI_MMP][0]; }
+                if (avBBSrc[BBVI_MMP][1] < avBBDest[BBVI_MMP][1]) { avBBDest[BBVI_MMP][1] = avBBSrc[BBVI_MMP][1]; }
+                if (avBBDest[BBVI_MMP][2] < avBBSrc[BBVI_MMP][2]) { avBBDest[BBVI_MMP][2] = avBBSrc[BBVI_MMP][2]; }
 
-                /* corner 5 (+-+): x max, y min, z max */
-                if (avBB[BBVI_PMP][0] < avCorner[24]) { avBB[BBVI_PMP][0] = avCorner[24]; }
-                if (avCorner[25] < avBB[BBVI_PMP][1]) { avBB[BBVI_PMP][1] = avCorner[25]; }
-                if (avBB[BBVI_PMP][2] < avCorner[26]) { avBB[BBVI_PMP][2] = avCorner[26]; }
+                /* corner 5 (+-+): x max, y min, z max */               /* 401 */
+                if (avBBDest[BBVI_PMP][0] < avBBSrc[BBVI_PMP][0]) { avBBDest[BBVI_PMP][0] = avBBSrc[BBVI_PMP][0]; }
+                if (avBBSrc[BBVI_PMP][1] < avBBDest[BBVI_PMP][1]) { avBBDest[BBVI_PMP][1] = avBBSrc[BBVI_PMP][1]; }
+                if (avBBDest[BBVI_PMP][2] < avBBSrc[BBVI_PMP][2]) { avBBDest[BBVI_PMP][2] = avBBSrc[BBVI_PMP][2]; }
 
-                /* corner 6 (-++): x min, y/z max */
-                if (avCorner[28] < avBB[BBVI_MPP][0]) { avBB[BBVI_MPP][0] = avCorner[28]; }
-                if (avBB[BBVI_MPP][1] < avCorner[29]) { avBB[BBVI_MPP][1] = avCorner[29]; }
-                if (avBB[BBVI_MPP][2] < avCorner[30]) { avBB[BBVI_MPP][2] = avCorner[30]; }
+                /* corner 6 (-++): x min, y/z max */                    /* 402 */
+                if (avBBSrc[BBVI_MPP][0] < avBBDest[BBVI_MPP][0]) { avBBDest[BBVI_MPP][0] = avBBSrc[BBVI_MPP][0]; }
+                if (avBBDest[BBVI_MPP][1] < avBBSrc[BBVI_MPP][1]) { avBBDest[BBVI_MPP][1] = avBBSrc[BBVI_MPP][1]; }
+                if (avBBDest[BBVI_MPP][2] < avBBSrc[BBVI_MPP][2]) { avBBDest[BBVI_MPP][2] = avBBSrc[BBVI_MPP][2]; }
 
-                /* corner 7 (+++): all max */
-                if (avBB[BBVI_PPP][0] < avCorner[32]) { avBB[BBVI_PPP][0] = avCorner[32]; }
-                if (avBB[BBVI_PPP][1] < avCorner[33]) { avBB[BBVI_PPP][1] = avCorner[33]; }
-                if (avBB[BBVI_PPP][2] < avCorner[34]) { avBB[BBVI_PPP][2] = avCorner[34]; }
+                /* corner 7 (+++): all max */                           /* 403 */
+                if (avBBDest[BBVI_PPP][0] < avBBSrc[BBVI_PPP][0]) { avBBDest[BBVI_PPP][0] = avBBSrc[BBVI_PPP][0]; }
+                if (avBBDest[BBVI_PPP][1] < avBBSrc[BBVI_PPP][1]) { avBBDest[BBVI_PPP][1] = avBBSrc[BBVI_PPP][1]; }
+                if (avBBDest[BBVI_PPP][2] < avBBSrc[BBVI_PPP][2]) { avBBDest[BBVI_PPP][2] = avBBSrc[BBVI_PPP][2]; }
             }
-        }
-    }
+        }                                                               /* 1122 */
+    }                                                                   /* 1124 */
 }
 
 void sgdRemapInverse(SGDFILEHEADER *pSGDHead)
