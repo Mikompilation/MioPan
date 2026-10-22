@@ -369,22 +369,20 @@ took as arguments; they are now `g_frame_upload`, a four-field struct beside
 `g_draws.clear()`. Its `valid` field is what says an upload stage has run for
 the frame currently queued.
 
-**A `repeat` present skips exactly four things**, each for its own reason:
+**A `repeat` present skips exactly two things**, each for its own reason:
 
 - **The whole upload stage.** Not just cost: `ApplyOriginalAspectToVertices()`
   scales in place, so a second pass shrinks every screen-space draw twice, and
   `ConvertMeshDrawsToStreamed()` rewrites `g_draws`.
-- **`RecordShadowMapPass()`**, and `g_shadow_valid` with it. The map is
-  light-relative and the light did not move.
-- **The GS block captures**, which collapses the scene back to a single pass
-  segment (`capture_count` is forced to 0, so the two-cursor loop runs once).
-  The slots already hold this frame's composite taken at the right draw index.
-  *Known imprecision:* a slot captured twice in one frame keeps only its last
-  capture, which a repeated present's earlier draws then sample. Accepted — the
-  frames that repeat are in-betweens.
 - **`RecordPauseScreenCapture` / `RecordScreenMirror`.** Those are the game's
   own frame; retaking them from an in-between hands the game a picture it never
   simulated.
+
+It used to skip the shadow map and the GS block captures too, on the grounds
+that the light had not moved and the slots already held this frame's
+composite.  Both were wrong once in-betweens moved the world: **every present
+redraws the shadow map and retakes the captures** (2026-10-22; Part 11, "Found
+by playing it").
 
 `texture_upload` and `mesh_upload` are left default-constructed on a repeat,
 which makes `CommitTextureUploads`, `CommitMeshUploads` and both transfer
@@ -537,10 +535,11 @@ reprojection overwrites the live one. `BlendCameraBetween()` is the blend
 against explicit endpoints; `MioPan_RendererBlendCameraFromPrevious()` is now a
 thin wrapper on it, so there is still one implementation of the verified maths.
 
-The shadow map is recorded during present 0, with an in-between camera live.
-That is fine and checked: casters' mvps are light-relative and reprojection
-skips them, and `MioPan_RendererSet3DViewProjection()` refreshes only
-`view`/`projection`/`viewProj` in the uniform block — nothing shadow-related.
+The shadow map is recorded by every present, with that present's in-between
+camera live.  That is fine and checked: casters' mvps are light-relative and
+reprojection skips them, and `MioPan_RendererSet3DViewProjection()` refreshes
+only `view`/`projection`/`viewProj` in the uniform block — nothing
+shadow-related.  The casters themselves move with the geometry blend (Part 11).
 
 #### The profiler had to be corrected for it
 
@@ -731,17 +730,32 @@ per-step rotation — which at 30 Hz, over half a tick, is small.
 #### Correspondence is the whole safety argument
 
 `g_draws` is rebuilt from scratch every frame and says nothing about which draw
-was which last time, so both halves need that established first. Draw `k` is
-paired with draw `k` of the previous frame while the keys match, and the match
-**stops at the first mismatch rather than resynchronising** — pairing past a
-divergence is how one object's geometry would get blended toward another's.
+was which last time, so both halves need that established first.
+`PairGeometryDraws()` writes `g_geo_pairs`: per draw, the index of its partner
+in last frame's snapshot, or -1 (keeps this frame's own data — increment 3's
+behaviour, invisible rather than wrong).
 
-The key is `(first_vertex, vertex_count, texture, flags)`. `first_vertex` is
-what makes it safe: any insertion, removal or size change shifts it for every
-draw after it, so the prefix ends there rather than sliding by one. Room and
-characters are built before effects, so the churn that ends the prefix is
-usually behind them. Everything past it keeps this frame's own data, which is
-increment 3's behaviour — the failure mode is invisible, not wrong.
+- **Streamed draws pair in order.** Each takes the first draw of the same
+  *shape* — `(vertex_count, texture, flags)` — at or after the last streamed
+  pairing, at most `kGeometryPairWindow` (64) streamed draws ahead.  No partner
+  in reach means new; draws stepped over are gone.  Position in `g_vertices`
+  is *not* identity (every insertion shifts it), so a paired draw's two spans
+  sit at different offsets and `ApplyGeometryVertexBlend()` addresses them
+  separately.  Order is what keeps like-shaped parts (two legs) apart; a run of
+  like-shaped neighbours whose length changed pairs not at all, since which
+  member came or went cannot be told.
+- **Resident draws pair by nearest instance.** Identity is the unit
+  `(mesh, index span, texture, flags)`; several instances of a unit are
+  separate objects the furniture pass may reorder by distance, so each takes
+  the nearest unclaimed one within `kGeometryMaxTickJump`, in any order.
+
+**It used to be a prefix** — draw k with draw k while keys including
+`first_vertex` agreed, stopping at the first mismatch.  Safe, and brittle in
+exactly the case that shows: the room's merged resident units fold differently
+every few ticks at the head of the list, and the candle's effect sprites come
+and go between the characters' parts, so Mio fell out of the prefix for a whole
+tick every second or so and snapped — "character movement feels choppy" (user,
+2026-10-22).  See Part 11 for the measurements and the harness.
 
 **The `geo` figure in the profiler summary is the share of 3D draws that
 paired**, and it is what says whether this is doing anything:
@@ -969,14 +983,23 @@ rebuild it rather than keep it.
   ImGui frame is meant to feed several presents; `MioPanUi::BeginFrame()` owns
   the reset. Putting the one-shot guard back makes the overlay flash at the
   logical rate as soon as any frame is presented twice.
-- **A repeated present reuses the GS block captures.** A slot captured twice in
-  one logical frame keeps only its last capture. Accepted for in-betweens — but
-  it means a repeat is not bit-identical to the real present in the handful of
-  frames that do that, and Settings > Graphics > Frame smoothing will show it.
+- **Anything a present samples that depends on where things are must be
+  redone by every present.** The GS block captures (an effect blends the copy
+  back over the frame) and the shadow map (its casters move with the blend)
+  were once kept from the tick's first present; at 240 Hz that was a
+  translucent second Mio a step behind the real one, and a shadow at the tick's
+  own pose.  Only the pause still and the photo mirror stay once per tick.
 - **Do not reproject a draw without `transform_mesh`.** Screen-space draws have
   no `model` and their `mvp` is unused; rewriting it is harmless today but the
   invariant is what makes the eligibility test a one-liner.
-- **Do not reproject shadow casters.** Their mvp is light-relative.
+- **Do not reproject shadow casters** — their mvp is light-relative — but do
+  blend them: `GeometryDrawIsEligible()` includes them, so a skinned caster's
+  vertices move with the character, and `CasterTransformAt()` moves a rigid one
+  as `blend(model) × inverse(model) × mvp`, under the same light.
+- **A draw's partner is `GeometryPairOf(i)`, not draw `i` of last frame.** Its
+  vertices sit at a different offset in last frame's positions
+  (`g_geo_prev_draws[pair].key.first_vertex`); indexing both frames' positions
+  with one span is the bug the pairing rewrite had to avoid.
 - **`sys_wrk.count` parity** drives which GS framebuffer page the effect
   read-backs use. Any scheme that changes how many rendered frames exist per
   logical frame has to keep parity coherent.
@@ -1180,6 +1203,49 @@ nothing on screen; display → field drops one tick, ~37 ms, while the
 presenter joins), the pause screen over its captured still, and five window
 resizes while the presenter owned the swapchain — no crash, no SDL error, the
 swapchain followed every size.
+
+### Found by playing it (2026-10-22) — all fixed
+
+The user ran in circles (Square held) in chapter 3's first room and reported
+three things; each had its own cause, and the traces and frame crops that
+found them are the method to reuse:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "ghosting of the character" | Repeats reused the GS block captures from the tick's first present; this room takes 2 a tick and an effect blends the copy back, so a translucent Mio trailed the real one, a tick old by the last present | Captures retaken by every present (`RecordFramePasses()`) |
+| "meshes at the wrong place" | Shadow casters were not blended and the map was drawn once, at the tick's own pose, while she was drawn interpolated | Casters blended (vertices; rigid ones by `CasterTransformAt()`), map redrawn by every present |
+| "character movement feels choppy" | Prefix pairing broke whenever the room's resident units refolded or the candle sprites came and went — every few ticks Mio was not blended for a whole tick, then snapped | `PairGeometryDraws()`: streamed in order with a 64-draw window, resident by nearest instance (Part 8) |
+
+How they were found, without input: a temporary hook pinning t for test
+(`split` = first present of a tick at t = 0, rest at t = 1; `zero`; `one`)
+plus full-resolution PrintWindow crops around Mio.  Ghost limbs showed in
+`split` and normal t, never in `one` — which is what isolated the captures.  A
+per-tick trace (draws, 3D draws, paired, jumped) and a per-present trace (eye,
+and the centroid of the skinned streamed vertices as drawn) measured the rest.
+Running in a circle needs a *rotating* stick script: controls are
+camera-relative, so a fixed direction just runs her into a wall.
+
+Measured on that run (RelWithDebInfo, 240 Hz):
+
+| | before | after |
+|---|---|---|
+| 3D draws paired per tick | ~397 of 412 (all of them unpaired after the break on 17 of 382 ticks) | 412.0 of 412.2 |
+| character speed vs neighbours, mean | 13.4% | 1.0% |
+| at tick boundaries | 73% | 1.5% |
+| stalled / jumped presents | 68 / 22 | 0 / 0 |
+| presenter CPU per present | 0.52 ms | 0.53 ms (max 1.16) |
+
+The pairing was also checked offline: a scratch harness built from the
+renderer's own `GeometryDrawKey` … `PairGeometryDraws()` (verbatim, eligibility
+stubbed) over 20,000 random ticks with draws dropped, effect sprites inserted,
+units refolded and resident instances reordered every tick: 8.2 M streamed
+survivors, 32 paired wrongly (0.0004%, chance shape collisions), 2.4% left
+unpaired (mostly runs that changed length, by design); 80,286 reordered
+resident instances, every one paired with itself.  Rebuild it rather than keep
+it: extract those definitions with `sed`, replace
+`GeometryDrawIsEligible(g_draws[...])` with `true`.
+
+The same three apply to the field loop's repeat and are fixed there too.
 
 ### Known imprecisions (prototype)
 
