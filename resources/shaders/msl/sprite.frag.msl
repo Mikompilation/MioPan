@@ -90,6 +90,7 @@ struct main0_out
 struct main0_in
 {
     float2 in_var_TEXCOORD0 [[user(locn0)]];
+    float2 in_var_TEXCOORD1 [[user(locn1)]];
     float4 in_var_TEXCOORD2 [[user(locn2)]];
     float4 in_var_TEXCOORD3 [[user(locn3)]];
 };
@@ -204,33 +205,43 @@ fragment main0_out main0(main0_in in [[stage_in]], constant type_MikuPanUniforms
     {
         discard_fragment();
     }
-    float3 _222 = _178.xyz;
-    float3 _252;
-    do
+    float4 _269;
+    if (MikuPanUniforms.uFogColor.w < 0.0)
     {
-        if (MikuPanUniforms.uFogColor.w <= 0.0)
-        {
-            _252 = _222;
-            break;
-        }
-        _252 = mix(MikuPanUniforms.uFogColor.xyz, _222, float3(fast::clamp(floor((MikuPanUniforms.uFog.z + (MikuPanUniforms.uFog.w / precise::max(in.in_var_TEXCOORD3.x, 9.9999999747524270787835121154785e-07))) * 255.0) * 0.0039215688593685626983642578125, MikuPanUniforms.uFog.x, MikuPanUniforms.uFog.y)));
-        break;
-    } while(false);
-    float4 _266;
-    if (MikuPanUniforms.uParams1.y > 0.001000000047497451305389404296875)
-    {
-        float3 _264 = mix(_252.xyz, fast::clamp(float3(0.3764705955982208251953125) - _252.xyz, float3(0.0), float3(1.0)), float3(fast::clamp(MikuPanUniforms.uParams1.y, 0.0, 1.0)));
-        _266 = float4(_264.x, _264.y, _264.z, _178.w);
+        float3 _238 = mix(MikuPanUniforms.uFogColor.xyz, _178.xyz, float3(floor(in.in_var_TEXCOORD1.x * 255.0) * 0.0039215688593685626983642578125));
+        _269 = float4(_238.x, _238.y, _238.z, _178.w);
     }
     else
     {
-        _266 = float4(_252.x, _252.y, _252.z, _178.w);
+        float3 _240 = _178.xyz;
+        float3 _267;
+        do
+        {
+            if (MikuPanUniforms.uFogColor.w <= 0.0)
+            {
+                _267 = _240;
+                break;
+            }
+            _267 = mix(MikuPanUniforms.uFogColor.xyz, _240, float3(fast::clamp(floor((MikuPanUniforms.uFog.z + (MikuPanUniforms.uFog.w / precise::max(in.in_var_TEXCOORD3.x, 9.9999999747524270787835121154785e-07))) * 255.0) * 0.0039215688593685626983642578125, MikuPanUniforms.uFog.x, MikuPanUniforms.uFog.y)));
+            break;
+        } while(false);
+        _269 = float4(_267.x, _267.y, _267.z, _178.w);
     }
-    if (_266.w <= 0.0)
+    float4 _282;
+    if (MikuPanUniforms.uParams1.y > 0.001000000047497451305389404296875)
+    {
+        float3 _280 = mix(_269.xyz, fast::clamp(float3(0.3764705955982208251953125) - _269.xyz, float3(0.0), float3(1.0)), float3(fast::clamp(MikuPanUniforms.uParams1.y, 0.0, 1.0)));
+        _282 = float4(_280.x, _280.y, _280.z, _269.w);
+    }
+    else
+    {
+        _282 = _269;
+    }
+    if (_282.w <= 0.0)
     {
         discard_fragment();
     }
-    out.out_var_SV_Target0 = _266;
+    out.out_var_SV_Target0 = _282;
     return out;
 }
 

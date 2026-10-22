@@ -802,9 +802,16 @@ void MioPan_RendererDrawTexturedQuadDepth(const sceGsTex0 *tex0,
                                           unsigned char g,
                                           unsigned char b,
                                           unsigned char a);
+
+/* MapSky.c's quads: the dome's cells and the horizon strip's sprites.  `fog`
+ * is each corner's GS fog value F, 0..255 and in the same corner order as
+ * `xy`, for a primitive whose PRIM sets FGE -- the dome's -- or NULL for one
+ * that does not.  It is blended toward FOGCOL exactly as the 3D path's depth
+ * ramp is (MioPan_RendererSetFog() is what holds FOGCOL). */
 void MioPan_RendererDrawSkyQuad(const sceGsTex0 *tex0,
                                 const float *xy,
                                 const float *uv,
+                                const unsigned char *fog,
                                 unsigned char r,
                                 unsigned char g,
                                 unsigned char b,
