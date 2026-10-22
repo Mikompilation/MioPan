@@ -776,11 +776,14 @@ static void MapObjUpdateAnim(int anim_id, void *hdl, MDAT_OBJ *op)
             }
         }
 
+        /* Every case but 6 breaks into the flip below, which consumes the
+         * request: MapAnimCall() rewinds to frame 0, so re-serving it next
+         * frame would pin a one-shot animation on its first key. */
         switch ((u_int)op->Action)                                      /* 609 */
         {
         case 0:
             MapAnimSetFlg(anim_id, 0x22);                               /* 611 */
-            return;                                                     /* 612 */
+            break;                                                      /* 612 */
 
         case 1:
         case 2:
@@ -788,14 +791,14 @@ static void MapObjUpdateAnim(int anim_id, void *hdl, MDAT_OBJ *op)
             MapAnimCall(anim_id, op->ActionType);                       /* 616 */
             MapAnimDeleteFlg(anim_id, 0x12);                            /* 617 */
             MapAnimSetFlg(anim_id, 0x20);                               /* 618 */
-            return;                                                     /* 619 */
+            break;                                                      /* 619 */
 
         case 4:
         case 5:
             MapAnimCall(anim_id, op->ActionType);                       /* 622 */
             MapAnimSetFlg(anim_id, 0x30);                               /* 623 */
             MapAnimDeleteFlg(anim_id, 2);                               /* 624 */
-            return;                                                     /* 625 */
+            break;                                                      /* 625 */
 
         case 6:
         {
