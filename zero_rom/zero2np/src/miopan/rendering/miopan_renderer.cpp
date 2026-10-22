@@ -1261,38 +1261,37 @@ unsigned int g_smoothing_skips;
  *    Nothing but the VERTICES can move it, and moving them means re-uploading
  *    the streamed vertex buffer for each in-between.
  *
- * Both need to know that draw k of the previous logical frame is the same
- * geometry as draw k of this one, which the draw list does not say -- it is
+ * Both need to know which draw of the previous logical frame is the same
+ * geometry as each draw of this one, which the draw list does not say -- it is
  * rebuilt from scratch every frame.  g_geo_prev_draws is last frame's identity
- * list and g_geo_match_count the length of the prefix that still corresponds;
- * everything past the first mismatch keeps this frame's own data, which is
- * exactly increment 3's behaviour.  Room and characters are built before
- * effects, so the churn that ends the prefix is usually behind them.
+ * list and g_geo_pairs says, per draw of this frame, which of those it is, or
+ * that it has none and keeps this frame's own data (increment 3's behaviour).
+ * See PairGeometryDraws() for how the two lists are lined up.
  */
 bool g_interpolate_geometry = true;
 
-/* Identity of one draw, for frame-to-frame correspondence.  It has to be
- * strong enough that two different objects cannot alias -- blending one
- * object's vertices toward another's would be spectacular -- and `first_vertex`
- * is what makes that so: any insertion, removal or size change shifts it for
- * every draw after it, so the match ends there rather than sliding. */
+/* Identity of one draw, for frame-to-frame correspondence.
+ *
+ * `first_vertex` is where the draw sits in g_vertices, which every insertion or
+ * removal ahead of it shifts, so it is kept for addressing the draw's vertices
+ * but is not part of a streamed draw's identity; that is its shape -- vertex
+ * count, texture, flags.  A resident draw has no span of g_vertices: it holds
+ * its index span in `first_vertex`, which is fixed for a given unit of a given
+ * mesh, and that does belong to its identity. */
 struct GeometryDrawKey
 {
-    /* A resident draw has no span of g_vertices; it keys on its index span
-     * and on the mesh it belongs to instead, which is the same guarantee --
-     * a different object cannot present the same pair. */
     Uint32 first_vertex;
     Uint32 vertex_count;
     const void *texture;
     const void *mesh;
     unsigned int flags;
 
-    bool operator==(const GeometryDrawKey &other) const
+    bool SameShape(const GeometryDrawKey &other) const
     {
-        return first_vertex == other.first_vertex &&
-               vertex_count == other.vertex_count &&
+        return vertex_count == other.vertex_count &&
                texture == other.texture && mesh == other.mesh &&
-               flags == other.flags;
+               flags == other.flags &&
+               (mesh == nullptr || first_vertex == other.first_vertex);
     }
 };
 
@@ -1312,13 +1311,19 @@ thread_local std::vector<GeometrySnapshotDraw> g_geo_curr_draws;
  * here rather than trusting `a + (b - a) * 1.0f` to be exactly `b`. */
 thread_local std::vector<float> g_geo_prev_positions;
 thread_local std::vector<float> g_geo_curr_positions;
-/* Draws [0, g_geo_match_count) correspond to the previous frame's. */
-thread_local size_t g_geo_match_count;
+/* Per draw of this frame, the index in g_geo_prev_draws of the same geometry,
+ * or -1; and how many draws have one. */
+thread_local std::vector<int32_t> g_geo_pairs;
+thread_local size_t g_geo_paired;
 /* This frame's snapshot is complete and may become the next frame's previous. */
 thread_local bool g_geo_snapshot_valid;
 /* Vertex blending specifically is safe -- there is a previous position buffer
  * and nothing has invalidated the vertex indices since it was taken. */
 thread_local bool g_geo_vertices_valid;
+/* The geometry t of the present being recorded, or negative for the frame as
+ * built -- what ReprojectDrawsAt() was handed, kept for the shadow pass, which
+ * moves the rigid casters by it (CasterTransformAt()). */
+thread_local float g_present_model_t = -1.0f;
 /*
  * Share of the frame's 3D draws that actually blend, or negative when geometry
  * smoothing had nothing to work with.  Same job `g_camera_motion` does for the
@@ -1673,6 +1678,51 @@ void MulMatrixRowMajor(float *out, const float *a, const float *b)
     }
 
     std::memcpy(out, r, sizeof(r));
+}
+
+/* The inverse of an affine transform in this file's convention -- p' = p * M,
+ * the 3x3 in the upper left, the translation in row 3, column 3 = (0,0,0,1).
+ * In double, since the result is multiplied straight back into an mvp.
+ * Returns false for a matrix that is not affine or not invertible. */
+bool InvertAffineRowMajor(const float *m, float *out)
+{
+    if (m[3] != 0.0f || m[7] != 0.0f || m[11] != 0.0f || m[15] != 1.0f)
+    {
+        return false;
+    }
+
+    const double a = m[0], b = m[1], c = m[2];
+    const double d = m[4], e = m[5], f = m[6];
+    const double g = m[8], h = m[9], i = m[10];
+    const double c00 = e * i - f * h;
+    const double c01 = c * h - b * i;
+    const double c02 = b * f - c * e;
+    const double det = a * c00 + d * c01 + g * c02;
+    if (!(std::fabs(det) > 1e-12))
+    {
+        return false;
+    }
+    const double s = 1.0 / det;
+    double r[9] = {
+        c00 * s,             c01 * s,             c02 * s,
+        (f * g - d * i) * s, (a * i - c * g) * s, (c * d - a * f) * s,
+        (d * h - e * g) * s, (b * g - a * h) * s, (a * e - b * d) * s,
+    };
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 3; col++)
+        {
+            out[row * 4 + col] = (float)r[row * 3 + col];
+        }
+        out[row * 4 + 3] = 0.0f;
+    }
+    for (int col = 0; col < 3; col++)
+    {
+        out[12 + col] = (float)-(m[12] * r[col] + m[13] * r[3 + col] +
+                                 m[14] * r[6 + col]);
+    }
+    out[15] = 1.0f;
+    return true;
 }
 
 bool MatrixIsFinite(const float *m)
@@ -8138,26 +8188,243 @@ unsigned int GeometryDrawFlags(const DrawCommand &draw)
     return flags;
 }
 
-/* A draw the blend may touch: a 3D mesh aimed at the main camera, which is the
- * same test the camera reprojection uses, minus the indexed path -- an indexed
- * draw's vertices live in the mesh-cache buffers rather than g_vertices, and
- * ConvertMeshDrawsToStreamed() can move them mid-upload. */
+/* A draw the blend may touch: any 3D mesh with a model matrix -- the test the
+ * camera reprojection uses, shadow casters included.  A caster's vertices are
+ * the same world-space skin as the draw it shadows, and the map is redrawn by
+ * every present, so blending them keeps the shadow under the character; left
+ * at the tick's own pose it stepped at the tick rate, a tick ahead of her.
+ * (Reprojection still skips casters: their mvp is the light's; see
+ * CasterTransformAt() for how a rigid one moves.)  Callers that touch vertices
+ * also skip the indexed path -- an indexed draw's vertices live in the
+ * mesh-cache buffers rather than g_vertices, and ConvertMeshDrawsToStreamed()
+ * can move them mid-upload. */
 bool GeometryDrawIsEligible(const DrawCommand &draw)
 {
-    return draw.transform_mesh && !draw.shadow_caster;
+    return draw.transform_mesh;
 }
 
 void InvalidateGeometrySnapshot()
 {
-    g_geo_match_count = 0;
+    g_geo_pairs.clear();
+    g_geo_paired = 0;
     g_geo_snapshot_valid = false;
     g_geo_vertices_valid = false;
     g_geometry_coverage = -1.0f;
 }
 
+/* How far ahead in last frame's list a draw's partner is looked for: wide
+ * enough for what comes and goes between two ticks -- a few effect sprites, a
+ * room's merged units folding differently -- and it bounds the work at a few
+ * tens of thousands of key compares a tick. */
+constexpr size_t kGeometryPairWindow = 64;
+
+float ModelTranslationDistance2(const float *a, const float *b)
+{
+    const float dx = a[12] - b[12];
+    const float dy = a[13] - b[13];
+    const float dz = a[14] - b[14];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+/* The snapshot a resident-pairing comparison is about: an index into last
+ * frame's list, or a draw of this one. */
+const GeometrySnapshotDraw &SnapshotOf(
+    const std::vector<GeometrySnapshotDraw> &prev, uint32_t index)
+{
+    return prev[index];
+}
+
+const GeometrySnapshotDraw &SnapshotOf(const std::vector<GeometrySnapshotDraw> &,
+                                       const GeometrySnapshotDraw &draw)
+{
+    return draw;
+}
+
 /*
- * Record this frame's draw identities and vertex positions, and find how much
- * of the list still corresponds to the previous frame's.
+ * Line this frame's 3D draws up with last frame's, into g_geo_pairs.
+ *
+ * Two kinds of draw, two rules.
+ *
+ * A streamed draw pairs in order: each takes the first draw of the same shape
+ * at or after the last streamed pairing, looking no further than
+ * kGeometryPairWindow ahead.  One with no partner in reach is new and pairs
+ * with nothing, and the next resumes where the last pairing left off; draws of
+ * last frame that were stepped over are gone.  Order is what keeps like-shaped
+ * parts apart -- the two legs of one model are drawn in the same order every
+ * tick -- so it decides; and a run of like-shaped draws that changed length
+ * pairs not at all, since which member came or went cannot be told.
+ *
+ * A resident draw is one unit of a mesh placed by its matrix, and several
+ * instances of one unit are separate objects the game may draw in a different
+ * order each tick -- the furniture pass sorts by distance.  So it takes the
+ * nearest unclaimed instance of its unit, in any order, and none past
+ * kGeometryMaxTickJump.
+ *
+ * Either way a draw that appears or disappears costs its own blend and nobody
+ * else's.  It used to be a prefix -- draw k with draw k while the keys, which
+ * included the position in g_vertices, still agreed -- which stopped at the
+ * first difference.  The room's merged resident units fold differently every
+ * few ticks at the head of the list, and the candle's effect sprites come and
+ * go between the characters' parts; each time, every draw behind them, Mio
+ * included, was shown at the tick's own pose for the whole tick and then
+ * snapped -- a 30 Hz step a second or so apart while she ran.  A pairing that
+ * is wrong anyway is still caught where it would show, by the jump guards
+ * (ModelJumped(), and the per-vertex test in ApplyGeometryVertexBlend()).
+ */
+bool ResidentKeyLess(const GeometrySnapshotDraw &a, const GeometrySnapshotDraw &b)
+{
+    const std::less<const void *> before;
+    if (a.key.mesh != b.key.mesh)
+    {
+        return before(a.key.mesh, b.key.mesh);
+    }
+    if (a.key.first_vertex != b.key.first_vertex)
+    {
+        return a.key.first_vertex < b.key.first_vertex;
+    }
+    if (a.key.vertex_count != b.key.vertex_count)
+    {
+        return a.key.vertex_count < b.key.vertex_count;
+    }
+    if (a.key.texture != b.key.texture)
+    {
+        return before(a.key.texture, b.key.texture);
+    }
+    return a.key.flags < b.key.flags;
+}
+
+void PairGeometryDraws()
+{
+    const std::vector<GeometrySnapshotDraw> &prev = g_geo_prev_draws;
+    const std::vector<GeometrySnapshotDraw> &curr = g_geo_curr_draws;
+    /* Last frame's draws of each kind, by index.  Scratch kept across ticks,
+     * so pairing allocates nothing once warm.  The streamed pass walks its
+     * own list: the window is counted in streamed draws, or a room's hundred
+     * resident units ahead of the characters would put them out of reach. */
+    thread_local std::vector<uint32_t> streamed;
+    thread_local std::vector<uint32_t> resident;
+    thread_local std::vector<char> taken;
+    try
+    {
+        g_geo_pairs.assign(curr.size(), -1);
+        taken.assign(prev.size(), 0);
+        streamed.clear();
+        resident.clear();
+        for (size_t k = 0; k < prev.size(); k++)
+        {
+            (prev[k].key.mesh != nullptr ? resident : streamed)
+                .push_back((uint32_t)k);
+        }
+    }
+    catch (const std::bad_alloc &)
+    {
+        g_geo_pairs.clear();
+        return;
+    }
+
+    size_t next = 0;
+    for (size_t i = 0; i < curr.size() && next < streamed.size(); i++)
+    {
+        if (!GeometryDrawIsEligible(g_draws[i]) || curr[i].key.mesh != nullptr)
+        {
+            continue;
+        }
+        const size_t end =
+            std::min(streamed.size(), next + kGeometryPairWindow);
+        size_t found = end;
+        for (size_t k = next; k < end; k++)
+        {
+            if (prev[streamed[k]].key.SameShape(curr[i].key))
+            {
+                found = k;
+                break;
+            }
+        }
+        if (found == end)
+        {
+            continue;
+        }
+
+        /* A run of like-shaped draws back to back (the two legs) pairs in
+         * order only while it is as long as last frame's.  When one member
+         * came or went there is no telling which, so the whole run goes
+         * unblended this tick rather than shifted by one. */
+        size_t curr_run = 1;
+        while (i + curr_run < curr.size() &&
+               curr[i + curr_run].key.mesh == nullptr &&
+               GeometryDrawIsEligible(g_draws[i + curr_run]) &&
+               curr[i + curr_run].key.SameShape(curr[i].key))
+        {
+            curr_run++;
+        }
+        size_t prev_run = 1;
+        while (found + prev_run < streamed.size() &&
+               prev[streamed[found + prev_run]].key.SameShape(curr[i].key))
+        {
+            prev_run++;
+        }
+        if (curr_run != prev_run)
+        {
+            i += curr_run - 1;
+            next = found + prev_run;
+            continue;
+        }
+
+        g_geo_pairs[i] = (int32_t)streamed[found];
+        g_geo_paired++;
+        next = found + 1;
+    }
+
+    std::sort(resident.begin(), resident.end(), [&prev](uint32_t a, uint32_t b) {
+        return ResidentKeyLess(prev[a], prev[b]);
+    });
+    for (size_t i = 0; i < curr.size(); i++)
+    {
+        if (!GeometryDrawIsEligible(g_draws[i]) || curr[i].key.mesh == nullptr)
+        {
+            continue;
+        }
+        const auto range = std::equal_range(
+            resident.begin(), resident.end(), curr[i],
+            [&prev](const auto &a, const auto &b) {
+                return ResidentKeyLess(SnapshotOf(prev, a), SnapshotOf(prev, b));
+            });
+        float nearest = kGeometryMaxTickJump * kGeometryMaxTickJump;
+        int32_t found = -1;
+        for (auto it = range.first; it != range.second; ++it)
+        {
+            const float distance =
+                ModelTranslationDistance2(prev[*it].model, curr[i].model);
+            if (!taken[*it] && distance <= nearest)
+            {
+                nearest = distance;
+                found = (int32_t)*it;
+            }
+        }
+        if (found < 0)
+        {
+            continue;
+        }
+        taken[(size_t)found] = 1;
+        g_geo_pairs[i] = found;
+        g_geo_paired++;
+    }
+}
+
+/* The draw of last frame that draw `index` of this one blends from, or -1. */
+int32_t GeometryPairOf(size_t index)
+{
+    if (index >= g_geo_pairs.size())
+    {
+        return -1;
+    }
+    const int32_t pair = g_geo_pairs[index];
+    return pair >= 0 && (size_t)pair < g_geo_prev_draws.size() ? pair : -1;
+}
+
+/*
+ * Record this frame's draw identities and vertex positions, and pair the draws
+ * with the previous frame's (PairGeometryDraws()).
  *
  * Called once, before the first present of the frame.  It has to be before,
  * because the model blend feeds the very first reprojection -- and it can be,
@@ -8209,25 +8476,11 @@ void CaptureGeometrySnapshot(int extra)
     }
     g_geo_snapshot_valid = true;
 
-    /* Prefix match, and it stops at the first mismatch rather than trying to
-     * resynchronise.  A key that differs means the lists have diverged, and
-     * pairing past that point is how one object's geometry would get blended
-     * toward another's. */
-    const size_t limit = g_geo_prev_draws.size() < g_geo_curr_draws.size()
-        ? g_geo_prev_draws.size() : g_geo_curr_draws.size();
-    size_t match = 0;
-    while (match < limit &&
-           g_geo_prev_draws[match].key == g_geo_curr_draws[match].key)
-    {
-        match++;
-    }
-    g_geo_match_count = match;
-    /* Only that there IS a previous position buffer.  It does not have to be
-     * the same size as this frame's -- a matched draw's first_vertex and
-     * vertex_count are equal by construction, so its span is in range of both
-     * whatever an effect did to the tail of the list, and the per-draw bounds
-     * check in ApplyGeometryVertexBlend() confirms it. */
-    g_geo_vertices_valid = match > 0 && !g_geo_prev_positions.empty();
+    PairGeometryDraws();
+    /* Only that there IS a previous position buffer.  A paired draw's span
+     * sits at different places in the two buffers, so each blend checks both
+     * against their own buffer's size (ApplyGeometryVertexBlend()). */
+    g_geo_vertices_valid = g_geo_paired > 0 && !g_geo_prev_positions.empty();
 
     size_t eligible = 0;
     size_t blended = 0;
@@ -8238,7 +8491,7 @@ void CaptureGeometrySnapshot(int extra)
             continue;
         }
         eligible++;
-        blended += i < match ? 1u : 0u;
+        blended += GeometryPairOf(i) >= 0 ? 1u : 0u;
     }
     g_geometry_coverage = eligible != 0
         ? (float)((double)blended / (double)eligible) : -1.0f;
@@ -8297,8 +8550,13 @@ void ApplyGeometryVertexBlend(float t)
 
     const size_t curr_limit = g_geo_curr_positions.size() / 4u;
     const size_t prev_limit = g_geo_prev_positions.size() / 4u;
-    for (size_t i = 0; i < g_geo_match_count && i < g_draws.size(); i++)
+    for (size_t i = 0; i < g_draws.size(); i++)
     {
+        const int32_t pair = GeometryPairOf(i);
+        if (pair < 0)
+        {
+            continue;
+        }
         const DrawCommand &draw = g_draws[i];
         /* Only streamed vertices can move here.  A resident draw's geometry is
          * object space in a GPU buffer; its motion is all in `model`, which
@@ -8308,14 +8566,19 @@ void ApplyGeometryVertexBlend(float t)
         {
             continue;
         }
+        /* The same vertices, at different places in the two frames' streams:
+         * vertex `first + k` of this frame is `prev_first + k` of the last. */
         const size_t first = (size_t)draw.first_vertex;
         const size_t count = (size_t)draw.vertex_count;
+        const size_t prev_first =
+            (size_t)g_geo_prev_draws[(size_t)pair].key.first_vertex;
         if (count == 0 || count > curr_limit || first > curr_limit - count ||
-            count > prev_limit || first > prev_limit - count ||
+            count > prev_limit || prev_first > prev_limit - count ||
             count > g_vertices.size() || first > g_vertices.size() - count)
         {
             continue;
         }
+        const float *prev = g_geo_prev_positions.data() + prev_first * 4u;
 
         if (t >= 1.0f)
         {
@@ -8336,7 +8599,7 @@ void ApplyGeometryVertexBlend(float t)
         for (size_t vertex = first; vertex < first + count && !jumped;
              vertex++)
         {
-            const float *from = &g_geo_prev_positions[vertex * 4u];
+            const float *from = prev + (vertex - first) * 4u;
             const float *to = &g_geo_curr_positions[vertex * 4u];
             const float dx = to[0] - from[0];
             const float dy = to[1] - from[1];
@@ -8351,7 +8614,7 @@ void ApplyGeometryVertexBlend(float t)
 
         for (size_t vertex = first; vertex < first + count; vertex++)
         {
-            const float *from = &g_geo_prev_positions[vertex * 4u];
+            const float *from = prev + (vertex - first) * 4u;
             const float *to = &g_geo_curr_positions[vertex * 4u];
             float *position = g_vertices[vertex].position;
             position[0] = from[0] + (to[0] - from[0]) * t;
@@ -8386,6 +8649,41 @@ bool ModelJumped(const float *from, const float *to)
              kGeometryMaxTickJump * kGeometryMaxTickJump);
 }
 
+/*
+ * Where shadow caster `index` is drawn into the map at this present's t.
+ *
+ * A caster's mvp is model x the light's view-projection, built when it was
+ * queued.  A skinned caster has an identity model -- its motion is in the
+ * vertices ApplyGeometryVertexBlend() already moved -- but a rigid one moves
+ * by its matrix, so its model is blended like any other draw's and put back
+ * under the same light: mvp_t = blend(model) x inverse(model) x mvp.  The
+ * receivers project through the tick's own projector, so a caster moved this
+ * way lands under the character where she is drawn.  False leaves the caster
+ * as queued.
+ */
+bool CasterTransformAt(size_t index, const DrawCommand &draw, float *model,
+                       float *mvp)
+{
+    const float t = g_present_model_t;
+    const int32_t pair = GeometryPairOf(index);
+    if (!(t >= 0.0f && t < 1.0f) || pair < 0)
+    {
+        return false;
+    }
+    const float *from = g_geo_prev_draws[(size_t)pair].model;
+    float inverse[16];
+    float light[16];
+    if (ModelJumped(from, draw.model) ||
+        !BlendModelMatrix(from, draw.model, t, model) ||
+        !InvertAffineRowMajor(draw.model, inverse))
+    {
+        return false;
+    }
+    MulMatrixRowMajor(light, inverse, draw.mvp);
+    MulMatrixRowMajor(mvp, model, light);
+    return MatrixIsFinite(mvp);
+}
+
 int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
 {
     if (view == nullptr || projection == nullptr || !g_frame_active ||
@@ -8400,7 +8698,7 @@ int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
     MioPan_RendererSet3DViewProjection(view, projection);
 
     const bool blend_models =
-        model_t >= 0.0f && model_t < 1.0f && g_geo_match_count != 0;
+        model_t >= 0.0f && model_t < 1.0f && g_geo_paired != 0;
 
     int reprojected = 0;
     for (size_t i = 0; i < g_draws.size(); i++)
@@ -8417,19 +8715,20 @@ int ReprojectDrawsAt(const float *view, const float *projection, float model_t)
         }
 
         /* A caster's mvp was built against its light, not the eye, and its
-         * pixels belong to the shadow map -- which a reprojected frame reuses
-         * rather than re-rendering.  Leave it exactly as it was. */
+         * pixels belong to the shadow map.  Leave it exactly as it was; the
+         * shadow pass moves it under the light (CasterTransformAt()). */
         if (draw.shadow_caster)
         {
             continue;
         }
 
-        if (blend_models && i < g_geo_match_count &&
-            !ModelJumped(g_geo_prev_draws[i].model, draw.model))
+        const int32_t pair = blend_models ? GeometryPairOf(i) : -1;
+        if (pair >= 0 &&
+            !ModelJumped(g_geo_prev_draws[(size_t)pair].model, draw.model))
         {
             float model[16];
-            if (BlendModelMatrix(g_geo_prev_draws[i].model, draw.model,
-                                 model_t, model))
+            if (BlendModelMatrix(g_geo_prev_draws[(size_t)pair].model,
+                                 draw.model, model_t, model))
             {
                 /* draw.model is left alone deliberately.  The present that
                  * lands on the tick has to rebuild its mvp from the frame's
@@ -9809,8 +10108,14 @@ bool RecordShadowMapPass(SDL_GPUCommandBuffer *cmd, bool streamed_ready,
                 streamed_vertices_bound = false;
             }
 
-            std::memcpy(g_uniforms.mvp, draw.mvp, sizeof(g_uniforms.mvp));
-            std::memcpy(g_uniforms.model, draw.model, sizeof(g_uniforms.model));
+            float caster_model[16];
+            float caster_mvp[16];
+            const bool moved =
+                CasterTransformAt(draw_index, draw, caster_model, caster_mvp);
+            std::memcpy(g_uniforms.mvp, moved ? caster_mvp : draw.mvp,
+                        sizeof(g_uniforms.mvp));
+            std::memcpy(g_uniforms.model, moved ? caster_model : draw.model,
+                        sizeof(g_uniforms.model));
             SDL_PushGPUVertexUniformData(cmd, 0, &g_uniforms,
                                          (Uint32)sizeof(g_uniforms));
             SDL_PushGPUFragmentUniformData(cmd, 0, &g_uniforms,
@@ -10319,19 +10624,22 @@ void UploadFrameResources(SDL_GPUCommandBuffer *cmd,
  * once against a single upload stage.
  *
  * `repeat` marks a present that is re-recording a draw list this logical frame
- * has already presented:
+ * has already presented.  It skips one thing: the pause still and the screen
+ * mirror, which are the game's own frame and were already taken by the real
+ * present -- retaking them from an in-between would hand the game a picture it
+ * never simulated.
  *
- *  - The shadow map is light-relative and did not move with the camera, so it
- *    is left in place, g_shadow_valid along with it.
- *  - The GS block captures are reused rather than retaken.  They hold this
- *    same frame's composite, taken at the right point in the queue, and
- *    skipping them collapses the scene back to a single pass segment.  A slot
- *    captured twice in one frame keeps only its last capture, which a repeated
- *    present's earlier draws then sample -- accepted, because the frames that
- *    repeat are in-betweens.
- *  - The pause still and the screen mirror are the game's own frame and were
- *    already taken by the real present; retaking them from an in-between would
- *    hand the game a picture it never simulated.
+ * Everything that depends on where things are is redone by every present,
+ * repeats included, because an in-between moves the camera and the world:
+ *
+ *  - The GS block captures.  Each is the frame so far at a point in the queue,
+ *    and the draws after it blend that copy back over the frame, so a copy
+ *    kept from an earlier present shows the world where that present had it.
+ *    Reused, it put a translucent second Mio a step behind the real one
+ *    whenever she moved, moving at the tick rate under a frame that moved at
+ *    the display's.
+ *  - The shadow map, whose casters move with the geometry blend; see
+ *    RecordShadowMapPass().
  */
 void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
                        SDL_GPUTexture *swapchain_texture,
@@ -10561,13 +10869,13 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
      * the projection pass; here the caster draws are tagged as they are queued
      * and replayed into their own target now, which puts the map in place
      * before the first receiver samples it.
+     *
+     * By every present, repeats included: the casters move with the geometry
+     * blend (GeometryDrawIsEligible()), so a map kept from the tick's first
+     * present would hold the character where that present had her.
      */
-    if (!repeat)
-    {
-        g_shadow_valid = RecordShadowMapPass(cmd, vertices_uploaded,
-                                             colours_ready,
-                                             animated_vertices_ready);
-    }
+    g_shadow_valid = RecordShadowMapPass(cmd, vertices_uploaded, colours_ready,
+                                         animated_vertices_ready);
 
     /*
      * The queue is replayed in one pass unless an effect samples the GS frame
@@ -10581,7 +10889,7 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
      * With no such draw this is a single segment and behaves as before, so the
      * cost is one vector walk on an ordinary frame.
      */
-    const size_t capture_count = repeat ? 0u : g_capture_points.size();
+    const size_t capture_count = g_capture_points.size();
     if (vertices_uploaded || colours_ready || animated_vertices_ready)
     {
         /*
@@ -11219,6 +11527,7 @@ bool PresentLogicalFrame()
 
     if (extra <= 0)
     {
+        g_present_model_t = -1.0f;
         const bool presented = PresentFrame(false);
         g_smoothing_present_end = MioPan_ProfilerNow();
         return presented;
@@ -11241,7 +11550,7 @@ bool PresentLogicalFrame()
      * whose eye is not would be worse than either, so this rides on the same
      * toggle and additionally needs a corresponding previous frame. */
     const bool blend_geometry =
-        interpolate && g_interpolate_geometry && g_geo_match_count != 0;
+        interpolate && g_interpolate_geometry && g_geo_paired != 0;
 
     bool presented = false;
     for (int i = 0; i < total; i++)
@@ -11263,6 +11572,7 @@ bool PresentLogicalFrame()
         /* Negative asks for the frame exactly as it was built, which is what
          * every present did before geometry smoothing existed. */
         const float geometry_t = blend_geometry ? t : -1.0f;
+        g_present_model_t = geometry_t;
 
         if (i == 0)
         {
@@ -11391,9 +11701,12 @@ struct FramePacket
     std::vector<GeometrySnapshotDraw> geo_prev_draws;
     std::vector<float> geo_prev_positions;
 
+    /* This tick's pairing, which the next tick recomputes. */
+    std::vector<int32_t> geo_pairs;
+    size_t geo_paired = 0;
+
     std::vector<CaptureSlot> capture_slots;
     std::vector<float> geo_curr_positions;
-    size_t geo_match_count = 0;
     bool geo_vertices_valid = false;
     SpriteUniformBlock uniforms{};
     float view[16]{};
@@ -11666,10 +11979,11 @@ void HandOverFrameState(FramePacket &packet)
      * tick's, so last tick's can move; this tick's is copied. */
     g_geo_prev_draws.swap(packet.geo_prev_draws);
     g_geo_prev_positions.swap(packet.geo_prev_positions);
+    g_geo_pairs.swap(packet.geo_pairs);
+    std::swap(g_geo_paired, packet.geo_paired);
 
     packet.capture_slots = g_capture_slots;
     packet.geo_curr_positions = g_geo_curr_positions;
-    packet.geo_match_count = g_geo_match_count;
     packet.geo_vertices_valid = g_geo_vertices_valid;
     packet.uniforms = g_uniforms;
     std::memcpy(packet.view, g_3d_view, sizeof(packet.view));
@@ -11716,7 +12030,8 @@ void ExchangePresenterState(FramePacket &packet)
     g_geo_prev_positions.swap(packet.geo_prev_positions);
     g_capture_slots.swap(packet.capture_slots);
     g_geo_curr_positions.swap(packet.geo_curr_positions);
-    std::swap(g_geo_match_count, packet.geo_match_count);
+    g_geo_pairs.swap(packet.geo_pairs);
+    std::swap(g_geo_paired, packet.geo_paired);
     std::swap(g_geo_vertices_valid, packet.geo_vertices_valid);
     std::swap(g_uniforms, packet.uniforms);
     std::swap(g_3d_view, packet.view);
@@ -11823,7 +12138,7 @@ bool HandOffFrame()
      * presenter decides per present whether to use it. */
     CaptureGeometrySnapshot(1);
     const bool blend_geometry =
-        interpolate && g_interpolate_geometry && g_geo_match_count != 0;
+        interpolate && g_interpolate_geometry && g_geo_paired != 0;
 
     const uint64_t acquire_start =
         MioPan_ProfilerBeginPhase(MIOPAN_PROFILE_RENDERER_ACQUIRE);
@@ -12219,6 +12534,7 @@ void PresenterStep()
         g_packet_uploaded_t = ready ? t : -1.0f;
     }
 
+    g_present_model_t = packet->blend_geometry ? t : -1.0f;
     bool capture_recorded = false;
     bool mirror_recorded = false;
     const bool first = !g_packet_first_present_done;
@@ -12349,6 +12665,8 @@ void ReleasePacketSlots()
         packet.geo_prev_draws.clear();
         packet.geo_prev_positions.clear();
         packet.geo_curr_positions.clear();
+        packet.geo_pairs.clear();
+        packet.geo_paired = 0;
         packet.capture_slots.clear();
         for (SDL_GPUBuffer **buffer :
              {&packet.vertex_buffer, &packet.stream_index_buffer,
@@ -13524,6 +13842,7 @@ int MioPan_RendererRepeatPresent(void)
     {
         return 0;
     }
+    g_present_model_t = -1.0f;
     return RepeatPresentAt(-1.0f) ? 1 : 0;
 }
 
