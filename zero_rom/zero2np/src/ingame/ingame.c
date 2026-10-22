@@ -88,6 +88,7 @@
 #include "../common/save_data.h"
 #include "movie_room.h"
 #include "../miopan/miopan_config.h"    // MioPan_ConfigDebugMenuEnabled (port)
+#include "../outgame/title_room.h"      // TitleRoomBeforeIngameReset (port)
 
 /* --------------------------------------------------------------------------
  *  ingame.o's own storage.
@@ -1495,6 +1496,10 @@ void InitCostume(void)
 
 void IngameWrkInit(int chapter_no, int difficulty_label)
 {
+    /* PORT: the title's room backdrop lets go of its room before the reset
+     * below wipes what it registered.  See outgame/title_room.h. */
+    TitleRoomBeforeIngameReset();
+
     ingame_wrk.mChapterNo = chapter_no;
     ingame_wrk.mDifficulty = difficulty_label;
     ingame_wrk.mClearCnt = 0;

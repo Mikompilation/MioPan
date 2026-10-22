@@ -157,12 +157,17 @@ typedef struct MioPan_ConfigDeveloper
  * it, and its banner says how it hangs off the ROM's title; the overlay's
  * Settings > Title screen window is what writes it.
  *
+ * The backdrop is a list of scenes -- a room, two camera points and the path
+ * between them -- and the title picks among the enabled ones at random, moving
+ * on after `passes` runs of the path or each time the title comes up.  The
+ * dim, the music and the attract movie belong to the title, not a scene.
+ *
  * Camera points are world space as the game has it: Y grows downwards, and a
  * standing character is about a thousand units tall.  Fields of view are in
  * degrees here and radians everywhere else.
  *
- * Every field is 4 bytes, so the overlay's settle-and-save compare can memcmp
- * it the way it does the structs above.
+ * Every field is 4 bytes or a char array of a multiple of 4, so the overlay's
+ * settle-and-save compare can memcmp it the way it does the structs above.
  */
 #define MIOPAN_TITLE_BACKDROP_CLASSIC 0     /* the original scrolling art      */
 #define MIOPAN_TITLE_BACKDROP_ROOM    1     /* one of the game's rooms         */
@@ -174,9 +179,16 @@ typedef struct MioPan_ConfigDeveloper
 #define MIOPAN_TITLE_EASING_SMOOTH    0     /* eases out of each end and in    */
 #define MIOPAN_TITLE_EASING_LINEAR    1
 
-typedef struct MioPan_ConfigTitle
+#define MIOPAN_TITLE_CHANGE_PASS      0     /* another scene after `passes`    */
+#define MIOPAN_TITLE_CHANGE_VISIT     1     /* another scene per title visit   */
+
+#define MIOPAN_TITLE_SCENE_MAX        16
+#define MIOPAN_TITLE_NAME_MAX         32
+
+typedef struct MioPan_ConfigTitleScene
 {
-    int   backdrop;          /* MIOPAN_TITLE_BACKDROP_*                     */
+    char  name[MIOPAN_TITLE_NAME_MAX];
+    int   enabled;           /* 0 keeps it out of the rotation              */
     int   room;              /* 0..65, as RY00_PK2 counts them              */
     int   camera_set;        /* 0: frame the room by itself when it loads   */
     float a_eye[3];
@@ -189,11 +201,41 @@ typedef struct MioPan_ConfigTitle
     float hold_seconds;      /* at each end                                 */
     int   motion;            /* MIOPAN_TITLE_MOTION_*                       */
     int   easing;            /* MIOPAN_TITLE_EASING_*                       */
+} MioPan_ConfigTitleScene;
+
+typedef struct MioPan_ConfigTitle
+{
+    int   backdrop;          /* MIOPAN_TITLE_BACKDROP_*                     */
+    int   change;            /* MIOPAN_TITLE_CHANGE_*                       */
+    int   passes;            /* runs of the path before the next scene      */
     float dim;               /* black under the logo, 0 none .. 1 black     */
     int   music;             /* 0 the game's own; else a stream file, looped */
     float music_volume;      /* 0..1; 1 is the level the game plays music at */
     int   attract_movie;     /* room backdrop: let the idle movie start     */
+    int   scene_count;       /* 1..MIOPAN_TITLE_SCENE_MAX                   */
+    MioPan_ConfigTitleScene scenes[MIOPAN_TITLE_SCENE_MAX];
 } MioPan_ConfigTitle;
+
+/* A scene as a fresh one starts: room 40, framed by itself on load. */
+void MioPan_ConfigTitleSceneDefault(MioPan_ConfigTitleScene *scene);
+
+/*
+ * The title settings as text, exactly as miopan.ini carries them, for the
+ * overlay's copy and paste.  Both write NUL-terminated text and return the
+ * length the whole of it needs, so a NULL or short buffer measures.
+ *
+ *   Title  [title] and every [title.sceneN] after it.
+ *   Scene  one scene's section.
+ */
+int MioPan_ConfigTitleText(char *buf, int size);
+int MioPan_ConfigTitleSceneText(int scene, char *buf, int size);
+
+/* Append every scene section found in `text` -- [title.sceneN] blocks as the
+ * two above write them, numbered or not -- after the scenes already there, up
+ * to MIOPAN_TITLE_SCENE_MAX.  With `replace` the list is cleared first and a
+ * [title] section in the text sets the title's own settings too.  Returns the
+ * number of scenes taken; 0 changes nothing. */
+int MioPan_ConfigTitlePaste(const char *text, int replace);
 
 typedef struct MioPan_Config
 {

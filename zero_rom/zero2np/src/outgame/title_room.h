@@ -48,6 +48,15 @@ void        end_TitleRoom_Mode(void);
 int TitleRoomHidesTitleArt(void);
 
 /* --------------------------------------------------------------------------
+ *  For ingame.c.  IngameWrkInit() calls this first: it wipes what a resident
+ *  room has registered (MapPut, the effects and their sounds, the cloth), so
+ *  the room is let go while that is still whole.  Every way off the title
+ *  into a game passes through IngameWrkInit(); where the title carries on --
+ *  the load screen opens with one -- the room loads again the frame after.
+ * ------------------------------------------------------------------------ */
+void TitleRoomBeforeIngameReset(void);
+
+/* --------------------------------------------------------------------------
  *  For the overlay.
  * ------------------------------------------------------------------------ */
 typedef enum
@@ -69,23 +78,37 @@ const char *TitleRoomCode(int room);
 const char *TitleRoomPlace(int room);
 int         TitleRoomIsOnDisc(int room);
 
-/* Drop what is resident and load miopan_config.title.room again; also how a
+/* Drop what is resident and load the current scene's room again; also how a
  * backdrop change takes effect.  With camera_set at 0 the room is framed by
  * itself once it is in. */
 void TitleRoomReload(void);
 
-/* Re-frame the resident room now (clears camera_set if nothing is resident,
- * so the next load does it). */
-void TitleRoomFrameAutomatically(void);
+/* The scenes.  The title picks one at random among the enabled each time it
+ * comes up, and moves on as miopan_config.title.change says -- fading to
+ * black and up again on another, never the same one twice running while
+ * there is a choice.  Indices are into miopan_config.title.scenes[].
+ *
+ *   Current  the one on screen (or loading).
+ *   Show     put that one up now.
+ *   Hold     while non-zero the title stays on its scene -- the overlay holds
+ *            it for as long as the window is open, so a scene being edited
+ *            does not fade away under the editor. */
+int  TitleRoomCurrentScene(void);
+void TitleRoomShowScene(int scene);
+void TitleRoomHoldScene(int hold);
 
-/* Copy the live camera into point 0 (A) or 1 (B).  In a game, the room Mio is
- * in becomes the title's room as well -- and if that differs from the one the
- * other point was taken in, both points take this view.  Returns 1 when a
- * room change came with it. */
-int  TitleRoomCaptureView(int point);
+/* Re-frame a scene's room by itself: now, if it is the one up, else the next
+ * time it loads. */
+void TitleRoomFrameAutomatically(int scene);
 
-/* The camera path.  Progress is 0..1 over one whole cycle (out and back for
- * ping-pong). */
+/* Copy the live camera into a scene's point 0 (A) or 1 (B).  In a game, the
+ * room Mio is in becomes that scene's room as well -- and if that differs
+ * from the one the other point was taken in, both points take this view.
+ * Returns 1 when a room change came with it. */
+int  TitleRoomCaptureView(int scene, int point);
+
+/* The current scene's camera path.  Progress is 0..1 over one whole cycle
+ * (out and back for ping-pong). */
 float TitleRoomGetProgress(void);
 void  TitleRoomSetProgress(float progress);
 int   TitleRoomGetPaused(void);

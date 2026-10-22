@@ -1322,7 +1322,12 @@ void PersistSettingsIfChanged()
                   "MioPan_ConfigAudio gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigUi) == 1 * sizeof(int),
                   "MioPan_ConfigUi gained padding; compare by field");
-    static_assert(sizeof(MioPan_ConfigTitle) == 25 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigTitleScene) ==
+                      MIOPAN_TITLE_NAME_MAX + 21 * sizeof(int),
+                  "MioPan_ConfigTitleScene gained padding; compare by field");
+    static_assert(sizeof(MioPan_ConfigTitle) ==
+                      8 * sizeof(int) +
+                      MIOPAN_TITLE_SCENE_MAX * sizeof(MioPan_ConfigTitleScene),
                   "MioPan_ConfigTitle gained padding; compare by field");
 
     /* The title settings have no owner to capture from: the title window

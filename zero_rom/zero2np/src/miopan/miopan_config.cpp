@@ -127,23 +127,8 @@ MioPan_Config miopan_config = {
         /* Room: it is what the setting exists for, and the logo, the menu and
          * every screen behind them are the original's either way. */
         /* .backdrop          = */ MIOPAN_TITLE_BACKDROP_ROOM,
-        /* RKS00, the lantern courtyard outside the Kurosawa house: a slow
-         * truck across it, both ends looking at the same point among the
-         * lanterns, so the shot turns as it travels.  Chosen by eye in the
-         * running game; at z -2600 the path clears the railing along the
-         * south side, which a post of crosses the lens just past x 11280. */
-        /* .room              = */ 40,
-        /* .camera_set        = */ 1,
-        /* .a_eye             = */ { 8500.0f, -900.0f, -2600.0f },
-        /* .a_target          = */ { 9874.0f, -750.0f, 581.0f },
-        /* .a_fov             = */ 50.0f,
-        /* .b_eye             = */ { 11200.0f, -900.0f, -2600.0f },
-        /* .b_target          = */ { 9874.0f, -750.0f, 581.0f },
-        /* .b_fov             = */ 50.0f,
-        /* .travel_seconds    = */ 30.0f,
-        /* .hold_seconds      = */ 4.0f,
-        /* .motion            = */ MIOPAN_TITLE_MOTION_PINGPONG,
-        /* .easing            = */ MIOPAN_TITLE_EASING_SMOOTH,
+        /* .change            = */ MIOPAN_TITLE_CHANGE_PASS,
+        /* .passes            = */ 1,
         /* .dim               = */ 0.2f,
         /* 0: the game's own title music, played the way the ROM plays it. */
         /* .music             = */ 0,
@@ -151,6 +136,31 @@ MioPan_Config miopan_config = {
         /* Off: the room is the thing to look at while the title sits idle,
          * and the movie would take it away every fifteen seconds. */
         /* .attract_movie     = */ 0,
+        /* .scene_count       = */ 1,
+        /* .scenes            = */ {
+            {
+                /* RKS00, the lantern courtyard outside the Kurosawa house: a
+                 * slow truck across it, both ends looking at the same point
+                 * among the lanterns, so the shot turns as it travels.  Chosen
+                 * by eye in the running game; at z -2600 the path clears the
+                 * railing along the south side, which a post of crosses the
+                 * lens just past x 11280. */
+                /* .name              = */ "Lantern courtyard",
+                /* .enabled           = */ 1,
+                /* .room              = */ 40,
+                /* .camera_set        = */ 1,
+                /* .a_eye             = */ { 8500.0f, -900.0f, -2600.0f },
+                /* .a_target          = */ { 9874.0f, -750.0f, 581.0f },
+                /* .a_fov             = */ 50.0f,
+                /* .b_eye             = */ { 11200.0f, -900.0f, -2600.0f },
+                /* .b_target          = */ { 9874.0f, -750.0f, 581.0f },
+                /* .b_fov             = */ 50.0f,
+                /* .travel_seconds    = */ 30.0f,
+                /* .hold_seconds      = */ 4.0f,
+                /* .motion            = */ MIOPAN_TITLE_MOTION_PINGPONG,
+                /* .easing            = */ MIOPAN_TITLE_EASING_SMOOTH,
+            },
+        },
     },
 };
 
@@ -279,6 +289,12 @@ const EnumName kTitleEasings[] = {
     {nullptr, 0},
 };
 
+const EnumName kTitleChanges[] = {
+    {"pass", MIOPAN_TITLE_CHANGE_PASS},
+    {"visit", MIOPAN_TITLE_CHANGE_VISIT},
+    {nullptr, 0},
+};
+
 const char *EnumToName(const EnumName *table, int value)
 {
     for (const EnumName *e = table; e->label != nullptr; e++)
@@ -301,6 +317,7 @@ struct IniEntry
 {
     std::string key; /* "section.name", lower-cased */
     std::string value;
+    std::string section; /* lower-cased; the title's scenes are found by it */
 };
 
 std::vector<IniEntry> g_entries;
@@ -368,6 +385,7 @@ void ParseIni(const std::string &text)
         IniEntry entry;
         entry.key = section + "." + Lower(Trim(line.substr(0, eq)));
         entry.value = Trim(line.substr(eq + 1));
+        entry.section = section;
         g_entries.push_back(entry);
     }
 }
@@ -1012,6 +1030,297 @@ void ApplyEnvironmentOverrides(int *vsync, float *volume, float *ui_scale,
     }
 }
 
+/* ------------------------------------------------------------------------
+ *  The title screen: [title], then one [title.sceneN] per scene.
+ *
+ *  The same text is the file's and the clipboard's, so a scene copied out of
+ *  the overlay pastes back in, or into someone else's miopan.ini, unchanged.
+ *  Sections are found by name rather than by number: [title.scene3] after
+ *  [title.scene1] is the second scene, and a pasted block whose number is
+ *  already taken is simply the next one.
+ * --------------------------------------------------------------------- */
+
+const MioPan_ConfigTitleScene kTitleSceneDefault = {
+    /* .name           = */ "",
+    /* .enabled        = */ 1,
+    /* .room           = */ 40,
+    /* 0: placed by itself when its room loads. */
+    /* .camera_set     = */ 0,
+    /* .a_eye          = */ { 0.0f, 0.0f, 0.0f },
+    /* .a_target       = */ { 0.0f, 0.0f, 1.0f },
+    /* .a_fov          = */ 50.0f,
+    /* .b_eye          = */ { 0.0f, 0.0f, 0.0f },
+    /* .b_target       = */ { 0.0f, 0.0f, 1.0f },
+    /* .b_fov          = */ 50.0f,
+    /* .travel_seconds = */ 30.0f,
+    /* .hold_seconds   = */ 4.0f,
+    /* .motion         = */ MIOPAN_TITLE_MOTION_PINGPONG,
+    /* .easing         = */ MIOPAN_TITLE_EASING_SMOOTH,
+};
+
+/* Nothing between this file and outgame/title_room.c clamps these, and a room
+ * number off the end of the table would load whatever file sits there.  The
+ * room list itself is the game's, so only its length is checked here;
+ * title_room.c refuses a room the disc does not carry. */
+void ClampTitleScene(MioPan_ConfigTitleScene *s)
+{
+    if (s->room < 0 || s->room > 65)
+    {
+        s->room = 40;
+        s->camera_set = 0;
+    }
+    s->enabled = s->enabled != 0 ? 1 : 0;
+    s->camera_set = s->camera_set != 0 ? 1 : 0;
+    s->a_fov = SDL_clamp(s->a_fov, 10.0f, 120.0f);
+    s->b_fov = SDL_clamp(s->b_fov, 10.0f, 120.0f);
+    s->travel_seconds = SDL_clamp(s->travel_seconds, 0.5f, 600.0f);
+    s->hold_seconds = SDL_clamp(s->hold_seconds, 0.0f, 600.0f);
+    if (s->motion < MIOPAN_TITLE_MOTION_PINGPONG || s->motion > MIOPAN_TITLE_MOTION_ONCE)
+    {
+        s->motion = MIOPAN_TITLE_MOTION_PINGPONG;
+    }
+    if (s->easing != MIOPAN_TITLE_EASING_LINEAR)
+    {
+        s->easing = MIOPAN_TITLE_EASING_SMOOTH;
+    }
+    s->name[MIOPAN_TITLE_NAME_MAX - 1] = '\0';
+}
+
+void ClampTitle(MioPan_ConfigTitle *t)
+{
+    if (t->backdrop != MIOPAN_TITLE_BACKDROP_ROOM)
+    {
+        t->backdrop = MIOPAN_TITLE_BACKDROP_CLASSIC;
+    }
+    if (t->change != MIOPAN_TITLE_CHANGE_VISIT)
+    {
+        t->change = MIOPAN_TITLE_CHANGE_PASS;
+    }
+    t->passes = SDL_clamp(t->passes, 1, 100);
+    t->dim = SDL_clamp(t->dim, 0.0f, 1.0f);
+    t->music_volume = SDL_clamp(t->music_volume, 0.0f, 1.0f);
+    t->attract_movie = t->attract_movie != 0 ? 1 : 0;
+    t->scene_count = SDL_clamp(t->scene_count, 1, MIOPAN_TITLE_SCENE_MAX);
+}
+
+/* The scene keys out of one section, over the defaults.  The section is the
+ * scene's whole description, so nothing of whatever the slot held before
+ * survives into it. */
+void ReadTitleScene(const char *section, int number, MioPan_ConfigTitleScene *s)
+{
+    *s = kTitleSceneDefault;
+    SDL_snprintf(s->name, sizeof(s->name), "Scene %d", number);
+
+    ReadString(section, "name", s->name, sizeof(s->name));
+    ReadInt(section, "enabled", &s->enabled);
+    ReadInt(section, "room", &s->room);
+    ReadInt(section, "camera_set", &s->camera_set);
+    ReadVec3(section, "a_eye", s->a_eye);
+    ReadVec3(section, "a_target", s->a_target);
+    ReadFloat(section, "a_fov", &s->a_fov);
+    ReadVec3(section, "b_eye", s->b_eye);
+    ReadVec3(section, "b_target", s->b_target);
+    ReadFloat(section, "b_fov", &s->b_fov);
+    ReadFloat(section, "travel_seconds", &s->travel_seconds);
+    ReadFloat(section, "hold_seconds", &s->hold_seconds);
+    ReadEnum(section, "motion", kTitleMotions, &s->motion);
+    ReadEnum(section, "easing", kTitleEasings, &s->easing);
+    ClampTitleScene(s);
+}
+
+/* Every scene the parsed text holds, in the order it holds them.  A
+ * [title.sceneN] section is one, whatever N is.  A camera written straight
+ * into [title] -- how the first build of this kept its single scene -- is one
+ * too, when there is no scene section at all; so is a block of scene keys
+ * with no section header, which is what a hand-picked paste looks like. */
+int CollectTitleScenes(MioPan_ConfigTitleScene *out, int max)
+{
+    std::vector<std::string> sections;
+    for (const IniEntry &entry : g_entries)
+    {
+        const bool scene = entry.section.compare(0, 11, "title.scene") == 0 ||
+                           entry.section.empty();
+        bool seen = false;
+        for (const std::string &s : sections)
+        {
+            seen = seen || s == entry.section;
+        }
+        if (scene && !seen)
+        {
+            sections.push_back(entry.section);
+        }
+    }
+
+    int n = 0;
+    for (const std::string &section : sections)
+    {
+        if (n >= max)
+        {
+            break;
+        }
+        /* A headerless block counts only if it says which room. */
+        if (section.empty() && Lookup("", "room") == nullptr)
+        {
+            continue;
+        }
+        ReadTitleScene(section.c_str(), n + 1, &out[n]);
+        n++;
+    }
+
+    if (n == 0 && max > 0 && Lookup("title", "room") != nullptr)
+    {
+        ReadTitleScene("title", 1, &out[0]);
+        n = 1;
+    }
+    return n;
+}
+
+/* [title]'s own settings, then its scenes.  With `scenes` false the scene
+ * list is left as it is -- the paste that adds scenes. */
+void ReadTitle(MioPan_ConfigTitle *t, bool scenes)
+{
+    ReadEnum("title", "backdrop", kTitleBackdrops, &t->backdrop);
+    ReadEnum("title", "change", kTitleChanges, &t->change);
+    ReadInt("title", "passes", &t->passes);
+    ReadFloat("title", "dim", &t->dim);
+    ReadInt("title", "music", &t->music);
+    ReadFloat("title", "music_volume", &t->music_volume);
+    ReadInt("title", "attract_movie", &t->attract_movie);
+
+    if (scenes)
+    {
+        MioPan_ConfigTitleScene found[MIOPAN_TITLE_SCENE_MAX];
+        const int n = CollectTitleScenes(found, MIOPAN_TITLE_SCENE_MAX);
+
+        if (n > 0)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                t->scenes[i] = found[i];
+            }
+            t->scene_count = n;
+        }
+    }
+    ClampTitle(t);
+}
+
+/* A name is written verbatim, so it must not be able to end its own line or
+ * open a section. */
+std::string TitleSceneName(const char *name)
+{
+    std::string out;
+    for (const char *c = name; *c != '\0'; c++)
+    {
+        out += (*c == '\n' || *c == '\r' || *c == '[' || *c == ']') ? ' ' : *c;
+    }
+    return Trim(out);
+}
+
+std::string TitleSceneText(const MioPan_ConfigTitleScene &s, int number)
+{
+    char buf[1024];
+    SDL_snprintf(
+        buf, sizeof(buf),
+        "[title.scene%d]\n"
+        "name = %s\n"
+        "enabled = %d\n"
+        "room = %d\n"
+        "camera_set = %d\n"
+        "a_eye = %.2f %.2f %.2f\n"
+        "a_target = %.2f %.2f %.2f\n"
+        "a_fov = %.2f\n"
+        "b_eye = %.2f %.2f %.2f\n"
+        "b_target = %.2f %.2f %.2f\n"
+        "b_fov = %.2f\n"
+        "travel_seconds = %.2f\n"
+        "hold_seconds = %.2f\n"
+        "motion = %s\n"
+        "easing = %s\n"
+        "\n",
+        number,
+        TitleSceneName(s.name).c_str(),
+        s.enabled,
+        s.room,
+        s.camera_set,
+        (double)s.a_eye[0], (double)s.a_eye[1], (double)s.a_eye[2],
+        (double)s.a_target[0], (double)s.a_target[1], (double)s.a_target[2],
+        (double)s.a_fov,
+        (double)s.b_eye[0], (double)s.b_eye[1], (double)s.b_eye[2],
+        (double)s.b_target[0], (double)s.b_target[1], (double)s.b_target[2],
+        (double)s.b_fov,
+        (double)s.travel_seconds,
+        (double)s.hold_seconds,
+        EnumToName(kTitleMotions, s.motion),
+        EnumToName(kTitleEasings, s.easing));
+    return buf;
+}
+
+std::string TitleText()
+{
+    const MioPan_ConfigTitle &t = miopan_config.title;
+    char buf[3072];
+    SDL_snprintf(
+        buf, sizeof(buf),
+        "[title]\n"
+        "; The title screen's backdrop: room | classic.  room draws one of the\n"
+        ";   game's rooms, lit as the game lights it, behind the original menus\n"
+        ";   while the camera travels between two points.  classic is the\n"
+        ";   original title, picture and scrolling art and all.  The F1\n"
+        ";   overlay's Settings > Title screen window edits everything here\n"
+        ";   live, and copies it out and pastes it back in.\n"
+        "backdrop = %s\n"
+        "; When the title moves on to another scene, picked at random among\n"
+        ";   the enabled ones: pass (after `passes` runs of the camera path)\n"
+        ";   | visit (each time the title comes up).\n"
+        "change = %s\n"
+        "passes = %d\n"
+        "; Black laid over the room under the menus, 0 none .. 1 black.\n"
+        "dim = %.3f\n"
+        "; 0 is the game's own title music, played as the original plays it.\n"
+        ";   Anything else is a stream file number, looped -- the overlay\n"
+        ";   lists them; 2270 is KAN007_KUROSAWA, 2238 the title theme.\n"
+        "music = %d\n"
+        "; Its volume, 0..1; 1 is the level the game plays its music at.\n"
+        "music_volume = %.3f\n"
+        "; 1 lets the attract movie start after fifteen idle seconds, as the\n"
+        ";   original does.  Room backdrop only: classic always does.\n"
+        "attract_movie = %d\n"
+        "\n"
+        "; The scenes, one section each.  room is 0..65 as the disc counts\n"
+        ";   them: 0..12 RY00..RY12, 13 ROS00, 19 RTB00, 30 RRY00, 40 RKS00,\n"
+        ";   58 RCH00, 65 RY13.  camera_set 0 has the camera placed by itself\n"
+        ";   when the room loads.  The points are where the eye is and what\n"
+        ";   it looks at, in the game's world units (Y grows downwards), and\n"
+        ";   the field of view in degrees.  travel_seconds is one pass from A\n"
+        ";   to B, hold_seconds the rest at each end.  motion: pingpong (there\n"
+        ";   and back) | loop (cut back to A) | once.  easing: smooth | linear.\n"
+        ";   enabled 0 keeps a scene out of the rotation.\n"
+        "\n",
+        EnumToName(kTitleBackdrops, t.backdrop),
+        EnumToName(kTitleChanges, t.change),
+        t.passes,
+        (double)t.dim,
+        t.music,
+        (double)t.music_volume,
+        t.attract_movie);
+
+    std::string out = buf;
+    for (int i = 0; i < t.scene_count; i++)
+    {
+        out += TitleSceneText(t.scenes[i], i + 1);
+    }
+    return out;
+}
+
+int CopyOut(const std::string &text, char *buf, int size)
+{
+    if (buf != nullptr && size > 0)
+    {
+        SDL_strlcpy(buf, text.c_str(), (size_t)size);
+    }
+    return (int)text.size();
+}
+
 } // namespace
 
 extern "C" {
@@ -1124,46 +1433,7 @@ static void ConfigLoadOnce(void)
     miopan_config.developer.debug_menu =
         miopan_config.developer.debug_menu != 0 ? 1 : 0;
 
-    MioPan_ConfigTitle *t = &miopan_config.title;
-    ReadEnum("title", "backdrop", kTitleBackdrops, &t->backdrop);
-    ReadInt("title", "room", &t->room);
-    ReadInt("title", "camera_set", &t->camera_set);
-    ReadVec3("title", "a_eye", t->a_eye);
-    ReadVec3("title", "a_target", t->a_target);
-    ReadFloat("title", "a_fov", &t->a_fov);
-    ReadVec3("title", "b_eye", t->b_eye);
-    ReadVec3("title", "b_target", t->b_target);
-    ReadFloat("title", "b_fov", &t->b_fov);
-    ReadFloat("title", "travel_seconds", &t->travel_seconds);
-    ReadFloat("title", "hold_seconds", &t->hold_seconds);
-    ReadEnum("title", "motion", kTitleMotions, &t->motion);
-    ReadEnum("title", "easing", kTitleEasings, &t->easing);
-    ReadFloat("title", "dim", &t->dim);
-    ReadInt("title", "music", &t->music);
-    ReadFloat("title", "music_volume", &t->music_volume);
-    ReadInt("title", "attract_movie", &t->attract_movie);
-
-    /* Nothing between this file and outgame/title_room.c clamps these, and a
-     * room number off the end of the table would load whatever file sits
-     * there.  The room list itself is the game's, so only its length is
-     * checked here; title_room.c refuses a room the disc does not carry. */
-    if (t->backdrop != MIOPAN_TITLE_BACKDROP_ROOM)
-    {
-        t->backdrop = MIOPAN_TITLE_BACKDROP_CLASSIC;
-    }
-    if (t->room < 0 || t->room > 65)
-    {
-        t->room = 40;
-        t->camera_set = 0;
-    }
-    t->camera_set = t->camera_set != 0 ? 1 : 0;
-    t->a_fov = SDL_clamp(t->a_fov, 10.0f, 120.0f);
-    t->b_fov = SDL_clamp(t->b_fov, 10.0f, 120.0f);
-    t->travel_seconds = SDL_clamp(t->travel_seconds, 0.5f, 600.0f);
-    t->hold_seconds = SDL_clamp(t->hold_seconds, 0.0f, 600.0f);
-    t->dim = SDL_clamp(t->dim, 0.0f, 1.0f);
-    t->music_volume = SDL_clamp(t->music_volume, 0.0f, 1.0f);
-    t->attract_movie = t->attract_movie != 0 ? 1 : 0;
+    ReadTitle(&miopan_config.title, true);
 
     /* The window size is the one value with no setter to clamp it, and a zero
      * or negative one would fail SDL_CreateWindow outright. */
@@ -1243,8 +1513,9 @@ int MioPan_ConfigSave(void)
      * section is variable-length text rather than a fixed format string, and
      * regenerating it on the resize pass would be pure waste. */
     const std::string input_section = BuildInputSection();
+    const std::string title_section = TitleText();
 
-    auto format = [r, &input_section](char *buf, size_t cap) {
+    auto format = [r, &input_section, &title_section](char *buf, size_t cap) {
         return SDL_snprintf(
         buf, cap,
         "; MioPan settings.  Deleting this file restores the defaults.\n"
@@ -1474,46 +1745,7 @@ int MioPan_ConfigSave(void)
         ";   either way.\n"
         "debug_menu = %d\n"
         "\n"
-        "[title]\n"
-        "; The title screen's backdrop: room | classic.  room draws one of the\n"
-        ";   game's rooms, lit as the game lights it, behind the original logo\n"
-        ";   and menu while the camera travels between two points.  classic is\n"
-        ";   the original scrolling art.  The F1 overlay's Settings > Title\n"
-        ";   screen window edits everything here live.\n"
-        "backdrop = %s\n"
-        "; The room, 0..65, counted as the disc numbers them: 0..12 are RY00..\n"
-        ";   RY12, 13 ROS00, 19 RTB00, 30 RRY00, 40 RKS00, 58 RCH00, 65 RY13.\n"
-        "room = %d\n"
-        "; 0 has the camera placed by itself the next time the room loads.\n"
-        "camera_set = %d\n"
-        "; The two camera points: where the eye is and what it looks at, in\n"
-        ";   the game's world units (Y grows downwards), and the field of\n"
-        ";   view in degrees.\n"
-        "a_eye = %.2f %.2f %.2f\n"
-        "a_target = %.2f %.2f %.2f\n"
-        "a_fov = %.2f\n"
-        "b_eye = %.2f %.2f %.2f\n"
-        "b_target = %.2f %.2f %.2f\n"
-        "b_fov = %.2f\n"
-        "; Seconds for one pass from A to B, and seconds held at each end.\n"
-        "travel_seconds = %.2f\n"
-        "hold_seconds = %.2f\n"
-        "; pingpong (there and back) | loop (cut back to A) | once\n"
-        "motion = %s\n"
-        "; smooth | linear\n"
-        "easing = %s\n"
-        "; Black laid over the room under the logo, 0 none .. 1 black.\n"
-        "dim = %.3f\n"
-        "; 0 is the game's own title music, played as the original plays it.\n"
-        ";   Anything else is a stream file number, looped -- the overlay\n"
-        ";   lists them; 2270 is KAN007_KUROSAWA, 2238 the title theme.\n"
-        "music = %d\n"
-        "; Its volume, 0..1; 1 is the level the game plays its music at.\n"
-        "music_volume = %.3f\n"
-        "; 1 lets the attract movie start after fifteen idle seconds, as the\n"
-        ";   original does.  Room backdrop only: classic always does.\n"
-        "attract_movie = %d\n"
-        "\n%s",
+        "%s%s",
         miopan_config.paths.data_folder,
         EnumToName(kWindowModes, r->window_mode),
         r->window_width,
@@ -1559,31 +1791,7 @@ int MioPan_ConfigSave(void)
         (double)r->finder_mask_tint,
         (double)r->finder_mask_scale,
         miopan_config.developer.debug_menu,
-        EnumToName(kTitleBackdrops, miopan_config.title.backdrop),
-        miopan_config.title.room,
-        miopan_config.title.camera_set,
-        (double)miopan_config.title.a_eye[0],
-        (double)miopan_config.title.a_eye[1],
-        (double)miopan_config.title.a_eye[2],
-        (double)miopan_config.title.a_target[0],
-        (double)miopan_config.title.a_target[1],
-        (double)miopan_config.title.a_target[2],
-        (double)miopan_config.title.a_fov,
-        (double)miopan_config.title.b_eye[0],
-        (double)miopan_config.title.b_eye[1],
-        (double)miopan_config.title.b_eye[2],
-        (double)miopan_config.title.b_target[0],
-        (double)miopan_config.title.b_target[1],
-        (double)miopan_config.title.b_target[2],
-        (double)miopan_config.title.b_fov,
-        (double)miopan_config.title.travel_seconds,
-        (double)miopan_config.title.hold_seconds,
-        EnumToName(kTitleMotions, miopan_config.title.motion),
-        EnumToName(kTitleEasings, miopan_config.title.easing),
-        (double)miopan_config.title.dim,
-        miopan_config.title.music,
-        (double)miopan_config.title.music_volume,
-        miopan_config.title.attract_movie,
+        title_section.c_str(),
         input_section.c_str());
     };
 
@@ -1659,6 +1867,64 @@ int MioPan_ConfigSetDebugMenuEnabled(int enabled)
      * not a slider the debounce in miopan_ui.cpp exists to coalesce, and that
      * debounce only watches the renderer, audio and ui structs anyway. */
     return MioPan_ConfigSave();
+}
+
+void MioPan_ConfigTitleSceneDefault(MioPan_ConfigTitleScene *scene)
+{
+    *scene = kTitleSceneDefault;
+}
+
+int MioPan_ConfigTitleText(char *buf, int size)
+{
+    return CopyOut(TitleText(), buf, size);
+}
+
+int MioPan_ConfigTitleSceneText(int scene, char *buf, int size)
+{
+    if (scene < 0 || scene >= miopan_config.title.scene_count)
+    {
+        return CopyOut(std::string(), buf, size);
+    }
+
+    return CopyOut(TitleSceneText(miopan_config.title.scenes[scene], scene + 1),
+                   buf, size);
+}
+
+int MioPan_ConfigTitlePaste(const char *text, int replace)
+{
+    if (text == nullptr)
+    {
+        return 0;
+    }
+
+    /* The reader's helpers all look in g_entries, which holds nothing once the
+     * file has been loaded; the pasted text borrows it and gives it back. */
+    std::vector<IniEntry> saved;
+    saved.swap(g_entries);
+    ParseIni(text);
+
+    MioPan_ConfigTitle *t = &miopan_config.title;
+    MioPan_ConfigTitleScene found[MIOPAN_TITLE_SCENE_MAX];
+    const int n = CollectTitleScenes(found, MIOPAN_TITLE_SCENE_MAX);
+    int taken = 0;
+
+    if (n > 0)
+    {
+        if (replace != 0)
+        {
+            ReadTitle(t, false);
+            t->scene_count = 0;
+        }
+        for (int i = 0; i < n && t->scene_count < MIOPAN_TITLE_SCENE_MAX; i++)
+        {
+            t->scenes[t->scene_count++] = found[i];
+            taken++;
+        }
+        ClampTitle(t);
+    }
+
+    g_entries.swap(saved);
+    return taken;
 }
 
 void MioPan_ConfigApply(void)

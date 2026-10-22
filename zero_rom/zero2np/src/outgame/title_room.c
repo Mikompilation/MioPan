@@ -16,27 +16,36 @@
 //     draw     MapFogProc, gra3dDraw, then the effect passes and the
 //              brightness filter -- IngameDrawSub() (795..816), minus the
 //              finder, the fade and the event display.
-//     release  MapLoadDeleteRoomAll + MapDoorRelease -- what end_Story_Main()
-//              does with MapDrawDeleteRoomAll (724..727).
+//     release  MapLoadDeleteRoomAll + MapDoorRelease + EffectSndEnd -- what
+//              end_Story_Main() does with MapDrawDeleteRoomAll (719..727).
 //
-// THE ROOM HAS TO BE GONE BEFORE IngameWrkInit() RUNS, or be left to it.  Three
-// ways off the title reset the in-game state wholesale: New Game and chapter
-// select straight before the story, LoadGameInit() as the load screen opens,
-// and the mission menus under GID_TITLE_SETUP.  IngameWrkInit() clears MapPut,
-// the effects and the cloth under a room it does not know is there, and
-// deleting the room after that would walk handles it has already freed.  So:
+// THE SCENES are miopan_config.title.scenes[]: a room, two camera points and
+// a path each.  A visit opens on one at random among the enabled, and after
+// `passes` runs of its path (or on the next visit) the veil closes, another is
+// picked -- never the same one twice running while there is a choice -- and it
+// comes up out of black.  A scene in another room releases and requests the
+// new one in the same frame, so the title's own picture never shows between.
+// The pick has its own generator: MioPan_Rand() is the ROM's rand() stream.
 //
-//     story next    leave everything: IngameWrkInit() has run, and the story's
-//                   own MapLoadInit() re-initialises every map module before
-//                   anything draws.  end_TitleRoom_Mode() asks GPhaseIsQueued().
-//     load screen   release on its first frame -- this runs in GID_TITLE_MODE's
-//                   pre slot, before the child's init -- and load again the
-//                   frame after, over the reset, so the room stays behind it.
-//     setup menus   release, and stay released: they draw their own art.
+// THE ROOM HAS TO BE GONE BEFORE IngameWrkInit() RUNS.  Every way off the
+// title into a game resets the in-game state wholesale -- New Game, chapter
+// select, the load screen as it opens, the mission menus, the event browser's
+// chapter start -- and IngameWrkInit() clears MapPut, the effects and the
+// cloth under a room it does not know is there.  The effects' sound list is
+// re-initialised rather than stopped, so a looping cue (a room's river) would
+// play on into the game, and deleting the room afterwards would walk handles
+// already freed.  So IngameWrkInit() calls TitleRoomBeforeIngameReset() first
+// (a one-line PORT hook in ingame.c), the room lets go while its state is
+// still whole, and where the title carries on -- the load screen -- it loads
+// again the frame after, over the reset.  The setup menus draw their own art,
+// and the room stays released under them.
 //
 // THE PLAYER IS NOT THERE.  The room draw reads plyr_wrk in three places -- the
 // flashlight MapDrawRoomOne() lights with, the area PlyrOutsideCheck() asks
-// MapFogProc() about, and the shadow pass -- and on the title plyr_wrk is
+// MapFogProc() about, and the shadow pass -- and the 3D sound a room's water
+// and torches play needs a listener, which in a game IngameCameraMain() sets
+// every frame and on the title nothing does (Snd3DCalc() asserts without
+// one).  The listener follows the title's camera.  On the title plyr_wrk is
 // whatever the last game or boot left.  TitleRoomDraw() puts in what a room
 // with nobody in it would have for the length of the draw and puts the old
 // values back, so nothing outside this file ever sees the difference.
@@ -56,18 +65,20 @@
 #include "../common/variable.h"                 // plyr_wrk
 #include "../debug/camera_menu.h"               // DebugCameraMenu / DebugFreeCamera / DebugCameraMenuMain
 #include "../graphics/effect/effect.h"          // InitEffectsEF / EffectControl / BrightnessAdjustmentFilterDraw
+#include "../graphics/effect/effect_sub.h"      // EffectSndEnd
 #include "../graphics/graph2d/g2d_draw.h"       // SQAR_DAT / DISP_SQAR / CopySqrDToSqr / DispSqrD
 #include "../graphics/graph3d/g3dLight.h"       // G3DLIGHTTYPE_FORCE_DWORD
 #include "../graphics/graph3d/gra3d.h"          // camera / gra3dDraw
 #include "../graphics/graph3d/gra3dSGDData.h"   // sgdGetBoundingBox
 #include "../graphics/obj_draw_ctrl.h"          // obj_draw_ctrl
+#include "../ingame/ingame.h"                   // SetIngameListnerInfo
 #include "../ingame/map/MapDoor.h"              // MapDoorRelease
 #include "../ingame/map/MapFog.h"               // MapFogProc
 #include "../ingame/map/MapLoad.h"              // MapLoadInit / Main / DeleteRoomAll / ...
 #include "../ingame/map/MapObj.h"               // MapObjItemOff / On
 #include "../ingame/map/MhCtl.h"                // MhCtlMain
 #include "../ingame/map/RegDat.h"               // RegDatGetHead / MB_OUT_HEAD
-#include "../main/gphase.h"                     // GPhaseIsActive / GPhaseIsQueued / GID_*
+#include "../main/gphase.h"                     // GPhaseIsActive / GID_*
 #include "../main/phasefunc.h"                  // init_Title_Mode / pre_Title_Mode / end_Title_Mode
 #include "../miopan/miopan_config.h"            // miopan_config.title
 #include "../miopan/os/miopan_time.h"           // MioPan_GetPerformanceCounter
@@ -111,13 +122,16 @@ typedef struct
 {
     int      active;            /* GID_TITLE_MODE is running                 */
     TR_LOAD  load;
+    int      scene;             /* miopan_config.title.scenes[] on screen    */
+    int      visited;           /* a scene has been picked before            */
+    int      leaving;           /* fading out to the next scene              */
+    int      held;              /* the overlay is editing: no moving on      */
+    uint64_t rng;               /* the title's own; the ROM's rand() is untouched */
     int      room;              /* resident or loading                       */
     int      floor;             /* its first registration file's kai         */
     int      reload;            /* the overlay asked                         */
     int      failed;            /* a room that did not come up, -1 none      */
-    int      hold;              /* frames to wait before loading again       */
     int      released;          /* the current screen took the room away     */
-    int      was_loadgame;
     int      bg_locked;         /* this file holds SetTitleBgSendLock(1)     */
     float    fade;              /* 0 black .. 1 the room                     */
     double   path_time;         /* seconds along the camera path             */
@@ -131,12 +145,23 @@ typedef struct
     uint64_t music_started;     /* ms; a track that will not start stops being retried */
 } TITLE_ROOM_WRK;
 
-static TITLE_ROOM_WRK title_room =
-{
-    0, TR_IDLE, -1, 11, 0, -1, 0, 0, 0, 0, 0.0f, 0.0, 0, -1, 0, 0, -1, 0, 0, 0,
-};
+/* Zero is "not on the title"; init_TitleRoom_Mode() sets the rest. */
+static TITLE_ROOM_WRK title_room;
 
 static void TitleRoomRelease(void);
+
+/* The scene on screen, or loading to be. */
+static MioPan_ConfigTitleScene *TitleRoomScene(void)
+{
+    MioPan_ConfigTitle *t = &miopan_config.title;
+
+    if (title_room.scene < 0 || title_room.scene >= t->scene_count)
+    {
+        title_room.scene = 0;
+    }
+
+    return &t->scenes[title_room.scene];
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // The rooms.
@@ -333,7 +358,7 @@ int TitleRoomMusicIndex(int file)
 static int TitleRoomBackdropOn(void)
 {
     return miopan_config.title.backdrop == MIOPAN_TITLE_BACKDROP_ROOM &&
-           TitleRoomIsOnDisc(miopan_config.title.room);
+           TitleRoomIsOnDisc(TitleRoomScene()->room);
 }
 
 /* The setup menus are Story / Mission Mode, and the mission side resets the
@@ -357,9 +382,23 @@ static int TitleRoomScreenHasTitleMusic(void)
            GPhaseIsActive(GID_TITLE_CHAPTER_SEL);
 }
 
+/* The backdrop has the screen: a room resident or loading. */
+static int TitleRoomOwnsScreen(void)
+{
+    return title_room.load != TR_IDLE;
+}
+
+void TitleRoomBeforeIngameReset(void)
+{
+    if (title_room.active != 0 && title_room.load != TR_IDLE)
+    {
+        TitleRoomRelease();
+    }
+}
+
 int TitleRoomHidesTitleArt(void)
 {
-    return title_room.active != 0 && title_room.load != TR_IDLE;
+    return title_room.active != 0 && TitleRoomOwnsScreen() != 0;
 }
 
 TITLE_ROOM_STATE TitleRoomGetState(void)
@@ -369,11 +408,11 @@ TITLE_ROOM_STATE TitleRoomGetState(void)
     {
         return TITLE_ROOM_OFF;
     }
-    if (TitleRoomIsOnDisc(miopan_config.title.room) == 0)
+    if (TitleRoomIsOnDisc(TitleRoomScene()->room) == 0)
     {
         return TITLE_ROOM_MISSING;
     }
-    if (title_room.failed == miopan_config.title.room)
+    if (title_room.failed == TitleRoomScene()->room)
     {
         return TITLE_ROOM_MISSING;
     }
@@ -394,7 +433,7 @@ TITLE_ROOM_STATE TitleRoomGetState(void)
 
 static void TitleRoomBeginLoad(void)
 {
-    title_room.room = miopan_config.title.room;
+    title_room.room = TitleRoomScene()->room;
     title_room.floor = 11;
     title_room.fade = 0.0f;
     title_room.load = TR_LOADING;
@@ -416,19 +455,10 @@ static void TitleRoomRelease(void)
 
         MapLoadDeleteRoomAll();
         MapDoorRelease();
+        EffectSndEnd();
         MapObjItemOn();
     }
 
-    title_room.load = TR_IDLE;
-    title_room.fade = 0.0f;
-}
-
-/* As TitleRoomRelease(), for a hand-over to the story: IngameWrkInit() has
- * already cleared everything the room had registered, so there is nothing
- * left to delete and deleting would walk freed handles.  MapLoadInit() on the
- * other side resets what is left. */
-static void TitleRoomForget(void)
-{
     title_room.load = TR_IDLE;
     title_room.fade = 0.0f;
 }
@@ -439,9 +469,8 @@ static void TitleRoomForget(void)
  * parked with g_matConvertSI2PS (25, -25, -25) plus its origin
  * (MapDrawCalcRoomCoord), and so is the box here.  Y grows downwards, so the
  * floor is the box's largest y. */
-static void TitleRoomFrame(const MLOAD_HEAD *hp)
+static void TitleRoomFrame(MioPan_ConfigTitleScene *t, const MLOAD_HEAD *hp)
 {
-    MioPan_ConfigTitle *t = &miopan_config.title;
     float bb[8][4];
     float lo[3] = {  1.0e30f,  1.0e30f,  1.0e30f };
     float hi[3] = { -1.0e30f, -1.0e30f, -1.0e30f };
@@ -537,9 +566,9 @@ static void TitleRoomLoadMain(void)
      * what SceneInitializeIngame() does for the same reason. */
     MapObjItemOff();
 
-    if (miopan_config.title.camera_set == 0)
+    if (TitleRoomScene()->camera_set == 0)
     {
-        TitleRoomFrame(hp);
+        TitleRoomFrame(TitleRoomScene(), hp);
     }
 
     title_room.load = TR_READY;
@@ -550,18 +579,6 @@ static void TitleRoomLoadMain(void)
 /* Keep what is resident in step with the settings and the screen. */
 static void TitleRoomFollow(void)
 {
-    const int in_loadgame = GPhaseIsActive(GID_TITLE_LOADGAME);
-
-    /* LoadGameInit() calls IngameWrkInit().  This is the pre slot of the
-     * parent phase, so on the load screen's first frame it runs before that
-     * init does: let go now, and come back the frame after. */
-    if (in_loadgame != 0 && title_room.was_loadgame == 0)
-    {
-        TitleRoomRelease();
-        title_room.hold = 1;
-    }
-    title_room.was_loadgame = in_loadgame;
-
     if (title_room.reload != 0)
     {
         TitleRoomRelease();
@@ -577,18 +594,12 @@ static void TitleRoomFollow(void)
         return;
     }
 
-    if (title_room.load != TR_IDLE && title_room.room != miopan_config.title.room)
+    if (title_room.load != TR_IDLE && title_room.room != TitleRoomScene()->room)
     {
         TitleRoomRelease();
     }
 
-    if (title_room.hold > 0)
-    {
-        title_room.hold--;
-        return;
-    }
-
-    if (title_room.load == TR_IDLE && title_room.failed != miopan_config.title.room)
+    if (title_room.load == TR_IDLE && title_room.failed != TitleRoomScene()->room)
     {
         TitleRoomBeginLoad();
     }
@@ -599,7 +610,7 @@ static void TitleRoomFollow(void)
 
 static float TitleRoomEase(float x)
 {
-    if (miopan_config.title.easing == MIOPAN_TITLE_EASING_LINEAR)
+    if (TitleRoomScene()->easing == MIOPAN_TITLE_EASING_LINEAR)
     {
         return x;
     }
@@ -610,7 +621,7 @@ static float TitleRoomEase(float x)
 /* Seconds in one whole cycle of the path. */
 static double TitleRoomCycle(void)
 {
-    const MioPan_ConfigTitle *t = &miopan_config.title;
+    const MioPan_ConfigTitleScene *t = TitleRoomScene();
     const double travel = t->travel_seconds > 0.5f ? t->travel_seconds : 0.5;
     const double hold = t->hold_seconds > 0.0f ? t->hold_seconds : 0.0;
 
@@ -628,7 +639,7 @@ static double TitleRoomCycle(void)
 /* How far from A to B the camera is at `time`, 0..1, eased. */
 static float TitleRoomPathAt(double time)
 {
-    const MioPan_ConfigTitle *t = &miopan_config.title;
+    const MioPan_ConfigTitleScene *t = TitleRoomScene();
     const double travel = t->travel_seconds > 0.5f ? t->travel_seconds : 0.5;
     const double hold = t->hold_seconds > 0.0f ? t->hold_seconds : 0.0;
     const double cycle = TitleRoomCycle();
@@ -669,7 +680,7 @@ static float TitleRoomLerp(float a, float b, float e)
 
 static void TitleRoomCameraMain(void)
 {
-    const MioPan_ConfigTitle *t = &miopan_config.title;
+    const MioPan_ConfigTitleScene *t = TitleRoomScene();
 
     if (title_room.fly != 0)
     {
@@ -721,6 +732,114 @@ static void TitleRoomCameraMain(void)
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// The rotation.
+
+/* xorshift64*, seeded off the clock the first time.  The scene pick must not
+ * come out of MioPan_Rand(): that is the ROM's rand() stream, and a draw here
+ * would shift every random value the game takes after it. */
+static unsigned int TitleRoomRandom(void)
+{
+    uint64_t x = title_room.rng;
+
+    if (x == 0)
+    {
+        x = MioPan_GetPerformanceCounter() | 1;
+    }
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    title_room.rng = x;
+
+    return (unsigned int)((x * 2685821657736338717ULL) >> 32);
+}
+
+/* The scenes the rotation may land on: enabled, and their room on the disc. */
+static int TitleRoomPool(int *pool)
+{
+    const MioPan_ConfigTitle *t = &miopan_config.title;
+    int n = 0;
+
+    for (int i = 0; i < t->scene_count; i++)
+    {
+        if (t->scenes[i].enabled != 0 && TitleRoomIsOnDisc(t->scenes[i].room) != 0)
+        {
+            pool[n++] = i;
+        }
+    }
+
+    return n;
+}
+
+/* A scene at random, never `avoid` while there is any other to pick.  With
+ * none enabled, the first one -- the backdrop has to show something. */
+static int TitleRoomPickScene(int avoid)
+{
+    int pool[MIOPAN_TITLE_SCENE_MAX];
+    int n = TitleRoomPool(pool);
+
+    if (n == 0)
+    {
+        return 0;
+    }
+    if (n > 1)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            if (pool[i] == avoid)
+            {
+                pool[i] = pool[--n];
+                break;
+            }
+        }
+    }
+
+    return pool[TitleRoomRandom() % (unsigned int)n];
+}
+
+/* Time to fade out: `passes` runs of the path, less the fade, so the black
+ * lands as the last run ends. */
+static int TitleRoomTimeToMove(void)
+{
+    const MioPan_ConfigTitle *t = &miopan_config.title;
+    int pool[MIOPAN_TITLE_SCENE_MAX];
+
+    if (title_room.held != 0 || t->change != MIOPAN_TITLE_CHANGE_PASS ||
+        TitleRoomPool(pool) < 2)
+    {
+        return 0;
+    }
+
+    return title_room.path_time >=
+           TitleRoomCycle() * t->passes - TITLE_ROOM_FADE_SECONDS;
+}
+
+/* Take up `scene`.  Another room is released and requested in one go, so
+ * there is no frame in between for the title's own picture to show in. */
+static void TitleRoomEnterScene(int scene)
+{
+    title_room.scene = scene;
+    title_room.leaving = 0;
+    title_room.path_time = 0.0;
+    title_room.preview = -1;
+
+    SDL_Log("[port] title room: scene %d, %s", scene, TitleRoomScene()->name);
+
+    if (title_room.load == TR_IDLE)
+    {
+        return;
+    }
+    if (TitleRoomScene()->room != title_room.room)
+    {
+        TitleRoomRelease();
+        TitleRoomBeginLoad();
+    }
+    else if (title_room.load == TR_READY && TitleRoomScene()->camera_set == 0)
+    {
+        TitleRoomFrame(TitleRoomScene(), TitleRoomHead());
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Drawing.
 
 static void TitleRoomDraw(void)
@@ -749,6 +868,7 @@ static void TitleRoomDraw(void)
 
     MhCtlMain(title_room.room);
     TitleRoomCameraMain();
+    SetIngameListnerInfo();
 
     MapFogProc(title_room.room, title_room.floor, gra3dcamGetPosition());
     gra3dDraw();
@@ -879,21 +999,59 @@ void TitleRoomReload(void)
     title_room.reload = 1;
 }
 
-void TitleRoomFrameAutomatically(void)
+int TitleRoomCurrentScene(void)
 {
-    if (title_room.active != 0 && title_room.load == TR_READY)
+    return title_room.scene;
+}
+
+void TitleRoomShowScene(int scene)
+{
+    if (scene < 0 || scene >= miopan_config.title.scene_count ||
+        (scene == title_room.scene && title_room.leaving == 0))
     {
-        TitleRoomFrame(TitleRoomHead());
+        return;
+    }
+
+    TitleRoomEnterScene(scene);
+}
+
+void TitleRoomHoldScene(int hold)
+{
+    title_room.held = hold != 0;
+
+    /* A fade already under way when the hold came down finishes as a fade
+     * back in, on the scene it was leaving. */
+    if (hold != 0)
+    {
+        title_room.leaving = 0;
+    }
+}
+
+void TitleRoomFrameAutomatically(int scene)
+{
+    if (scene < 0 || scene >= miopan_config.title.scene_count)
+    {
+        return;
+    }
+    if (title_room.active != 0 && title_room.load == TR_READY &&
+        scene == title_room.scene)
+    {
+        TitleRoomFrame(TitleRoomScene(), TitleRoomHead());
         title_room.path_time = 0.0;
         return;
     }
 
-    miopan_config.title.camera_set = 0;
+    miopan_config.title.scenes[scene].camera_set = 0;
 }
 
-int TitleRoomCaptureView(int point)
+int TitleRoomCaptureView(int scene, int point)
 {
-    MioPan_ConfigTitle *t = &miopan_config.title;
+    if (scene < 0 || scene >= miopan_config.title.scene_count)
+    {
+        return 0;
+    }
+
+    MioPan_ConfigTitleScene *t = &miopan_config.title.scenes[scene];
     float (&pos)[4] = gra3dcamGetPosition();
     float (&aim)[4] = gra3dcamGetTarget();
     const float fov = gra3dcamGetFov() * 180.0f / TITLE_ROOM_PI;
@@ -972,7 +1130,7 @@ float TitleRoomGetProgress(void)
     const double cycle = TitleRoomCycle();
     double x = title_room.path_time;
 
-    if (miopan_config.title.motion == MIOPAN_TITLE_MOTION_ONCE)
+    if (TitleRoomScene()->motion == MIOPAN_TITLE_MOTION_ONCE)
     {
         x = x < cycle ? x : cycle;
     }
@@ -1044,11 +1202,16 @@ void init_TitleRoom_Mode(void)
 
     title_room.active = 1;
     title_room.load = TR_IDLE;
+
+    /* A fresh pick every visit -- never the last visit's while there are
+     * others -- whichever way the rotation moves on after that. */
+    title_room.scene = TitleRoomPickScene(title_room.visited != 0 ? title_room.scene : -1);
+    title_room.visited = 1;
+    title_room.leaving = 0;
+    title_room.preview = -1;
     title_room.reload = 0;
     title_room.failed = -1;
-    title_room.hold = 0;
     title_room.released = 0;
-    title_room.was_loadgame = 0;
     title_room.bg_locked = 0;
     title_room.path_time = 0.0;
     title_room.last_tick = 0;
@@ -1081,7 +1244,7 @@ GPHASE_ENUM pre_TitleRoom_Mode(GPHASE_ENUM dummy)
      * this is up.  Re-asserted every frame while the room is the backdrop:
      * the gallery lowers it on its way out of the picture viewer, and that
      * would put the old art back in front of the room. */
-    const int shown = title_room.load != TR_IDLE;
+    const int shown = TitleRoomOwnsScreen();
     if (shown != 0)
     {
         SetTitleBgSendLock(1);
@@ -1113,17 +1276,40 @@ GPHASE_ENUM pre_TitleRoom_Mode(GPHASE_ENUM dummy)
 
     if (title_room.load == TR_READY)
     {
-        if (title_room.paused == 0 && title_room.fly == 0 && title_room.preview < 0)
+        const int running = title_room.paused == 0 && title_room.fly == 0 &&
+                            title_room.preview < 0;
+
+        if (running != 0)
         {
             title_room.path_time += dt;
         }
 
-        title_room.fade += dt / TITLE_ROOM_FADE_SECONDS;
-        if (title_room.fade > 1.0f)
+        if (title_room.leaving != 0)
         {
-            title_room.fade = 1.0f;
+            title_room.fade -= dt / TITLE_ROOM_FADE_SECONDS;
+            if (title_room.fade <= 0.0f)
+            {
+                title_room.fade = 0.0f;
+                TitleRoomEnterScene(TitleRoomPickScene(title_room.scene));
+            }
         }
+        else
+        {
+            title_room.fade += dt / TITLE_ROOM_FADE_SECONDS;
+            if (title_room.fade > 1.0f)
+            {
+                title_room.fade = 1.0f;
+            }
+            if (running != 0 && TitleRoomTimeToMove() != 0)
+            {
+                title_room.leaving = 1;
+            }
+        }
+    }
 
+    /* Entering a scene in another room has just put it back to loading. */
+    if (title_room.load == TR_READY)
+    {
         TitleRoomDraw();
         TitleRoomDrawVeil();
     }
@@ -1135,14 +1321,9 @@ void end_TitleRoom_Mode(void)
 {
     end_Title_Mode();
 
-    if (GPhaseIsQueued(GID_STORY_MAIN) != 0)
-    {
-        TitleRoomForget();
-    }
-    else
-    {
-        TitleRoomRelease();
-    }
+    /* Whole even on the way into a game: IngameWrkInit() has let the room
+     * go before resetting anything under it. */
+    TitleRoomRelease();
 
     if (title_room.bg_locked != 0)
     {

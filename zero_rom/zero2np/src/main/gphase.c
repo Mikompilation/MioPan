@@ -708,15 +708,3 @@ int GPhaseIsSettled(void)
 
     return 1;
 }
-
-// An end callback runs with now[] still holding the phase being left, so this
-// is the only way one can tell where the game is going.  title_room.c asks it.
-int GPhaseIsQueued(GPHASE_ID_ENUM id)
-{
-    if ((int)id < 0 || (int)id >= (int)(sizeof(gphase_tbl) / sizeof(gphase_tbl[0])))
-    {
-        return 0;
-    }
-
-    return gphase_sys.next[gphase_tbl[id].layer] == id;
-}
