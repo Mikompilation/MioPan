@@ -12,11 +12,10 @@
 // (movie_title_dat.c) and the scene-effect script both be authored against NTSC
 // frame numbers.
 //
-// PORT NOTE: playpss.a's decoder is a shim on the host (see
-// system/playpss/playpss.c).  playPssMain() reports end-of-stream on its first
-// call, so a movie plays for one frame and the caller tears it down.  Nothing
-// in this file is stubbed for that -- the buffers, the stream and the frame
-// counter all do their real work.
+// PORT NOTE: those two consumers do not read iMovieCnt here.  On the console
+// the NTSC loop ran once per decoded picture; the host runs it once per field
+// and paces the picture by time, so iMovieCnt counts twice as fast as the
+// tables expect.  They get MovieClockCnt() instead -- see there.
 //
 // Reconstructed from the Feb 6 2004 prototype (SLES_523.84).
 // .text 0x21ea40..0x21f158; all nine ZERO2.MAP exports.
@@ -27,6 +26,7 @@
 #include "../../common/mem_util.h"              // mem_utilGetMem / FreeMem
 #include "../../common/utility2.h"              // PRINT_ASSERT
 #include "../../common/variable.h"              // pad, key_now
+#include "../../miopan/os/miopan_time.h"        // MioPan_GetPerformanceCounter
 #include "../../sdk/sifdev.h"                   // sceSif*IopHeap / QueryFree
 #include "../../system/eeiop/ee_iop_q.h"        // ReqQuerySPUTransCore*
 #include "../../system/eeiop/snd.h"             // SndGetGroupVolume
@@ -66,6 +66,74 @@ static u_char temp_zero_bffer[2048];
 static int movie_audio_flg;
 /* sbss 3f4e74 */
 static int bPause;
+
+/* PORT: MovieClockCnt()'s clock, in performance-counter ticks.  Not ROM
+ * statics. */
+static uint64_t movie_clock_last;
+static uint64_t movie_clock_elapsed;
+
+/* --------------------------------------------------------------------------
+ *  MovieClockStep / MovieClockCnt  (PORT, not ROM symbols)
+ *
+ *  What iMovieCnt would read on the console, for the two consumers that read
+ *  it as a time: the caption table and the scene-effect script.  Both are
+ *  authored in NTSC film frames, 29.97 a second.  Measured against scene 0's
+ *  soundtrack, caption 1 (frames 105..233) opens four frames before the voice
+ *  does, at 109, and caption 2 (312..) two frames after it, at 310.
+ *
+ *  That unit works on the console because the NTSC player decodes one picture
+ *  per PlayMovie() (playPssSetPacket()), so the loop ran once per picture and
+ *  iMovieCnt counted pictures.  The PAL player decodes on its own thread and
+ *  the loop ran once per 50 Hz field, which is why both consumers halve the
+ *  count in PAL and then scale it back up.
+ *
+ *  The host runs the loop once per field in both regions and paces the
+ *  picture off the stream's frame rate instead (libmpeg_video.cpp).  In NTSC
+ *  that made iMovieCnt run at 60 a second against a table in 29.97, so every
+ *  caption came up twice as fast as its voice and drifted further ahead the
+ *  longer the movie ran.
+ *
+ *  So this counts in time: unpaused time since the first PlayMovie(), at one
+ *  count per picture in NTSC and one per field in PAL, starting at 1 as
+ *  iMovieCnt does.  Time rather than ticks, because the picture and the sound
+ *  are both paced by time here and a dropped tick must not leave the captions
+ *  behind them.  One step is capped at four pictures, the same limit the
+ *  decoder puts on its catch-up: after a longer stall, or with the window held
+ *  in the background, the picture writes the gap off and the captions have to
+ *  agree with it.
+ *
+ *  iMovieCnt is still counted.  It is the ROM's, and PlayMovie() and
+ *  EndMovie() gate on it.
+ * ------------------------------------------------------------------------ */
+static void MovieClockStep(int paused)
+{
+    uint64_t now = MioPan_GetPerformanceCounter();
+
+    if (movie_clock_last != 0 && paused == 0)
+    {
+        uint64_t step = now - movie_clock_last;
+        uint64_t cap  = MioPan_GetPerformanceFrequency() * 4 * 1001 / 30000;
+
+        movie_clock_elapsed += (step < cap) ? step : cap;
+    }
+
+    movie_clock_last = now;
+}
+
+static int MovieClockCnt(void)
+{
+    double rate;
+
+    if (iMovieCnt <= 0)
+    {
+        return iMovieCnt;
+    }
+
+    rate = GetPALMode() ? 50.0 : 30000.0 / 1001.0;
+
+    return 1 + (int)((double)movie_clock_elapsed * rate
+                     / (double)MioPan_GetPerformanceFrequency());
+}
 
 /* --------------------------------------------------------------------------
  *  iopalloc  (0x21eb18)
@@ -180,6 +248,10 @@ void InitMovie(int no, int vol_percentage, int audio_flg)               /* 63 */
     }
     playPssStart(MyStrRead, &rsrcs);                                    /* 130 */
 
+    /* PORT: restart MovieClockCnt()'s clock with the count. */
+    movie_clock_last    = 0;
+    movie_clock_elapsed = 0;
+
     iMovieCnt = 0;                                                      /* 132 */
 }
 
@@ -241,6 +313,9 @@ int PlayMovie(void)                                                     /* 145 *
     {
         iMovieCnt++;                                                    /* 178 */
     }
+
+    /* PORT: the time-based twin of the count above -- see MovieClockCnt(). */
+    MovieClockStep(bPause);
 
     gra3dUseScratchpad(0);                                              /* 183 */
 
@@ -338,7 +413,8 @@ int PlayMovieWithTitle(void)                                            /* 251 *
 
     ret = PlayMovie();                                                  /* 254 */
 
-    MovieTitleMain(GetPALMode() ? iMovieCnt >> 1 : iMovieCnt);          /* 257 */
+    /* PORT: MovieClockCnt() where the ROM reads iMovieCnt -- see there. */
+    MovieTitleMain(GetPALMode() ? MovieClockCnt() >> 1 : MovieClockCnt()); /* 257 */
 
     return ret;                                                         /* 259 */
 }
@@ -357,8 +433,10 @@ void EndMovieWithTitle(void)                                            /* 263 *
  *
  *  The counter halved in PAL.  A right shift, not a divide -- so the -1 an
  *  idle player reports stays -1 rather than rounding towards zero.
+ *
+ *  PORT: MovieClockCnt() where the ROM reads iMovieCnt -- see there.
  * ------------------------------------------------------------------------ */
 int MovieCountGet(void)                                                 /* 270 */
 {
-    return GetPALMode() ? iMovieCnt >> 1 : iMovieCnt;                   /* 272 */
+    return GetPALMode() ? MovieClockCnt() >> 1 : MovieClockCnt();       /* 272 */
 }

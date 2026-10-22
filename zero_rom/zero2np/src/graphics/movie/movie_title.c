@@ -47,10 +47,6 @@
 /* sbss 3f4e98 */
 static MOVIE_TITLE_CTRL movie_title_ctrl;
 
-/* PORT: whether GetMovieTitleDatTblPos() applies the ROM's PAL 5/6 frame
- * conversion.  Zero here -- see the note at the comparison itself. */
-static const int kMovieTitlePalFrameScale = 0;
-
 static MOVIE_TITLE_DAT *GetMovieTitleDat(int scene_no);
 
 /* --------------------------------------------------------------------------
@@ -114,10 +110,14 @@ static MOVIE_TITLE_DAT *GetMovieTitleDat(int scene_no)                  /* 155 *
  *
  *  Index of the caption whose window contains `timer`, or -1.
  *
- *  The frames in the table are authored for NTSC, so in PAL both ends are
- *  scaled by 5/6 -- the same conversion subtitle.c does on its own counters.
- *  The two arms are written out in full rather than scaling `timer`, which is
- *  why the multiply and divide appear twice per entry.
+ *  The frames in the table are authored for NTSC -- film pictures, 29.97 a
+ *  second -- so in PAL, where `timer` is half a 50 Hz field count, both ends
+ *  are scaled by 5/6.  The same conversion subtitle.c does on its own
+ *  counters.  The two arms are written out in full rather than scaling
+ *  `timer`, which is why the multiply and divide appear twice per entry.
+ *
+ *  The port feeds this the count the console's movie loop would have reached
+ *  in each region (movie.c, MovieClockCnt()), so both arms run as the ROM's.
  * ------------------------------------------------------------------------ */
 int GetMovieTitleDatTblPos(MOVIE_TITLE_DAT *data, int timer)            /* 169 */
 {
@@ -128,26 +128,7 @@ int GetMovieTitleDatTblPos(MOVIE_TITLE_DAT *data, int timer)            /* 169 *
 
     for (i = 0; data[i].msg_id != -1; i++)                              /* 178 */
     {                                                                   /* 179 */
-        /* PORT: the PAL conversion is skipped, and the NTSC arm runs for both
-         * regions.
-         *
-         * The 5/6 exists because `timer` is a count of console frames.  A PAL
-         * console runs the movie loop at 50 Hz where an NTSC one runs it at
-         * 60, so a table authored in NTSC frames has to be scaled down to be
-         * compared against a PAL counter.
-         *
-         * The host has no such difference: the movie loop runs at 60 Hz
-         * whatever region the disc is, so PlayMovieWithTitle()'s
-         * `iMovieCnt >> 1` already advances at ~30/s -- which is the unit the
-         * table is authored in.  Measured: scene 0's last caption ends at
-         * frame 4282 and its movie is 154.4 s long (29 643 776 bytes of 48 kHz
-         * stereo), so the table's own rate is 4282 / 142.9 s = 29.97 fps, the
-         * film rate.  Applying the 5/6 as well made every caption fire 1.2x
-         * early and drift further in the further the movie ran.
-         *
-         * Kept as a runtime constant rather than #if'd out so the ROM's arm
-         * stays compiled and correct for the day the loop is region-paced. */
-        if (kMovieTitlePalFrameScale && GetPALMode() != 0)               /* 184 */
+        if (GetPALMode() != 0)                                          /* 184 */
         {
             if (data[i].start_frame * 5 / 6 <= timer &&                 /* 185 */
                 timer < data[i].end_frame * 5 / 6)

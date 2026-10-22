@@ -245,8 +245,9 @@ void SubTitleMain(int DrawFlg)                                          /* 202 *
 
                 if (GetPALMode())                                  /* 239 */
                 {
-                    /* The frame counts are authored at 60Hz, so 50Hz has to
-                     * hold each line for five sixths as many frames. */
+                    /* The frame counts are NTSC game frames, 30 a second --
+                     * they fit the voice streams at that rate -- so 25 Hz has
+                     * to hold each line for five sixths as many frames. */
                     if (pCtrl->Counter >= pMsgData->Frame * 5 / 6)      /* 240 */
                     {
                         pCtrl->Counter = 0;                             /* 241 */
