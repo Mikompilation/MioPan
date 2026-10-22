@@ -58,6 +58,10 @@ int MioPan_ResolveVBlankWait(int game_requested);
 void MioPan_PacingSignalField(void);
 void MioPan_PacingWaitField(void);
 
+/* The CRTC field period in nanoseconds: 1/60 s, or 1/50 s once the game has
+ * reset the GS for PAL.  Defined in sdk/libgraph.cpp, which owns the clock. */
+unsigned long long MioPan_PacingFieldPeriodNs(void);
+
 /*
  * The field count vfunc() last resolved, or 0 before the first frame.
  *

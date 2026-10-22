@@ -197,6 +197,10 @@ void MioPan_ProfilerRecordVblankPacing(uint64_t wait_ticks,
                                        int drained_vblanks,
                                        int wait_calls,
                                        int target_vblanks);
+/* What vfunc() has waited so far this logical frame, in counter ticks: the
+ * slack the game's work left in its tick.  Frame smoothing reads it back to
+ * tell how long that work really took. */
+uint64_t MioPan_ProfilerFrameVblankWait(void);
 
 /* Converts the accumulated window to milliseconds per logical frame and
  * resets it.  Maxima are the worst individual logical frame in the window. */

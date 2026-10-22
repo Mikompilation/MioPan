@@ -480,6 +480,11 @@ void MioPan_ProfilerRecordVblankPacing(uint64_t wait_ticks,
     }
 }
 
+uint64_t MioPan_ProfilerFrameVblankWait(void)
+{
+    return g_frame.vblank_wait_ticks;
+}
+
 void MioPan_ProfilerConsumeStats(MioPanProfilerStats *out)
 {
     if (out == nullptr)

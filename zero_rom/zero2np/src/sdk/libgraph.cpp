@@ -31,6 +31,11 @@ static sceGsVCallbackFunc s_vblank_callback;
  */
 static std::atomic<uint64_t> s_vblank_period_ns{1000000000ull / 60};
 
+extern "C" unsigned long long MioPan_PacingFieldPeriodNs(void)
+{
+    return s_vblank_period_ns.load(std::memory_order_relaxed);
+}
+
 struct VblankLimiter
 {
     uint64_t frequency;

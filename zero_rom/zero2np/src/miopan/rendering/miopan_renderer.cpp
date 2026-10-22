@@ -1172,6 +1172,22 @@ float g_camera_motion = -1.0f;
  * (CameraPairIsCut()), since startup.  MioPan_RendererGetSmoothingCuts(). */
 unsigned int g_smoothing_cuts;
 /*
+ * What SmoothingFits() decides from, all in performance-counter ticks: when
+ * the last tick's presents finished (0 when the last tick presented nothing),
+ * when this one's EndFrame began, the work span between the two -- the game's
+ * whole tick, less vfunc()'s wait -- for the last kSmoothingSpanWindow ticks,
+ * and what the last repeat present cost.
+ */
+constexpr unsigned int kSmoothingSpanWindow = 16;
+uint64_t g_smoothing_present_end;
+uint64_t g_end_frame_start;
+uint64_t g_smoothing_spans[kSmoothingSpanWindow];
+unsigned int g_smoothing_span_count;
+uint64_t g_smoothing_repeat_ticks;
+/* Ticks presented once because the next tick's work would not have fitted
+ * after an in-between, since startup.  MioPan_RendererGetSmoothingSkips(). */
+unsigned int g_smoothing_skips;
+/*
  * Geometry smoothing -- the second half of an in-between frame.
  *
  * A reprojected camera moves the eye; it does not move anything the eye is
@@ -8933,7 +8949,7 @@ void PublishStutterFrameNote()
                  "hit %d miss %d new %d promo %d bdefer %d udefer %d "
                  "evict %d inval %d | texdl %d texnew %d texpend %zu | "
                  "draws %zu verts %zu idx %zu istream %d/%d "
-                 "meshtri %d resident %zu",
+                 "meshtri %d resident %zu late %u",
                  delta(g_mesh_cache_hits, last_hits),
                  delta(g_mesh_cache_misses, last_misses),
                  delta(g_mesh_cache_creates, last_creates),
@@ -8947,7 +8963,8 @@ void PublishStutterFrameNote()
                  g_pending_texture_uploads.size(),
                  g_draws.size(), g_vertices.size(), g_stream_indices.size(),
                  g_indexed_stream_draws, g_indexed_stream_units,
-                 g_mesh_triangles_submitted, g_mesh_cache.size());
+                 g_mesh_triangles_submitted, g_mesh_cache.size(),
+                 g_smoothing_skips);
     MioPan_ProfilerSetFrameNote(note);
 
     last_hits = g_mesh_cache_hits;
@@ -10928,6 +10945,72 @@ bool BlendCameraBetween(const float *from_view, const float *from_projection,
 }
 
 /*
+ * Whether this tick can afford its in-betweens.
+ *
+ * vfunc() runs *before* MioPan_RendererEndFrame(), so a smoothed tick presents
+ * its in-between and waits out a field right after the game's wait has ended,
+ * and the game's whole next tick of work -- from the end of these presents to
+ * vfunc() -- then has to fit in the field that is left.  When it does not,
+ * vfunc() finds both fields already gone and still performs its unconditional
+ * wait: the tick takes three fields, and the game runs at 20 Hz.  Measured in a
+ * Debug build on chapter 0's rope bridge, every tick did exactly that; with
+ * smoothing off the same work fitted the two fields with room to spare.
+ *
+ * So an in-between is only presented when the work after it has been fitting:
+ * the longest span of the last kSmoothingSpanWindow ticks, plus what the last
+ * repeat present cost, plus a margin, has to be inside one field.  A tick that
+ * does not pass is presented once, exactly as with smoothing off, and the
+ * simulation keeps its rate.  The span is measured whether or not smoothing is
+ * on -- it is the game's work, not the renderer's -- so a room that gets
+ * lighter turns smoothing back on by itself.
+ *
+ * The window and the margin lean towards skipping.  A skipped in-between costs
+ * one 60 Hz frame; a wrong admission costs a 50 ms tick, which is a hitch.  At
+ * 8 ticks and 1.5 ms, 2 of the 72 ticks admitted on the rope bridge in Debug
+ * still overran.
+ */
+bool SmoothingFits()
+{
+    const uint64_t frequency = (uint64_t)SDL_GetPerformanceFrequency();
+    const unsigned long long field_ns = MioPan_PacingFieldPeriodNs();
+    if (frequency == 0 || field_ns == 0)
+    {
+        return true;
+    }
+
+    uint64_t worst = 0;
+    const unsigned int spans = g_smoothing_span_count < kSmoothingSpanWindow
+        ? g_smoothing_span_count : kSmoothingSpanWindow;
+    for (unsigned int i = 0; i < spans; i++)
+    {
+        worst = std::max(worst, g_smoothing_spans[i]);
+    }
+
+    const double ticks_per_ns = (double)frequency / 1.0e9;
+    const uint64_t field = (uint64_t)((double)field_ns * ticks_per_ns);
+    const uint64_t margin = (uint64_t)(3.0e6 * ticks_per_ns);
+    return worst + g_smoothing_repeat_ticks + margin <= field;
+}
+
+/* The game's work since the last tick's presents finished, less what vfunc()
+ * waited, into SmoothingFits()'s window.  Nothing is recorded across a tick
+ * that presented nothing: that span would hold two ticks of work. */
+void NoteSmoothingSpan()
+{
+    if (g_smoothing_present_end == 0 ||
+        g_end_frame_start < g_smoothing_present_end)
+    {
+        return;
+    }
+
+    const uint64_t elapsed = g_end_frame_start - g_smoothing_present_end;
+    const uint64_t waited = MioPan_ProfilerFrameVblankWait();
+    g_smoothing_spans[g_smoothing_span_count % kSmoothingSpanWindow] =
+        elapsed > waited ? elapsed - waited : 0;
+    g_smoothing_span_count++;
+}
+
+/*
  * Every present of one logical frame.
  *
  * With smoothing off this is the single present the game has always had.  With
@@ -10949,11 +11032,14 @@ bool BlendCameraBetween(const float *from_view, const float *from_projection,
  * exactly tick N, so nothing is ever shown late.
  *
  * Each present but the last is followed by one CRTC field of wait.  Those
- * fields are not spent from the game's budget: vfunc() measures the logical
- * frame by draining its own V-blank semaphore and counting elapsed fields, so
- * it finds them already banked and waits correspondingly less.  The tick still
- * takes exactly the number of fields the game asked for -- 2, unless a movie
- * or the pacing harness says otherwise -- and the simulation does not speed up.
+ * fields do not lengthen the tick: vfunc() measures the logical frame by
+ * draining its own V-blank semaphore and counting elapsed fields, so it finds
+ * them already banked and waits correspondingly less.  The tick still takes
+ * exactly the number of fields the game asked for -- 2, unless a movie or the
+ * pacing harness says otherwise -- and the simulation does not speed up.  They
+ * do come out of the game's next tick of work, which then has the one field
+ * left; SmoothingFits() is what keeps a tick that cannot spare it from
+ * presenting in-betweens at all.
  *
  * The last blend is t = 1, which BlendViewMatrix short-circuits to a memcpy, so
  * the frame's own present is bit-identical to the unsmoothed one and nothing
@@ -10983,6 +11069,15 @@ bool PresentLogicalFrame()
         extra = budget;
     }
 
+    /* And a field the next tick's work needs is not one to spend either --
+     * see SmoothingFits(). */
+    NoteSmoothingSpan();
+    if (extra > 0 && !SmoothingFits())
+    {
+        extra = 0;
+        g_smoothing_skips++;
+    }
+
     /* Before any present: the model blend feeds the very first reprojection,
      * and the vertex blend needs this frame's positions recorded before it
      * starts writing over them.  A frame that will not be smoothed clears the
@@ -10991,7 +11086,9 @@ bool PresentLogicalFrame()
 
     if (extra <= 0)
     {
-        return PresentFrame(false);
+        const bool presented = PresentFrame(false);
+        g_smoothing_present_end = MioPan_ProfilerNow();
+        return presented;
     }
 
     const int total = extra + 1;
@@ -11082,9 +11179,15 @@ bool PresentLogicalFrame()
                 break;
             }
         }
-        else if (!RepeatPresentAt(geometry_t))
+        else
         {
-            break;
+            const uint64_t repeat_start = MioPan_ProfilerNow();
+            const bool repeated = RepeatPresentAt(geometry_t);
+            g_smoothing_repeat_ticks = MioPan_ProfilerNow() - repeat_start;
+            if (!repeated)
+            {
+                break;
+            }
         }
 
         if (i + 1 < total)
@@ -11095,6 +11198,7 @@ bool PresentLogicalFrame()
         }
     }
 
+    g_smoothing_present_end = MioPan_ProfilerNow();
     return presented;
 }
 }
@@ -11898,6 +12002,7 @@ void MioPan_RendererEndFrame(void)
     }
 
     MioPan_ProfilerBeginRenderer();
+    g_end_frame_start = MioPan_ProfilerNow();
 
     /* A malformed decoder path must not leave an unpublished vertex tail in
      * the frame stream.  Normal mesh scopes always commit before this point. */
@@ -11934,6 +12039,10 @@ void MioPan_RendererEndFrame(void)
     if (g_frame_active && present_due)
     {
         presented = PresentLogicalFrame();
+    }
+    else
+    {
+        g_smoothing_present_end = 0;
     }
     /* After the frame's own submit: the render pass has ended, so a copy pass
      * may read the depth texture.  Its own command buffer, so the present path
@@ -11993,6 +12102,11 @@ float MioPan_RendererGetCameraMotion(void)
 unsigned int MioPan_RendererGetSmoothingCuts(void)
 {
     return g_smoothing_cuts;
+}
+
+unsigned int MioPan_RendererGetSmoothingSkips(void)
+{
+    return g_smoothing_skips;
 }
 
 void MioPan_RendererSetGeometryInterpolation(int enable)

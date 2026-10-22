@@ -969,6 +969,13 @@ float MioPan_RendererGetCameraMotion(void);
  * visible cut and stay put while the camera merely moves. */
 unsigned int MioPan_RendererGetSmoothingCuts(void);
 
+/* Smoothed ticks presented once instead, since startup, because the game's
+ * next tick of work would not have fitted in the field an in-between leaves
+ * it.  Spending that field anyway stretches the tick to three fields -- a 20 Hz
+ * game -- so a heavy room shows its own 30 Hz frames rather than slow down.
+ * Rising steadily means this machine and build cannot afford smoothing here. */
+unsigned int MioPan_RendererGetSmoothingSkips(void);
+
 /* The second half of an in-between: move the world as well as the eye.
  *
  * A reprojected camera does not move anything the camera is looking at, so
