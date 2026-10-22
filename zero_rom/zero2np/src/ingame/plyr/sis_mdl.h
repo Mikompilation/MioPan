@@ -18,7 +18,9 @@
 
 #include "../../graphics/motion/mdlwork.h"   /* ANI_CTRL, LOOK_AT_PARAM */
 
-/* Recovered from the stabs entry for _LOOK_TARGET_PRIORITY_MAYU. */
+/* Recovered from the stabs entry for _LOOK_TARGET_PRIORITY_MAYU.  LEAST is -1
+ * there, which makes the enum signed; SisNeckRegisterTarget() compares
+ * priorities unsigned, as the ROM does, so that it still sorts last. */
 enum LOOK_TARGET_PRIORITY_MAYU
 {
     LTP_MAYU_ATTACK_ENEMY = 0,
@@ -32,7 +34,7 @@ enum LOOK_TARGET_PRIORITY_MAYU
     LTP_MAYU_OBJ          = 8,
     LTP_MAYU_MIO_MIDDLE   = 9,
     LTP_MAYU_KAIDAN       = 10,
-    LTP_MAYU_LEAST        = 0xffffffff
+    LTP_MAYU_LEAST        = -1
 };
 
 /* ---- residency -------------------------------------------------------- */
