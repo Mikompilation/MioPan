@@ -149,16 +149,29 @@ typedef struct
 } IopReverb;
 
 static IopReverb  rvb[IOP_REVERB_CORES];
-static SDL_Mutex *rvb_mutex;
+
+/*
+ * Created at static-init time and never replaced, so a lock and the unlock
+ * after it always see the same mutex.
+ *
+ * It used to be created in MioPan_ReverbInit(), which sceSdInit() calls right
+ * after MioPan_VoiceInit() has started the mixer thread.  A mixer pass that
+ * began before the create skipped the lock -- the pointer was still null --
+ * and then, the create having landed, unlocked a mutex it never held: SDL's
+ * "mutex not owned by this thread" assertion in a Debug build at boot, and in
+ * a release build a mixer reading the reverb state while the memset below
+ * cleared it.  Forced by widening that window, it fired every time.
+ *
+ * A null here can only mean the create itself failed, which is then true for
+ * every caller alike and leaves the pairs balanced.
+ */
+static SDL_Mutex *const rvb_mutex = SDL_CreateMutex();
 
 void MioPan_ReverbLock(void)   { if (rvb_mutex) SDL_LockMutex(rvb_mutex); }
 void MioPan_ReverbUnlock(void) { if (rvb_mutex) SDL_UnlockMutex(rvb_mutex); }
 
 void MioPan_ReverbInit(void)
 {
-    if (rvb_mutex == NULL)
-        rvb_mutex = SDL_CreateMutex();
-
     MioPan_ReverbLock();
     memset(rvb, 0, sizeof(rvb));
     MioPan_ReverbUnlock();

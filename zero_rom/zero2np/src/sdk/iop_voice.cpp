@@ -150,7 +150,11 @@ typedef struct
 static IopVoice        voices[IOP_VOICE_NUM];
 static SDL_AudioDeviceID audio_dev;
 static SDL_AudioStream *out_stream;
-static SDL_Mutex      *voice_mutex;
+/* Created at static-init time and never replaced, for the reason the reverb
+ * lock is (iop_reverb.cpp): created lazily in MioPan_VoiceInit(), a lock taken
+ * on another thread before the create and released after it would unlock a
+ * mutex it never held. */
+static SDL_Mutex *const voice_mutex = SDL_CreateMutex();
 static SDL_Thread     *voice_thread;
 static int             voice_quit;
 static int             voice_ready;
@@ -159,8 +163,8 @@ static u_short         master_volr[IOP_VOICE_CORES];
 
 /* Host output controls -- see iop_voice.h.  Atomic because the settings are
  * applied from the game thread, possibly while sceSdInit() is still bringing
- * the device up on an IOP thread and before the voice lock even exists; the
- * stream itself is only touched under that lock. */
+ * the device up on an IOP thread; the stream itself is only touched under the
+ * voice lock. */
 static std::atomic<float> output_volume{1.0f};
 static std::atomic<int>   output_muted{0};
 
@@ -985,9 +989,6 @@ void MioPan_VoiceInit(void)
 {
     if (voice_ready)
         return;
-
-    if (voice_mutex == NULL)
-        voice_mutex = SDL_CreateMutex();
 
     for (int i = 0; i < IOP_VOICE_NUM; i++)
     {
