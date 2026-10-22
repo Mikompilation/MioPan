@@ -1000,6 +1000,56 @@ int MioPan_RendererGetGeometryInterpolation(void);
  * figures. */
 float MioPan_RendererGetGeometryCoverage(void);
 
+/* ---- Display-rate smoothing -----------------------------------------------
+ *
+ * Where frame smoothing's presents come from.
+ *
+ *   FIELD    The presents above: in the game's own tick, one CRTC field apart,
+ *            so at most 60 Hz and paced by the emulated field clock rather
+ *            than by the monitor.  The default, and exactly the path that
+ *            existed before display mode did.
+ *   DISPLAY  The game thread stops presenting.  At the end of every tick it
+ *            hands the uploaded frame to a presenter thread and goes straight
+ *            on to the next one, with both of its fields; the presenter waits
+ *            on the swapchain and puts that frame on screen once per refresh
+ *            -- 120, 144, 240 Hz, or whatever a VRR display runs at -- each
+ *            time through the camera and world blended to the moment it is
+ *            shown.  extra_presents and the field budget do not apply.
+ *
+ * The interpolation toggles above apply to both.  Takes effect at the next
+ * logical frame. */
+enum
+{
+    MIOPAN_SMOOTHING_FIELD = 0,
+    MIOPAN_SMOOTHING_DISPLAY = 1,
+};
+void MioPan_RendererSetSmoothingMode(int mode);
+int MioPan_RendererGetSmoothingMode(void);
+
+/* What the display-rate presenter did over the last one-second stats window.
+ * All zero, `active` included, while the mode is FIELD. */
+typedef struct MioPanDisplayPresentStats
+{
+    int active;               /* the presenter thread is running              */
+    double refresh_hz;        /* the display rate it paces against            */
+    double presents_per_s;    /* frames that reached the swapchain            */
+    double packets_per_s;     /* game ticks it picked up                      */
+    double held_per_s;        /* refreshes with no new in-between to show:    */
+                              /* the next tick was not there in time          */
+    unsigned int late;        /* ticks handed off after their window opened,  */
+                              /* since startup                                */
+    unsigned int dropped;     /* ticks replaced before they were ever shown,  */
+                              /* since startup                                */
+    double handoff_ms;        /* field edge to hand-off, game thread, average */
+    double budget_ms;         /* the hand-off allowance t is measured from    */
+    double cpu_ms;            /* presenter CPU per present: blend, record,    */
+    double cpu_max_ms;        /* submit -- average and worst                  */
+    double wait_ms;           /* blocked on the swapchain per present         */
+    double t_share[8];        /* presents with t in each eighth of the tick   */
+} MioPanDisplayPresentStats;
+
+void MioPan_RendererGetDisplayPresentStats(MioPanDisplayPresentStats *out);
+
 /* GS fogging, standing in for the VU1 fog block gra3dApplyFog() uploads and
  * the FOGCOL register gra3dSetFogColor() writes.  Also "last value wins":
  * MapFog.c and scene.c push a new setting whenever the ramp moves, and every

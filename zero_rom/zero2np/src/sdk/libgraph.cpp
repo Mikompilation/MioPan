@@ -166,7 +166,7 @@ static void VblankThreadMain(void *data)
          * posted by the callback below; this one is never drained by vfunc(),
          * so the renderer can pace against it without spending the game's
          * fields.  See miopan_pacing.h. */
-        MioPan_PacingSignalField();
+        MioPan_PacingSignalField(s_vblank_thread_limiter.next_counter);
 
         MioPan_MutexLock(s_vblank_mutex);
         callback = s_vblank_callback;

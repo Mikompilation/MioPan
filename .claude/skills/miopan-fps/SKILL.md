@@ -31,11 +31,14 @@ stated otherwise.
 | 3. Drive reprojected presents from the frame loop | **done**, verified in-game |
 | 4. Interpolated geometry | **built**, maths verified, **not yet judged in-game** |
 | Smoothing admission check (`SmoothingFits()`) | **done** — a tick that cannot spare the in-between's field presents once; see Part 10 |
+| 5. Display-rate presentation (`[smoothing] mode = display`) | **prototype done**, measured at 240 Hz in-game — Part 11 |
 
 The build is clean and the whole chain runs: menu bar → **Settings → Graphics →
 Frame smoothing** presents each logical frame up to four times, on an interpolated
 camera and — since increment 4 — through an interpolated world, while the
-simulation keeps its 30 Hz tick.
+simulation keeps its 30 Hz tick.  **Present at display rate** in the same menu
+(increment 5) replaces that with a presenter thread that presents once per
+monitor refresh; the 60 Hz path is what runs whenever it is off.
 
 Increment 4 is built and its maths is verified over 200k randomised cases, but
 **whether it reads better has not been judged**; that wants a human at the
@@ -656,10 +659,10 @@ zero. Sub-milli-unit against a ~50-unit character.
 Increments 1–3 are done and verified in-game. 60 fps of camera motion out of an
 untouched 30 Hz simulation, one setting, zero ROM source changed.
 
-**60 Hz is the ceiling** — not a limitation of the approach but of `vfunc()`'s
-unconditional last `WaitSema()`; see Part 6. Going higher would mean editing
-`vfunc()`, which is reconstructed game code, for a benefit that stops at the
-display's refresh anyway.
+**60 Hz is the ceiling of the field loop** — not of the approach but of
+`vfunc()`'s unconditional last `WaitSema()`; see Part 6.  Increment 5 gets past
+it without touching `vfunc()`: the presents leave the game thread altogether,
+so there is no field to borrow and no ceiling but the display's.  See Part 11.
 
 ### The cut guard — done
 
@@ -1000,6 +1003,39 @@ rebuild it rather than keep it.
 - **Vertex colours are deliberately not blended.** A skinned character's vertex
   colour is its VU1 lighting, evaluated against the pose the game simulated;
   only positions move.
+- **Per-frame renderer state is `thread_local`** (increment 5; the note above
+  `g_shadow_episodes`).  A new global the record stage reads has to be
+  `thread_local` too *and* added to `HandOverFrameState()` /
+  `ExchangePresenterState()`, or the presenter records it from its own,
+  never-written copy — an empty list, a zero matrix, a null buffer.  Any
+  renderer call from a thread other than the game thread sees that thread's
+  copies; the only other EE thread that runs game code (`thFileLoad`) makes
+  none.
+- **Never block in an SDL_GPU wait on the presenter.** On D3D12,
+  `WaitForFences()` holds the device's submit lock across an infinite wait, so
+  `SDL_WaitAndAcquireGPUSwapchainTexture()`, `SDL_WaitForGPUSwapchain()` and
+  `SDL_WaitForGPUFences()` stall every other thread's submit.  Measured: the
+  game thread's hand-off submit took 2.8 ms (p50) / 4.4 ms (max) until the
+  presenter switched to polling the non-blocking acquire; then 0.05 / 0.30 ms.
+  `MioPan_RendererReadbackScreen()` still waits on a fence (a photo), which
+  holds the presenter up for that one frame.
+- **The swapchain is acquired off the window's thread.** SDL documents it as
+  window-thread only.  It works on D3D12 (fence waits, GetBuffer,
+  ResizeBuffers, flip-model Present — none needs the window thread, and the
+  backend never calls SetFullscreenState) as long as the game/window thread
+  never blocks on the presenter for long.  Vulkan should be the same; Metal is
+  where the rule is real.  Moving the game loop off the main thread (the
+  reverted `miopan_host` split) would let the main thread run
+  `PresenterStep()` itself and close this.
+- **A texture a queued draw can name is released through
+  `ReleaseFrameTexture()`**, which in display mode defers it until the
+  presenter has moved past every packet that might name it.  A new release
+  site for a draw-visible texture must use it.
+- **Swapchain parameters change only under both locks.**
+  `ApplySwapchainSettings()` re-runs `ApplyHdrComposition()` /
+  `ApplyPresentMode()` in display mode only when one of their inputs moved,
+  because `ResolveHdrComposition()` queries the swapchain the presenter is
+  using.
 - **Build:** `-fno-strict-aliasing` is not optional, and without the PATH export
   `cc1plus` fails with exit 1 and zero diagnostics.
 
@@ -1013,3 +1049,156 @@ game is still running — ask the user to close it.
 
 Sources are globbed, so new `.cpp` files under `zero_rom/zero2np/src/` are picked
 up automatically.
+
+---
+
+## Part 11 — Increment 5: display-rate presentation
+
+**Menu bar → Settings → Graphics → Frame smoothing → Present at display rate**, persisted as
+`[smoothing] mode = field | display` (default `field`), `MIOPAN_SMOOTHING`
+overrides it for one run.  Field mode is the increment-3/4 path, unchanged.
+
+### Why the field loop could not do it
+
+The field loop presents inside the tick, one CRTC field apart, so it can only
+borrow the one field `vfunc()` lets go of (Part 6): at most 60 Hz, paced by the
+emulated 60 Hz field clock rather than the monitor — on a 144 Hz panel each
+present is held for two refreshes or three, which judders — and the in-between's
+field comes out of the next tick's work (`SmoothingFits()`).
+
+### What display mode does
+
+- **Game thread:** ticks exactly as before.  At the end of the tick
+  `HandOffFrame()` runs the upload stage on its own command buffer, submits it,
+  and hands the frame over as a `FramePacket` stamped with **T**, the
+  *scheduled* counter of the field that released `vfunc()`
+  (`MioPan_PacingLastFieldCounter()`, published by the V-blank thread from its
+  limiter's target, not its wake-up).  It presents nothing and waits for
+  nothing.  `SmoothingFits()` and `extra_presents` do not apply.
+- **Presenter thread** (`PresenterStep()`, one refresh per call): polls the
+  non-blocking swapchain acquire (see the D3D12 hazard in Part 10), turns the
+  moment it returns into a refresh slot **S** with a phase-locked loop on the
+  display's period (`AdvanceDisplaySlot()`: period from
+  `SDL_GetCurrentDisplayMode`, 1/8 correction, resync past half a refresh),
+  adopts the newest packet whose window has opened, and presents it at
+  `t = (S - T - budget) / period` through `BlendCameraBetween()`,
+  `ReprojectDrawsAt()`, `ApplyGeometryVertexBlend()` and `RecordFramePasses()`
+  — the field loop's own functions.  The first present of a packet does the
+  packet's once-only work (shadow map, GS captures, displayed page, screen
+  mirror, depth-probe download); the rest are repeats.  A packet shown at t = 1
+  with nothing newer is not presented again — the thread waits for the next
+  tick instead of redrawing the same picture.
+
+### Why t counts from T + budget
+
+Evenly spaced frames need displayed game time = S − constant, and pure
+interpolation needs tick N in hand for every S that shows anything past tick
+N−1, so the constant is at least a tick plus the field-edge-to-hand-off time.
+`budget` is that hand-off time, learned from the packets (rises at once on a
+late one, decays 0.05 ms per packet, 0.5 ms margin, capped at 10 ms).  A packet
+is adopted once S passes T + budget, so the last present before a hand-off
+lands near t = 1 and the first after it near t = 0 — at 60 Hz with aligned
+refreshes, exactly the field loop's 0.5 / 1.0.  **The cost is latency**: at the
+first refresh after a hand-off the screen shows about a tick less one refresh
+of age, where the field loop shows half a tick — +12.5 ms at 240 Hz, +9.7 ms at
+144 Hz.  Only extrapolation avoids that, and the camera policy is
+interpolation (Part 5).
+
+### Threads, state and ownership
+
+- Everything the record stage reads is `thread_local`: draw list and streams,
+  capture points and slots, shadow episodes, light states, uniform block,
+  camera and previous camera, GS fog, view extend, upload flags, depth-probe
+  postings, the geometry pair, the four per-frame GPU buffers, the stream
+  staging buffers.  The game thread builds into its copies; the presenter
+  records from its own; the record code is unchanged.  The profiler's
+  `g_frame` is `thread_local` too, so every profiler call the recorder makes on
+  the presenter is a no-op.
+- Three `FramePacket` slots (FREE / FILLING / PUBLISHED / PRESENTING), so the
+  game never waits for the presenter.  `HandOverFrameState()` swaps the frame
+  in and copies what the game carries into its next tick;
+  `ExchangePresenterState()` swaps everything both ways on adopt and retire.  A
+  retired packet goes back to the game thread with its storage and buffers, so
+  every `DrawCommand` (and `ResidentMesh`) is still destroyed on the game
+  thread.
+- The ImGui overlay goes over as a `MioPanUi::DrawSnapshot`: the game thread
+  does texture creates/updates itself, copies the draw lists with their texture
+  references resolved to IDs, and holds retired ImGui textures for 3 frames.
+- Locks: `g_swapchain_lock` (presenter, acquire → submit; game thread only for
+  vsync/HDR changes), `g_present_state_lock` (recursive; presenter across
+  record + submit; game thread around depth-probe resolve, screen capture /
+  readback / captured-screen draw, MSAA / anisotropy / HDR setters, and the
+  mesh-pin list), `g_packet_lock` (slot status only).  Order:
+  swapchain → state.
+
+### Measured (RelWithDebInfo, RTX 4080, D3D12, HDR10, 5120x1417 window, 240 Hz)
+
+Chapter 3, scripted walk, 43 s, same script both modes.  Measured with a
+temporary per-present trace — one line per present from `PresenterStep()` and
+`PresentLogicalFrame()`: slot time, tick, raw t, t, and the eye recovered from
+the live view (`ViewMatrixEye(g_3d_view)`), ~25 lines, removed afterwards;
+rebuild it — plus the stutter log per tick.  "Eye velocity vs neighbours" is,
+per present while the camera moves, |eye step / time step| against the mean of
+the two presents either side:
+
+| | field (1 extra) | display |
+|---|---|---|
+| presents/s | 60.0 | 240.0 |
+| present spacing sd | 0.345 ms | 0.029 ms |
+| presents at a double interval | 0 | 0 of 10,326 |
+| t distribution (eighths) | 50% at 0.5, 50% at 1.0 | 12.5% each |
+| eye velocity vs neighbours while moving | 5.6% | 1.8% |
+| held presents (raw t > 1) | — | 6 (0.14/s) |
+| paced | 33.33 ms, 2.00 fields/tick | 33.33 ms, 2.00 fields/tick |
+| game thread `VBlank/gate` (time `vfunc()` waits) | 13.1 ms | 29.9 ms |
+| game thread renderer (upload + submit) | 1.67 ms | 0.36 ms |
+| CPU per present | ~0.55 ms (record + submit) | 0.52 ms avg, 0.77 max (presenter) |
+| hand-off (field edge → published) | — | 0.36 ms, budget 0.83 ms |
+
+So **game_cpu gets its full two fields back**: the game thread waits ~29.9 of
+every 33.3 ms instead of 13.1, and `SmoothingFits()` never has to skip.
+
+**MSVC Debug** (`/Od /RTC1`), same walk, against a Debug build of the base
+commit with the same test hooks:
+
+| | base, field | this, field | this, display |
+|---|---|---|---|
+| sgd / meshcpu per tick | 8.26 / 9.50 ms | 8.15 / 9.40 ms | 8.22 / 9.48 ms |
+| presents/s | — | 42.9 (`SmoothingFits()` skipping) | 240.0, none held |
+| eye velocity vs neighbours | — | 9.0% | 2.0% |
+| CPU per present | — | — | 0.92 ms avg, 1.67 max |
+
+`thread_local` costs the game thread nothing measurable even at `/Od`.  On
+chapter 0's rope bridge (room 9, event 1819 — the Debug shot that could not
+smooth at all) field mode presents 30.2/s and display mode 239.9/s, 2.00 fields
+a tick, over 900 ticks.  The
+stalls and jumps the eye-velocity check flags are the game's own camera
+pausing for a tick at a stick change, faithfully interpolated, and camera cuts.
+
+Robustness, same build: 29 runtime mode switches (field → display costs
+nothing on screen; display → field drops one tick, ~37 ms, while the
+presenter joins), the pause screen over its captured still, and five window
+resizes while the presenter owned the swapchain — no crash, no SDL error, the
+swapchain followed every size.
+
+### Known imprecisions (prototype)
+
+- The pause still, the photo mirror and the depth-probe download are taken on
+  the first present of each packet, at t ≈ 0 — about a tick older than the
+  frame the game just simulated (the field loop takes them at t = 0.5).
+- Video frames upload into the same texture a packet still being shown
+  samples, so a movie frame can appear one tick early.
+- A late hand-off holds one refresh at t = 1 (0.14/s measured), then the budget
+  covers it.
+- MinGW-GCC builds use emulated TLS for `thread_local` (a call per access);
+  MSVC's is a TLS-slot load.  Measure the game thread there before relying on
+  it.
+
+### Next steps
+
+- Take the pause still / mirror / depth probes from the present nearest t = 1,
+  or render them once per packet at t = 1 at mirror resolution.
+- Phase-lock the emulated field clock to the display when its rate is a
+  multiple of 60 (120/240 Hz): presents would land on exact t = k/n and the
+  budget's last refresh of latency would go.
+- Move the game loop off the main thread so the main thread presents.
