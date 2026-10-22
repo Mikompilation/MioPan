@@ -1,6 +1,7 @@
 #include "miopan_ui.h"
 #include "miopan_ui_assists.h"
 #include "miopan_ui_events.h"
+#include "miopan_ui_title.h"
 #include "../os/miopan_pacing.h"
 #include "../rendering/miopan_renderer.h"
 #include "../miopan_config.h"
@@ -1321,6 +1322,17 @@ void PersistSettingsIfChanged()
                   "MioPan_ConfigAudio gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigUi) == 1 * sizeof(int),
                   "MioPan_ConfigUi gained padding; compare by field");
+    static_assert(sizeof(MioPan_ConfigTitle) == 25 * sizeof(int),
+                  "MioPan_ConfigTitle gained padding; compare by field");
+
+    /* The title settings have no owner to capture from: the title window
+     * writes the struct in place, and so does outgame/title_room.c when it
+     * frames a room by itself.  So the compare is against what was seen
+     * last time rather than against a fresh capture. */
+    static MioPan_ConfigTitle title_seen = miopan_config.title;
+    const bool title_changed =
+        std::memcmp(&title_seen, &miopan_config.title, sizeof(title_seen)) != 0;
+    title_seen = miopan_config.title;
 
     const MioPan_ConfigRenderer before = miopan_config.renderer;
     const MioPan_ConfigAudio audio_before = miopan_config.audio;
@@ -1328,7 +1340,8 @@ void PersistSettingsIfChanged()
     MioPan_ConfigCapture();
 
     const Uint64 now = SDL_GetTicks();
-    if (std::memcmp(&before, &miopan_config.renderer, sizeof(before)) != 0 ||
+    if (title_changed ||
+        std::memcmp(&before, &miopan_config.renderer, sizeof(before)) != 0 ||
         std::memcmp(&audio_before, &miopan_config.audio,
                     sizeof(audio_before)) != 0 ||
         std::memcmp(&ui_before, &miopan_config.ui, sizeof(ui_before)) != 0)
@@ -2484,6 +2497,7 @@ void DrawSettingsMenu()
         ImGui::EndMenu();
     }
     DrawControlsSettingsMenu();
+    MioPanUi::DrawTitleMenuItem();
     ImGui::Separator();
 
     DrawInterfaceScaleMenu();
@@ -3528,6 +3542,7 @@ void Draw()
     DrawMainMenuBar();
     /* Every frame, open or not: it also steps the event-jump driver. */
     MioPanUi::DrawEventsWindow();
+    MioPanUi::DrawTitleWindow();
     if (!g_show_performance_summary)
     {
         DrawProfilerGraphs();

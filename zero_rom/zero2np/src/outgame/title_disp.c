@@ -22,6 +22,7 @@
 #include "title_disp.h"
 
 #include "title.h"                          // GetTitleLogoTexAddr
+#include "title_room.h"                     // TitleRoomHidesTitleArt (PORT)
 #include "tim_dat/title_dat.h"              // title_top[]
 #include "../graphics/graph2d/draw_cmn.h"   // DrawCmnCapGroup_W
 #include "../graphics/graph2d/g2d_draw.h"   // DISP_SPRT / DISP_SQAR / Copy* / Disp*
@@ -75,6 +76,13 @@ void DispTitleZeroLogo(int off_x, int off_y, u_char alpha)
     DISP_SPRT ds;
     int i;
 
+    /* PORT: with the room backdrop up, the room is the title picture; the
+     * menus are all that is drawn over it.  See outgame/title_room.h. */
+    if (TitleRoomHidesTitleArt() != 0)
+    {
+        return;
+    }
+
     PK2SendVram((uintptr_t)GetTitleLogoTexAddr(), -1, -1, 0);           /* 158 */
 
     for (i = 0; i < 4; i++)                                             /* 161 */
@@ -108,6 +116,12 @@ void DispTitleZeroLogo(int off_x, int off_y, u_char alpha)
 void DispTitleTecmoLogo(int off_x, int off_y, u_char alpha)
 {
     DISP_SPRT ds;
+
+    /* PORT: as DispTitleZeroLogo(). */
+    if (TitleRoomHidesTitleArt() != 0)
+    {
+        return;
+    }
 
     PK2SendVram((uintptr_t)GetTitleLogoTexAddr(), -1, -1, 0);           /* 193 */
 

@@ -123,6 +123,35 @@ MioPan_Config miopan_config = {
         /* Off: see MioPan_ConfigDeveloper. */
         /* .debug_menu        = */ 0,
     },
+    /* .title = */ {
+        /* Room: it is what the setting exists for, and the logo, the menu and
+         * every screen behind them are the original's either way. */
+        /* .backdrop          = */ MIOPAN_TITLE_BACKDROP_ROOM,
+        /* RKS00, the lantern courtyard outside the Kurosawa house: a slow
+         * truck across it, both ends looking at the same point among the
+         * lanterns, so the shot turns as it travels.  Chosen by eye in the
+         * running game; at z -2600 the path clears the railing along the
+         * south side, which a post of crosses the lens just past x 11280. */
+        /* .room              = */ 40,
+        /* .camera_set        = */ 1,
+        /* .a_eye             = */ { 8500.0f, -900.0f, -2600.0f },
+        /* .a_target          = */ { 9874.0f, -750.0f, 581.0f },
+        /* .a_fov             = */ 50.0f,
+        /* .b_eye             = */ { 11200.0f, -900.0f, -2600.0f },
+        /* .b_target          = */ { 9874.0f, -750.0f, 581.0f },
+        /* .b_fov             = */ 50.0f,
+        /* .travel_seconds    = */ 30.0f,
+        /* .hold_seconds      = */ 4.0f,
+        /* .motion            = */ MIOPAN_TITLE_MOTION_PINGPONG,
+        /* .easing            = */ MIOPAN_TITLE_EASING_SMOOTH,
+        /* .dim               = */ 0.2f,
+        /* 0: the game's own title music, played the way the ROM plays it. */
+        /* .music             = */ 0,
+        /* .music_volume      = */ 1.0f,
+        /* Off: the room is the thing to look at while the title sits idle,
+         * and the movie would take it away every fifteen seconds. */
+        /* .attract_movie     = */ 0,
+    },
 };
 
 namespace
@@ -226,6 +255,27 @@ const EnumName kVsyncModes[] = {
     {"vsync", MIOPAN_VSYNC_ON},
     {"fifo", MIOPAN_VSYNC_ON},
     {"immediate", MIOPAN_VSYNC_OFF},
+    {nullptr, 0},
+};
+
+const EnumName kTitleBackdrops[] = {
+    {"room", MIOPAN_TITLE_BACKDROP_ROOM},
+    {"classic", MIOPAN_TITLE_BACKDROP_CLASSIC},
+    /* Accepted on read, never written: what someone would type by hand. */
+    {"original", MIOPAN_TITLE_BACKDROP_CLASSIC},
+    {nullptr, 0},
+};
+
+const EnumName kTitleMotions[] = {
+    {"pingpong", MIOPAN_TITLE_MOTION_PINGPONG},
+    {"loop", MIOPAN_TITLE_MOTION_LOOP},
+    {"once", MIOPAN_TITLE_MOTION_ONCE},
+    {nullptr, 0},
+};
+
+const EnumName kTitleEasings[] = {
+    {"smooth", MIOPAN_TITLE_EASING_SMOOTH},
+    {"linear", MIOPAN_TITLE_EASING_LINEAR},
     {nullptr, 0},
 };
 
@@ -351,6 +401,40 @@ void ReadFloat(const char *section, const char *name, float *dst)
     {
         *dst = (float)std::atof(value);
     }
+}
+
+/* Three numbers, separated by spaces or commas -- a camera point.  Anything
+ * short of three leaves `dst` as it was, so a half-typed line cannot move the
+ * camera to the origin. */
+void ReadVec3(const char *section, const char *name, float *dst)
+{
+    const char *value = Lookup(section, name);
+    if (value == nullptr || value[0] == '\0')
+    {
+        return;
+    }
+
+    float parsed[3];
+    const char *cursor = value;
+    for (int i = 0; i < 3; i++)
+    {
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == ',')
+        {
+            cursor++;
+        }
+        char *end = nullptr;
+        parsed[i] = (float)std::strtod(cursor, &end);
+        if (end == cursor)
+        {
+            SDL_Log("MioPan: [%s] %s: wants three numbers, got \"%s\"; "
+                    "keeping the default", section, name, value);
+            return;
+        }
+        cursor = end;
+    }
+    dst[0] = parsed[0];
+    dst[1] = parsed[1];
+    dst[2] = parsed[2];
 }
 
 /* Verbatim, less surrounding whitespace, which ParseIni has already trimmed.
@@ -1040,6 +1124,47 @@ static void ConfigLoadOnce(void)
     miopan_config.developer.debug_menu =
         miopan_config.developer.debug_menu != 0 ? 1 : 0;
 
+    MioPan_ConfigTitle *t = &miopan_config.title;
+    ReadEnum("title", "backdrop", kTitleBackdrops, &t->backdrop);
+    ReadInt("title", "room", &t->room);
+    ReadInt("title", "camera_set", &t->camera_set);
+    ReadVec3("title", "a_eye", t->a_eye);
+    ReadVec3("title", "a_target", t->a_target);
+    ReadFloat("title", "a_fov", &t->a_fov);
+    ReadVec3("title", "b_eye", t->b_eye);
+    ReadVec3("title", "b_target", t->b_target);
+    ReadFloat("title", "b_fov", &t->b_fov);
+    ReadFloat("title", "travel_seconds", &t->travel_seconds);
+    ReadFloat("title", "hold_seconds", &t->hold_seconds);
+    ReadEnum("title", "motion", kTitleMotions, &t->motion);
+    ReadEnum("title", "easing", kTitleEasings, &t->easing);
+    ReadFloat("title", "dim", &t->dim);
+    ReadInt("title", "music", &t->music);
+    ReadFloat("title", "music_volume", &t->music_volume);
+    ReadInt("title", "attract_movie", &t->attract_movie);
+
+    /* Nothing between this file and outgame/title_room.c clamps these, and a
+     * room number off the end of the table would load whatever file sits
+     * there.  The room list itself is the game's, so only its length is
+     * checked here; title_room.c refuses a room the disc does not carry. */
+    if (t->backdrop != MIOPAN_TITLE_BACKDROP_ROOM)
+    {
+        t->backdrop = MIOPAN_TITLE_BACKDROP_CLASSIC;
+    }
+    if (t->room < 0 || t->room > 65)
+    {
+        t->room = 40;
+        t->camera_set = 0;
+    }
+    t->camera_set = t->camera_set != 0 ? 1 : 0;
+    t->a_fov = SDL_clamp(t->a_fov, 10.0f, 120.0f);
+    t->b_fov = SDL_clamp(t->b_fov, 10.0f, 120.0f);
+    t->travel_seconds = SDL_clamp(t->travel_seconds, 0.5f, 600.0f);
+    t->hold_seconds = SDL_clamp(t->hold_seconds, 0.0f, 600.0f);
+    t->dim = SDL_clamp(t->dim, 0.0f, 1.0f);
+    t->music_volume = SDL_clamp(t->music_volume, 0.0f, 1.0f);
+    t->attract_movie = t->attract_movie != 0 ? 1 : 0;
+
     /* The window size is the one value with no setter to clamp it, and a zero
      * or negative one would fail SDL_CreateWindow outright. */
     if (r->window_width < 320)
@@ -1348,6 +1473,46 @@ int MioPan_ConfigSave(void)
         ";   The useful parts of it are on the F1 overlay's Assists menu\n"
         ";   either way.\n"
         "debug_menu = %d\n"
+        "\n"
+        "[title]\n"
+        "; The title screen's backdrop: room | classic.  room draws one of the\n"
+        ";   game's rooms, lit as the game lights it, behind the original logo\n"
+        ";   and menu while the camera travels between two points.  classic is\n"
+        ";   the original scrolling art.  The F1 overlay's Settings > Title\n"
+        ";   screen window edits everything here live.\n"
+        "backdrop = %s\n"
+        "; The room, 0..65, counted as the disc numbers them: 0..12 are RY00..\n"
+        ";   RY12, 13 ROS00, 19 RTB00, 30 RRY00, 40 RKS00, 58 RCH00, 65 RY13.\n"
+        "room = %d\n"
+        "; 0 has the camera placed by itself the next time the room loads.\n"
+        "camera_set = %d\n"
+        "; The two camera points: where the eye is and what it looks at, in\n"
+        ";   the game's world units (Y grows downwards), and the field of\n"
+        ";   view in degrees.\n"
+        "a_eye = %.2f %.2f %.2f\n"
+        "a_target = %.2f %.2f %.2f\n"
+        "a_fov = %.2f\n"
+        "b_eye = %.2f %.2f %.2f\n"
+        "b_target = %.2f %.2f %.2f\n"
+        "b_fov = %.2f\n"
+        "; Seconds for one pass from A to B, and seconds held at each end.\n"
+        "travel_seconds = %.2f\n"
+        "hold_seconds = %.2f\n"
+        "; pingpong (there and back) | loop (cut back to A) | once\n"
+        "motion = %s\n"
+        "; smooth | linear\n"
+        "easing = %s\n"
+        "; Black laid over the room under the logo, 0 none .. 1 black.\n"
+        "dim = %.3f\n"
+        "; 0 is the game's own title music, played as the original plays it.\n"
+        ";   Anything else is a stream file number, looped -- the overlay\n"
+        ";   lists them; 2270 is KAN007_KUROSAWA, 2238 the title theme.\n"
+        "music = %d\n"
+        "; Its volume, 0..1; 1 is the level the game plays its music at.\n"
+        "music_volume = %.3f\n"
+        "; 1 lets the attract movie start after fifteen idle seconds, as the\n"
+        ";   original does.  Room backdrop only: classic always does.\n"
+        "attract_movie = %d\n"
         "\n%s",
         miopan_config.paths.data_folder,
         EnumToName(kWindowModes, r->window_mode),
@@ -1394,6 +1559,31 @@ int MioPan_ConfigSave(void)
         (double)r->finder_mask_tint,
         (double)r->finder_mask_scale,
         miopan_config.developer.debug_menu,
+        EnumToName(kTitleBackdrops, miopan_config.title.backdrop),
+        miopan_config.title.room,
+        miopan_config.title.camera_set,
+        (double)miopan_config.title.a_eye[0],
+        (double)miopan_config.title.a_eye[1],
+        (double)miopan_config.title.a_eye[2],
+        (double)miopan_config.title.a_target[0],
+        (double)miopan_config.title.a_target[1],
+        (double)miopan_config.title.a_target[2],
+        (double)miopan_config.title.a_fov,
+        (double)miopan_config.title.b_eye[0],
+        (double)miopan_config.title.b_eye[1],
+        (double)miopan_config.title.b_eye[2],
+        (double)miopan_config.title.b_target[0],
+        (double)miopan_config.title.b_target[1],
+        (double)miopan_config.title.b_target[2],
+        (double)miopan_config.title.b_fov,
+        (double)miopan_config.title.travel_seconds,
+        (double)miopan_config.title.hold_seconds,
+        EnumToName(kTitleMotions, miopan_config.title.motion),
+        EnumToName(kTitleEasings, miopan_config.title.easing),
+        (double)miopan_config.title.dim,
+        miopan_config.title.music,
+        (double)miopan_config.title.music_volume,
+        miopan_config.title.attract_movie,
         input_section.c_str());
     };
 

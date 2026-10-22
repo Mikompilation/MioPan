@@ -152,6 +152,49 @@ typedef struct MioPan_ConfigDeveloper
     int debug_menu;      /* 0 off, 1 SELECT opens the ROM's debug menu */
 } MioPan_ConfigDeveloper;
 
+/*
+ * The title screen's backdrop and music.  outgame/title_room.h is what reads
+ * it, and its banner says how it hangs off the ROM's title; the overlay's
+ * Settings > Title screen window is what writes it.
+ *
+ * Camera points are world space as the game has it: Y grows downwards, and a
+ * standing character is about a thousand units tall.  Fields of view are in
+ * degrees here and radians everywhere else.
+ *
+ * Every field is 4 bytes, so the overlay's settle-and-save compare can memcmp
+ * it the way it does the structs above.
+ */
+#define MIOPAN_TITLE_BACKDROP_CLASSIC 0     /* the original scrolling art      */
+#define MIOPAN_TITLE_BACKDROP_ROOM    1     /* one of the game's rooms         */
+
+#define MIOPAN_TITLE_MOTION_PINGPONG  0     /* A to B and back                 */
+#define MIOPAN_TITLE_MOTION_LOOP      1     /* A to B, then cut back to A      */
+#define MIOPAN_TITLE_MOTION_ONCE      2     /* A to B, then hold               */
+
+#define MIOPAN_TITLE_EASING_SMOOTH    0     /* eases out of each end and in    */
+#define MIOPAN_TITLE_EASING_LINEAR    1
+
+typedef struct MioPan_ConfigTitle
+{
+    int   backdrop;          /* MIOPAN_TITLE_BACKDROP_*                     */
+    int   room;              /* 0..65, as RY00_PK2 counts them              */
+    int   camera_set;        /* 0: frame the room by itself when it loads   */
+    float a_eye[3];
+    float a_target[3];
+    float a_fov;             /* degrees                                     */
+    float b_eye[3];
+    float b_target[3];
+    float b_fov;             /* degrees                                     */
+    float travel_seconds;    /* one pass, A to B                            */
+    float hold_seconds;      /* at each end                                 */
+    int   motion;            /* MIOPAN_TITLE_MOTION_*                       */
+    int   easing;            /* MIOPAN_TITLE_EASING_*                       */
+    float dim;               /* black under the logo, 0 none .. 1 black     */
+    int   music;             /* 0 the game's own; else a stream file, looped */
+    float music_volume;      /* 0..1; 1 is the level the game plays music at */
+    int   attract_movie;     /* room backdrop: let the idle movie start     */
+} MioPan_ConfigTitle;
+
 typedef struct MioPan_Config
 {
     /* Order matters: miopan_config.cpp's defaults are a positional
@@ -161,6 +204,7 @@ typedef struct MioPan_Config
     MioPan_ConfigUi        ui;
     MioPan_ConfigPaths     paths;
     MioPan_ConfigDeveloper developer;
+    MioPan_ConfigTitle     title;
 } MioPan_Config;
 
 extern MioPan_Config miopan_config;

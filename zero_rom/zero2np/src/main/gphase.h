@@ -169,5 +169,6 @@ void SetNextGPhase(GPHASE_ID_ENUM id);      /* queue a transition to phase `id` 
  * ------------------------------------------------------------------------ */
 int GPhaseIsActive(GPHASE_ID_ENUM id);      /* `id` is running at its own layer  */
 int GPhaseIsSettled(void);                  /* nothing queued for next frame     */
+int GPhaseIsQueued(GPHASE_ID_ENUM id);      /* `id` is what next frame will run  */
 
 #endif /* _GPHASE_H */

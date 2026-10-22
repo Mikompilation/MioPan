@@ -9,10 +9,16 @@
 #include "gphase.h"             // GPHASE_ENUM / GPHASE_ID_ENUM / GPHASE_DAT / GPHASE_SYS
 #include "phasefunc.h"          // extern prototypes for every per-phase callback
 #include "gphase_trace.h"       // PORT-ONLY phase trace (no ROM equivalent)
+#include "../outgame/title_room.h" // PORT-ONLY title backdrop (see below)
 
 // ──────────────────────────────────────────────────────────────────────
 // Statics
 
+// PORT: GID_TITLE_MODE's init / pre / end slots name title_room.c's wrappers
+// rather than title.c's callbacks.  Each wrapper calls the ROM's own and adds
+// the room backdrop around it; with [title] backdrop = classic it adds nothing.
+// after_Title_Mode is untouched.  See outgame/title_room.h.
+//
 // The four per-phase callback tables below are parallel arrays indexed by
 // GPHASE_ID_ENUM (0 .. 93).  Their function-pointer element type is written
 // with unspecified parameters `()` because the callbacks have heterogeneous
@@ -41,7 +47,7 @@ static void (*ini_func[94])() =
     /* GID_DEBUG_MENU               */ init_Debug_Menu,
     /* GID_TECMO_MODE               */ init_Tecmo_Mode,
     /* GID_PROJECT_MODE             */ init_Project_Mode,
-    /* GID_TITLE_MODE               */ init_Title_Mode,
+    /* GID_TITLE_MODE               */ init_TitleRoom_Mode,     /* PORT */
     /* GID_TITLE_MOVIE_MODE         */ init_Title_Movie_Mode,
     /* GID_STORY_NOWLOADING         */ init_Story_NowLoading,
     /* GID_STORY_NORMAL             */ init_Story_Normal,
@@ -140,7 +146,7 @@ static void (*end_func[94])() =
     /* GID_DEBUG_MENU               */ end_Debug_Menu,
     /* GID_TECMO_MODE               */ end_Tecmo_Mode,
     /* GID_PROJECT_MODE             */ end_Project_Mode,
-    /* GID_TITLE_MODE               */ end_Title_Mode,
+    /* GID_TITLE_MODE               */ end_TitleRoom_Mode,      /* PORT */
     /* GID_TITLE_MOVIE_MODE         */ end_Title_Movie_Mode,
     /* GID_STORY_NOWLOADING         */ end_Story_NowLoading,
     /* GID_STORY_NORMAL             */ end_Story_Normal,
@@ -239,7 +245,7 @@ static GPHASE_ENUM (*pre_func[94])(GPHASE_ENUM) =
     /* GID_DEBUG_MENU               */ NULL,
     /* GID_TECMO_MODE               */ NULL,
     /* GID_PROJECT_MODE             */ NULL,
-    /* GID_TITLE_MODE               */ pre_Title_Mode,
+    /* GID_TITLE_MODE               */ pre_TitleRoom_Mode,      /* PORT */
     /* GID_TITLE_MOVIE_MODE         */ NULL,
     /* GID_STORY_NOWLOADING         */ pre_Story_NowLoading,
     /* GID_STORY_NORMAL             */ NULL,
@@ -701,4 +707,16 @@ int GPhaseIsSettled(void)
     }
 
     return 1;
+}
+
+// An end callback runs with now[] still holding the phase being left, so this
+// is the only way one can tell where the game is going.  title_room.c asks it.
+int GPhaseIsQueued(GPHASE_ID_ENUM id)
+{
+    if ((int)id < 0 || (int)id >= (int)(sizeof(gphase_tbl) / sizeof(gphase_tbl[0])))
+    {
+        return 0;
+    }
+
+    return gphase_sys.next[gphase_tbl[id].layer] == id;
 }
