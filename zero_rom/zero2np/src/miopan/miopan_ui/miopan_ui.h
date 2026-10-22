@@ -86,6 +86,32 @@ bool PrepareDrawData(SDL_GPUCommandBuffer *command_buffer);
 void RenderDrawData(SDL_GPUCommandBuffer *command_buffer,
                     SDL_GPURenderPass *render_pass);
 
+/*
+ * The overlay for another thread to draw: display-rate smoothing presents on a
+ * thread of its own while this one has already started the next frame, which
+ * is the moment ImGui's own draw data stops being valid.
+ *
+ * CaptureDrawData() runs here, after EndFrame(), and does every part of the
+ * work that touches ImGui's state: texture creates and updates go to the GPU
+ * now, and the draw lists are copied with their texture references resolved,
+ * so the snapshot names GPU textures and nothing else.  A texture ImGui wants
+ * destroyed is kept until it has gone unused for a few frames, longer than any
+ * snapshot that could still name it is held.  The snapshot is allocated on the
+ * first call and reused after; returns false when there is nothing to draw,
+ * and the snapshot then draws nothing.
+ *
+ * The From forms are PrepareDrawData()/RenderDrawData() over a snapshot, and
+ * are the only ones another thread may call.
+ */
+struct DrawSnapshot;
+bool CaptureDrawData(DrawSnapshot **snapshot);
+void FreeDrawData(DrawSnapshot *snapshot);
+bool PrepareDrawDataFrom(const DrawSnapshot *snapshot,
+                         SDL_GPUCommandBuffer *command_buffer);
+void RenderDrawDataFrom(const DrawSnapshot *snapshot,
+                        SDL_GPUCommandBuffer *command_buffer,
+                        SDL_GPURenderPass *render_pass);
+
 /* The overlay's size.  0 follows the display's content scale -- the OS's
  * 150% / 200% setting -- and keeps following it when the window moves to
  * another monitor; anything else pins that factor, clamped to 0.5..4.  May be

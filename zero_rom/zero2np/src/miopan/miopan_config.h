@@ -42,6 +42,7 @@ typedef struct MioPan_ConfigRenderer
     int   extra_presents;    /* frame smoothing: 0..3 additional presents */
     int   interpolate_presents;
     int   interpolate_geometry; /* blend the world too, not just the camera */
+    int   smoothing_mode;    /* MIOPAN_SMOOTHING_*: field-rate or display-rate */
 
     /* Output transform.  See the block comment above
      * MioPan_RendererSetHdrMode() in rendering/miopan_renderer.h. */

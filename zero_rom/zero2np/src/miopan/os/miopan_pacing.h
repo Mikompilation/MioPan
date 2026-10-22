@@ -48,15 +48,28 @@ int MioPan_ResolveVBlankWait(int game_requested);
  * Consuming the game's semaphore instead would add a field per frame and slow
  * the simulation down.
  *
- * MioPan_PacingSignalField() is called from the V-blank thread, once per field.
- * MioPan_PacingWaitField() blocks until the *next* one -- it drains the backlog
- * first, because fields signalled while the game was busy have already elapsed
- * and returning on one of those would let no time pass at all.  It returns
- * immediately if no field has ever been signalled, so a caller running before
- * the V-blank thread exists degrades to no wait rather than to a hang.
+ * MioPan_PacingSignalField() is called from the V-blank thread, once per field,
+ * with the performance-counter value the field was *scheduled* for -- not when
+ * the thread happened to wake.  MioPan_PacingWaitField() blocks until the
+ * *next* one -- it drains the backlog first, because fields signalled while
+ * the game was busy have already elapsed and returning on one of those would
+ * let no time pass at all.  It returns immediately if no field has ever been
+ * signalled, so a caller running before the V-blank thread exists degrades to
+ * no wait rather than to a hang.
  */
-void MioPan_PacingSignalField(void);
+void MioPan_PacingSignalField(unsigned long long scheduled_counter);
 void MioPan_PacingWaitField(void);
+
+/*
+ * The scheduled counter of the most recent field, or 0 before the first.
+ *
+ * vfunc() always ends on a WaitSema() for a fresh field, so read right after
+ * it -- at the top of MioPan_RendererEndFrame() -- this is the moment the
+ * tick's frame would have gone on screen on the PS2, on a grid that does not
+ * jitter with CPU load.  The display-rate presenter times its in-betweens
+ * against it.
+ */
+unsigned long long MioPan_PacingLastFieldCounter(void);
 
 /* The CRTC field period in nanoseconds: 1/60 s, or 1/50 s once the game has
  * reset the GS for PAL.  Defined in sdk/libgraph.cpp, which owns the clock. */

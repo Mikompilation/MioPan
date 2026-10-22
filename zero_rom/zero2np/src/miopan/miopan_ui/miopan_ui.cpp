@@ -281,6 +281,21 @@ void DrawFrameSmoothingMenu()
         "3 extra  -  4 presents per frame",
     };
 
+    /* Display rate replaces the rows below rather than adding to them: the
+     * presents come from another thread, once per monitor refresh. */
+    bool display_rate =
+        MioPan_RendererGetSmoothingMode() == MIOPAN_SMOOTHING_DISPLAY;
+    if (ImGui::MenuItem("Present at display rate", nullptr, &display_rate))
+    {
+        MioPan_RendererSetSmoothingMode(display_rate
+                                            ? MIOPAN_SMOOTHING_DISPLAY
+                                            : MIOPAN_SMOOTHING_FIELD);
+    }
+    ImGui::TextDisabled("One present per monitor refresh, each blended to");
+    ImGui::TextDisabled("when it reaches the screen.  The game keeps both");
+    ImGui::TextDisabled("of its fields; the rows below are the 60 Hz path.");
+    ImGui::Separator();
+
     /* Beyond the budget the tick grows instead of the frame rate rising, so
      * those rows are shown disabled rather than silently clamped. */
     const int budget = MioPan_RendererGetMaxExtraPresents();
@@ -289,7 +304,7 @@ void DrawFrameSmoothingMenu()
          extra++)
     {
         if (ImGui::MenuItem(kLabels[extra], nullptr, active == extra,
-                            extra <= budget))
+                            extra <= budget && !display_rate))
         {
             MioPan_RendererSetExtraPresents(extra);
         }
@@ -299,16 +314,17 @@ void DrawFrameSmoothingMenu()
                         budget, budget + 1);
     ImGui::TextDisabled("and vfunc() always keeps the last one for itself.");
     ImGui::Separator();
+    const bool smoothing = active != 0 || display_rate;
     bool interpolate = MioPan_RendererGetPresentInterpolation() != 0;
     if (ImGui::MenuItem("Interpolate camera", nullptr, &interpolate,
-                        active != 0))
+                        smoothing))
     {
         MioPan_RendererSetPresentInterpolation(interpolate ? 1 : 0);
     }
     bool interpolate_geometry =
         MioPan_RendererGetGeometryInterpolation() != 0;
     if (ImGui::MenuItem("Interpolate motion", nullptr, &interpolate_geometry,
-                        active != 0 && interpolate))
+                        smoothing && interpolate))
     {
         MioPan_RendererSetGeometryInterpolation(interpolate_geometry ? 1 : 0);
     }
@@ -1299,7 +1315,7 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 38 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 39 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
@@ -3552,6 +3568,38 @@ void Draw()
                         : 0.0,
                     camera_note, MioPan_RendererGetSmoothingCuts(),
                     MioPan_RendererGetSmoothingSkips(), geometry_note);
+        /* Display-rate smoothing's own line.  presents/s should sit at the
+         * refresh rate and ticks/s at the game's; held counts refreshes that
+         * had no new in-between to show, which is what a judder is.  The t
+         * shares should be flat -- an even spread over the tick is what
+         * evenly spaced motion looks like from here. */
+        MioPanDisplayPresentStats display{};
+        MioPan_RendererGetDisplayPresentStats(&display);
+        if (display.active)
+        {
+            ImGui::Text("Display %.1f Hz | presents %.1f/s | ticks %.1f/s | "
+                        "held %.1f/s | late %u | dropped %u | hand-off "
+                        "%.2f ms (budget %.2f) | present cpu %.2f ms (max "
+                        "%.2f) | wait %.2f ms",
+                        display.refresh_hz, display.presents_per_s,
+                        display.packets_per_s, display.held_per_s,
+                        display.late, display.dropped, display.handoff_ms,
+                        display.budget_ms, display.cpu_ms, display.cpu_max_ms,
+                        display.wait_ms);
+            if (!g_summary_fps_only)
+            {
+                ImGui::Text("t by eighths  %2.0f %2.0f %2.0f %2.0f %2.0f "
+                            "%2.0f %2.0f %2.0f  %%",
+                            display.t_share[0] * 100.0,
+                            display.t_share[1] * 100.0,
+                            display.t_share[2] * 100.0,
+                            display.t_share[3] * 100.0,
+                            display.t_share[4] * 100.0,
+                            display.t_share[5] * 100.0,
+                            display.t_share[6] * 100.0,
+                            display.t_share[7] * 100.0);
+            }
+        }
         if (!g_summary_fps_only)
         {
             DrawPerformanceDetail(profiler);
@@ -3610,6 +3658,127 @@ void RenderDrawData(SDL_GPUCommandBuffer *command_buffer,
      * presented more than once -- a reprojected in-between -- carries the
      * overlay on each present instead of flashing it at the logical rate.
      * BeginFrame() is what clears the latch, once per logical frame. */
+}
+
+struct DrawSnapshot
+{
+    ImDrawData data;
+    /* Owned and reused frame to frame; data.CmdLists points into these. */
+    ImVector<ImDrawList *> lists;
+};
+
+/* Frames a texture ImGui has retired is kept for.  A snapshot is presented
+ * for at most a frame or two after the one it was taken from. */
+constexpr int kRetiredTextureFrames = 3;
+
+bool CaptureDrawData(DrawSnapshot **snapshot)
+{
+    if (snapshot == nullptr)
+    {
+        return false;
+    }
+    if (*snapshot == nullptr)
+    {
+        *snapshot = IM_NEW(DrawSnapshot)();
+    }
+    DrawSnapshot &out = **snapshot;
+    out.data.Clear();
+
+    if (!IsInitialized() || !g_frame_rendered)
+    {
+        return false;
+    }
+    ImDrawData *draw_data = ImGui::GetDrawData();
+    if (draw_data == nullptr || draw_data->CmdListsCount == 0 ||
+        draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
+    {
+        return false;
+    }
+
+    /* What ImGui_ImplSDLGPU3_PrepareDrawData() would have done first, here,
+     * because it reads and writes the context's textures. */
+    if (draw_data->Textures != nullptr)
+    {
+        for (ImTextureData *tex : *draw_data->Textures)
+        {
+            if (tex->Status == ImTextureStatus_OK ||
+                (tex->Status == ImTextureStatus_WantDestroy &&
+                 tex->UnusedFrames < kRetiredTextureFrames))
+            {
+                continue;
+            }
+            ImGui_ImplSDLGPU3_UpdateTexture(tex);
+        }
+    }
+
+    while (out.lists.Size < draw_data->CmdLists.Size)
+    {
+        out.lists.push_back(IM_NEW(ImDrawList)(nullptr));
+    }
+    for (int i = 0; i < draw_data->CmdLists.Size; i++)
+    {
+        const ImDrawList *source = draw_data->CmdLists[i];
+        ImDrawList *copy = out.lists[i];
+        copy->CmdBuffer = source->CmdBuffer;
+        copy->IdxBuffer = source->IdxBuffer;
+        copy->VtxBuffer = source->VtxBuffer;
+        copy->Flags = source->Flags;
+        /* By ID, so the other thread never looks inside an ImTextureData. */
+        for (ImDrawCmd &cmd : copy->CmdBuffer)
+        {
+            cmd.TexRef = ImTextureRef(cmd.GetTexID());
+        }
+        out.data.CmdLists.push_back(copy);
+        out.data.TotalVtxCount += copy->VtxBuffer.Size;
+        out.data.TotalIdxCount += copy->IdxBuffer.Size;
+    }
+    out.data.CmdListsCount = out.data.CmdLists.Size;
+    out.data.DisplayPos = draw_data->DisplayPos;
+    out.data.DisplaySize = draw_data->DisplaySize;
+    out.data.FramebufferScale = draw_data->FramebufferScale;
+    /* No texture work on the presenting thread. */
+    out.data.Textures = nullptr;
+    out.data.Valid = true;
+    return true;
+}
+
+void FreeDrawData(DrawSnapshot *snapshot)
+{
+    if (snapshot == nullptr)
+    {
+        return;
+    }
+    for (ImDrawList *list : snapshot->lists)
+    {
+        IM_DELETE(list);
+    }
+    IM_DELETE(snapshot);
+}
+
+bool PrepareDrawDataFrom(const DrawSnapshot *snapshot,
+                         SDL_GPUCommandBuffer *command_buffer)
+{
+    if (snapshot == nullptr || !snapshot->data.Valid ||
+        snapshot->data.CmdListsCount == 0 || command_buffer == nullptr)
+    {
+        return false;
+    }
+    ImGui_ImplSDLGPU3_PrepareDrawData(const_cast<ImDrawData *>(&snapshot->data),
+                                      command_buffer);
+    return true;
+}
+
+void RenderDrawDataFrom(const DrawSnapshot *snapshot,
+                        SDL_GPUCommandBuffer *command_buffer,
+                        SDL_GPURenderPass *render_pass)
+{
+    if (snapshot == nullptr || !snapshot->data.Valid ||
+        command_buffer == nullptr || render_pass == nullptr)
+    {
+        return;
+    }
+    ImGui_ImplSDLGPU3_RenderDrawData(const_cast<ImDrawData *>(&snapshot->data),
+                                     command_buffer, render_pass);
 }
 
 void SetScaleOverride(float scale)

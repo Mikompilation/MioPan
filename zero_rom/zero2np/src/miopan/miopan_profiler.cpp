@@ -87,7 +87,11 @@ struct ProfileWindow
     int vblank_target = 0;
 };
 
-ProfileFrame g_frame;
+/* One per thread, and only the game thread ever opens one: every phase and
+ * counter call checks start_counter first, so on any other thread -- the
+ * display-rate presenter records through the same code the game thread does
+ * -- they are no-ops rather than races on the game's frame. */
+thread_local ProfileFrame g_frame;
 ProfileWindow g_window;
 uint64_t g_next_frame_start;
 

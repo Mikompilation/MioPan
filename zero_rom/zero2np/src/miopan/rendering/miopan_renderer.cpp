@@ -15,6 +15,7 @@
 #include <SDL3/SDL_gpu.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
@@ -676,6 +677,12 @@ CachedShaderInfo g_cached_shaders[] = {
 void ReleaseCachedShaders();
 void ReleaseDepthProbeResources();
 void ReleasePresentResources();
+/* Defined with display-rate presentation, used wherever a texture a queued
+ * draw may name is released. */
+void ReleaseFrameTexture(SDL_GPUTexture *texture);
+/* Also there: tells the presenter thread the game has stopped for the
+ * background pause, so it stops presenting too. */
+void NotePresenterHold(bool held);
 
 /* Debug view state, controlled by the host renderer menu.
  *   wireframe -- edges only: shows geometry that is present but shaded away
@@ -944,7 +951,20 @@ struct ShadowEpisode
     bool have_projector;
     bool have_casters;
 };
-std::vector<ShadowEpisode> g_shadow_episodes;
+/*
+ * PER-FRAME STATE IS PER THREAD.
+ *
+ * Everything the record stage replays -- this, the draw list and its streams,
+ * the capture points and slots, the camera and uniform block, the per-frame GPU
+ * buffers, the geometry snapshot -- is thread_local.  On the game thread
+ * nothing changes: it builds and, in field mode, records exactly as it always
+ * did.  In display mode a presenter thread records from its own copies while
+ * the game thread builds the next tick into its own, and the two exchange the
+ * finished frame through a FramePacket (see "Display-rate presentation").  So
+ * the recorder reads `g_draws` and gets the frame it was handed, with no
+ * change to any line of it.
+ */
+thread_local std::vector<ShadowEpisode> g_shadow_episodes;
 
 /* Non-zero while gra3dShadow.c is inside _RenderShadow()/_DrawShadow(), so
  * MioPan_RendererBeginMeshStream() can tag what it queues.  Counted rather
@@ -955,7 +975,7 @@ int g_shadow_receiver_depth;
 /* The episode currently being built, or -1 between shadows. */
 int g_shadow_current_episode = -1;
 /* At least one episode ended up with a usable map this frame. */
-bool g_shadow_valid;
+thread_local bool g_shadow_valid;
 /* Debug view: paint receivers by what the projector resolves to, instead
  * of blending a shadow. */
 bool g_dbg_shadow_view;
@@ -971,16 +991,19 @@ int g_shadow_stat_receivers;
 float g_shadow_saved_view[16];
 float g_shadow_saved_projection[16];
 bool g_shadow_saved_camera_valid;
-SDL_GPUBuffer *g_vertex_buffer;
-Uint32 g_vertex_buffer_size;
-SDL_GPUBuffer *g_mesh_colour_buffer;
-Uint32 g_mesh_colour_buffer_size;
-SDL_GPUBuffer *g_animated_mesh_buffer;
-Uint32 g_animated_mesh_buffer_size;
+/* Per thread, and handed over with the frame they hold: a packet being
+ * presented keeps its own set while the game thread uploads the next tick into
+ * another. */
+thread_local SDL_GPUBuffer *g_vertex_buffer;
+thread_local Uint32 g_vertex_buffer_size;
+thread_local SDL_GPUBuffer *g_mesh_colour_buffer;
+thread_local Uint32 g_mesh_colour_buffer_size;
+thread_local SDL_GPUBuffer *g_animated_mesh_buffer;
+thread_local Uint32 g_animated_mesh_buffer_size;
 /* g_stream_indices on the GPU.  Grow-only like g_vertex_buffer, and filled by
  * the same upload, so a draw that can read one can read the other. */
-SDL_GPUBuffer *g_stream_index_buffer;
-Uint32 g_stream_index_buffer_size;
+thread_local SDL_GPUBuffer *g_stream_index_buffer;
+thread_local Uint32 g_stream_index_buffer_size;
 /*
  * The staging side of the three streams above, kept across frames -- see
  * MapStreamTransfer().  Vertices and stream indices share one, as they share
@@ -991,9 +1014,11 @@ struct StreamTransfer
     SDL_GPUTransferBuffer *buffer = nullptr;
     Uint32 size = 0;
 };
-StreamTransfer g_vertex_transfer;
-StreamTransfer g_mesh_colour_transfer;
-StreamTransfer g_animated_mesh_transfer;
+/* Per thread and never handed over: mapping one with cycle set switches the
+ * object's backing store, so two threads must not share one. */
+thread_local StreamTransfer g_vertex_transfer;
+thread_local StreamTransfer g_mesh_colour_transfer;
+thread_local StreamTransfer g_animated_mesh_transfer;
 Uint32 g_depth_width;
 Uint32 g_depth_height;
 Uint32 g_pause_capture_width;
@@ -1082,7 +1107,7 @@ const unsigned int kCaptureAddrScene = 0xFFFFFFFEu;
 /* "Copy from the colour target" rather than from another slot. */
 const unsigned int kCaptureSrcLive = 0xFFFFFFFFu;
 
-std::vector<CaptureSlot> g_capture_slots;
+thread_local std::vector<CaptureSlot> g_capture_slots;
 
 /* One requested capture, in draw order: before replaying g_draws[draw_index],
  * copy `src_slot` -- or the live colour target, when it is -1 -- into
@@ -1095,7 +1120,7 @@ struct CapturePoint
     int src_slot;
 };
 
-std::vector<CapturePoint> g_capture_points;
+thread_local std::vector<CapturePoint> g_capture_points;
 
 /* Raised the first time a draw asks to sample the frame buffer, and never
  * lowered.  The texture is a full output-sized target, so it is allocated on
@@ -1137,7 +1162,7 @@ SDL_GPUTextureFormat g_output_format = SDL_GPU_TEXTUREFORMAT_INVALID;
 const SDL_GPUTextureFormat kScreenMirrorFormat =
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 SDL_GPUTextureFormat g_depth_format = SDL_GPU_TEXTUREFORMAT_INVALID;
-bool g_frame_active;
+thread_local bool g_frame_active;
 /*
  * What a presented frame needs out of the frame's upload stage.
  *
@@ -1155,7 +1180,26 @@ struct FrameUploadState
     bool animated_vertices_ready;
 };
 
-FrameUploadState g_frame_upload;
+thread_local FrameUploadState g_frame_upload;
+/*
+ * Display-rate smoothing ([smoothing] mode = display): true on the game thread
+ * while the presenter thread runs and EndFrame() hands frames to it instead of
+ * presenting them.  See "Display-rate presentation".
+ */
+bool g_display_mode_active;
+/* The overlay a presenter thread draws: its packet's snapshot.  Null on the
+ * game thread, which draws ImGui's own draw data. */
+thread_local const MioPanUi::DrawSnapshot *g_frame_ui;
+/* What the stats line and the stutter note report of the frame in display
+ * mode, where the game thread's own copy of it has gone to the presenter by
+ * the time they are written. */
+size_t g_handoff_draws;
+size_t g_handoff_vertices;
+size_t g_handoff_indices;
+size_t g_handoff_stream_elements;
+/* The presenter's last stats window; see PublishDisplayStats(). */
+MioPanDisplayPresentStats g_display_stats;
+void PublishDisplayStats(double elapsed);
 /*
  * Frame smoothing -- menu bar, Settings > Graphics > Frame smoothing.
  *
@@ -1260,21 +1304,21 @@ struct GeometrySnapshotDraw
 
 /* The previous logical frame, and the one being presented.  Swapped at the end
  * of every frame that produced a usable snapshot. */
-std::vector<GeometrySnapshotDraw> g_geo_prev_draws;
-std::vector<GeometrySnapshotDraw> g_geo_curr_draws;
+thread_local std::vector<GeometrySnapshotDraw> g_geo_prev_draws;
+thread_local std::vector<GeometrySnapshotDraw> g_geo_curr_draws;
 /* Four floats per vertex, indexed the same way g_vertices is.  The current
  * frame's copy exists because the blend writes into g_vertices in place: the
  * present that lands on the simulation tick restores the true positions out of
  * here rather than trusting `a + (b - a) * 1.0f` to be exactly `b`. */
-std::vector<float> g_geo_prev_positions;
-std::vector<float> g_geo_curr_positions;
+thread_local std::vector<float> g_geo_prev_positions;
+thread_local std::vector<float> g_geo_curr_positions;
 /* Draws [0, g_geo_match_count) correspond to the previous frame's. */
-size_t g_geo_match_count;
+thread_local size_t g_geo_match_count;
 /* This frame's snapshot is complete and may become the next frame's previous. */
-bool g_geo_snapshot_valid;
+thread_local bool g_geo_snapshot_valid;
 /* Vertex blending specifically is safe -- there is a previous position buffer
  * and nothing has invalidated the vertex indices since it was taken. */
-bool g_geo_vertices_valid;
+thread_local bool g_geo_vertices_valid;
 /*
  * Share of the frame's 3D draws that actually blend, or negative when geometry
  * smoothing had nothing to work with.  Same job `g_camera_motion` does for the
@@ -1355,18 +1399,18 @@ std::vector<InFlightMeshSubmission> g_inflight_mesh_submissions;
 FontTextureEntry g_font_textures[kFontTextureBankCount];
 TextureEntry *g_current_font_texture;
 int g_current_font_bank = -1;
-std::vector<SpriteVertex> g_vertices;
+thread_local std::vector<SpriteVertex> g_vertices;
 /* Triangles of the indexed mesh streams, three absolute g_vertices positions
  * each.  Rebuilt every frame with g_vertices, whose lifetime it shares. */
-std::vector<Uint32> g_stream_indices;
-std::vector<MeshColour> g_mesh_colours;
-std::vector<AnimatedMeshVertex> g_animated_mesh_vertices_stream;
-std::vector<MioPanLightState> g_vertex_light_states;
+thread_local std::vector<Uint32> g_stream_indices;
+thread_local std::vector<MeshColour> g_mesh_colours;
+thread_local std::vector<AnimatedMeshVertex> g_animated_mesh_vertices_stream;
+thread_local std::vector<MioPanLightState> g_vertex_light_states;
 /* Fragment-stage light images, deduplicated against the previous entry -- the
  * walker changes lights per coordinate block, so consecutive meshes in one
  * block share a state and the common case is one push per block. */
-std::vector<MioPanLightState> g_fragment_light_states;
-std::vector<DrawCommand> g_draws;
+thread_local std::vector<MioPanLightState> g_fragment_light_states;
+thread_local std::vector<DrawCommand> g_draws;
 
 /* Resident meshes by handle.  The registry's reference is the one Release
  * drops; queued draws hold their own. */
@@ -1425,11 +1469,11 @@ ResidentMesh::~ResidentMesh()
 DrawSourceFrameMetrics g_draw_source_metrics[DRAW_SOURCE_COUNT];
 MeshStreamState g_mesh_stream;
 unsigned int g_next_mesh_stream_token = 1;
-SpriteUniformBlock g_uniforms;
-float g_3d_view[16];
-float g_3d_projection[16];
-float g_3d_view_projection[16];
-bool g_3d_camera_valid;
+thread_local SpriteUniformBlock g_uniforms;
+thread_local float g_3d_view[16];
+thread_local float g_3d_projection[16];
+thread_local float g_3d_view_projection[16];
+thread_local bool g_3d_camera_valid;
 
 /*
  * The 3D camera as it stood at the end of the previous logical frame, latched
@@ -1437,9 +1481,9 @@ bool g_3d_camera_valid;
  * endpoint frame-rate decoupling interpolates from -- see
  * MioPan_RendererBlendCameraFromPrevious().
  */
-float g_prev_3d_view[16];
-float g_prev_3d_projection[16];
-bool g_prev_3d_camera_valid;
+thread_local float g_prev_3d_view[16];
+thread_local float g_prev_3d_projection[16];
+thread_local bool g_prev_3d_camera_valid;
 
 /*
  * Live GS fog state, in the form the shader consumes: (fMin, fMax, FA, FB)
@@ -1451,8 +1495,8 @@ bool g_prev_3d_camera_valid;
  * anything drawn while a room is loading -- had no VU1 fog block on hardware
  * either.
  */
-float g_gs_fog[4] = {0.0f, 1.0f, 1.0f, 0.0f};
-float g_gs_fog_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+thread_local float g_gs_fog[4] = {0.0f, 1.0f, 1.0f, 0.0f};
+thread_local float g_gs_fog_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
 /*
  * Live GS alpha-test state, in the form the shader consumes.
@@ -2353,8 +2397,8 @@ float ScreenYToClip(float y)
  * before the swapchain is acquired, and 2D and 3D must not disagree about the
  * aspect within one frame.  The cost is that a resize lands one frame late.
  */
-float g_view_extend_x = 1.0f;
-float g_view_extend_y = 1.0f;
+thread_local float g_view_extend_x = 1.0f;
+thread_local float g_view_extend_y = 1.0f;
 
 /*
  * Internal render resolution policy.  See MioPan_RendererSetRenderResolution()
@@ -3616,7 +3660,7 @@ struct DepthProbe
     bool  read_valid = false;
 };
 
-DepthProbe g_depth_probes[MIOPAN_DEPTH_PROBE_SLOTS];
+thread_local DepthProbe g_depth_probes[MIOPAN_DEPTH_PROBE_SLOTS];
 SDL_GPUTransferBuffer *g_depth_probe_transfer;
 Uint32 g_depth_probe_transfer_size;
 SDL_GPUFence *g_depth_probe_fence;
@@ -4077,11 +4121,13 @@ void EnterBackgroundHold()
     MioPan_PacingSetHostHold(1);
     MioPan_VoiceSetOutputPaused(1);
     g_holding_in_background = true;
+    NotePresenterHold(true);
 }
 
 void LeaveBackgroundHold()
 {
     g_holding_in_background = false;
+    NotePresenterHold(false);
     MioPan_VoiceSetOutputPaused(0);
     MioPan_PacingSetHostHold(0);
     /* The pause would otherwise be one enormous frame in the FPS window and
@@ -5584,7 +5630,7 @@ bool BuildFilmGrainSheet(int size, int alpmx, int colmx)
 
     if (g_film_grain_sheet != nullptr)
     {
-        SDL_ReleaseGPUTexture(g_device, g_film_grain_sheet);
+        ReleaseFrameTexture(g_film_grain_sheet);
         g_film_grain_sheet = nullptr;
     }
 
@@ -5742,7 +5788,7 @@ TextureEntry *GetVideoTexture(const sceGsTex0 *tex0)
                                           entry->second.texture;
                                }),
                 g_pending_texture_uploads.end());
-            SDL_ReleaseGPUTexture(g_device, entry->second.texture);
+            ReleaseFrameTexture(entry->second.texture);
         }
         g_texture_cache.erase(entry);
         entry = g_texture_cache.end();
@@ -6357,7 +6403,7 @@ bool EnsureDisplayedPageTexture(Uint32 width, Uint32 height)
 
     if (g_displayed_page_texture != nullptr)
     {
-        SDL_ReleaseGPUTexture(g_device, g_displayed_page_texture);
+        ReleaseFrameTexture(g_displayed_page_texture);
         g_displayed_page_texture = nullptr;
     }
 
@@ -6432,7 +6478,7 @@ bool EnsureSceneCaptureTexture(Uint32 width, Uint32 height)
 
         if (slot.texture != nullptr)
         {
-            SDL_ReleaseGPUTexture(g_device, slot.texture);
+            ReleaseFrameTexture(slot.texture);
             slot.texture = nullptr;
             slot.valid = false;
         }
@@ -8991,7 +9037,10 @@ void PublishStutterFrameNote()
                  delta(g_texture_downloads, last_downloads),
                  delta(g_texture_creates, last_creates_tex),
                  g_pending_texture_uploads.size(),
-                 g_draws.size(), g_vertices.size(), g_stream_indices.size(),
+                 g_display_mode_active ? g_handoff_draws : g_draws.size(),
+                 g_display_mode_active ? g_handoff_vertices : g_vertices.size(),
+                 g_display_mode_active ? g_handoff_indices
+                                       : g_stream_indices.size(),
                  g_indexed_stream_draws, g_indexed_stream_units,
                  g_mesh_triangles_submitted, g_mesh_cache.size(),
                  g_smoothing_skips);
@@ -10004,6 +10053,16 @@ void UpdatePerformanceStats(bool presented)
     stats.draw_count = g_draws.size();
     stats.vertex_count = g_vertices.size() + g_mesh_colours.size() +
                          g_animated_mesh_vertices_stream.size();
+    /* In display mode the game thread hands frames off rather than presenting
+     * them, so the present rate is the presenter's and the frame it built is
+     * the one it handed over. */
+    PublishDisplayStats(elapsed);
+    if (g_display_mode_active)
+    {
+        stats.present_fps = g_display_stats.presents_per_s;
+        stats.draw_count = g_handoff_draws;
+        stats.vertex_count = g_handoff_stream_elements;
+    }
     stats.mesh_triangles_submitted = g_mesh_triangles_submitted;
     stats.mesh_triangles_clipped = g_mesh_triangles_clipped;
     stats.mesh_cache_hits = g_mesh_cache_hits;
@@ -10716,7 +10775,10 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
      * a 640x448 picture.  One ImGui frame feeds every present of it, so a
      * repeated present carries the overlay instead of flickering it at the
      * logical rate. */
-    if (MioPanUi::PrepareDrawData(cmd))
+    const bool ui_ready = g_frame_ui != nullptr
+                              ? MioPanUi::PrepareDrawDataFrom(g_frame_ui, cmd)
+                              : MioPanUi::PrepareDrawData(cmd);
+    if (ui_ready)
     {
         SDL_GPUColorTargetInfo ui_target{};
         ui_target.texture = output_texture;
@@ -10729,7 +10791,14 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
             SDL_BeginGPURenderPass(cmd, &ui_target, 1, nullptr);
         if (ui_pass != nullptr)
         {
-            MioPanUi::RenderDrawData(cmd, ui_pass);
+            if (g_frame_ui != nullptr)
+            {
+                MioPanUi::RenderDrawDataFrom(g_frame_ui, cmd, ui_pass);
+            }
+            else
+            {
+                MioPanUi::RenderDrawData(cmd, ui_pass);
+            }
             SDL_EndGPURenderPass(ui_pass);
         }
     }
@@ -11011,6 +11080,51 @@ bool SmoothingFits()
     return worst + g_smoothing_repeat_ticks + margin <= field;
 }
 
+/*
+ * Whether this tick's presents may blend the camera from the previous tick's
+ * toward this one's -- interpolation on, a camera pair to blend, and no cut
+ * between them -- with the motion and cut figures the summary line reports.
+ * Decided once per tick, before any present reprojects anything, so the live
+ * camera is still the tick's own; both presentation modes ask it the same way.
+ */
+bool TickCameraBlends()
+{
+    if (!g_interpolate_presents || MioPan_RendererHavePreviousCamera() == 0)
+    {
+        g_camera_motion = -1.0f;
+        return false;
+    }
+
+    double from_eye[3];
+    double to_eye[3];
+    ViewMatrixEye(g_prev_3d_view, from_eye);
+    ViewMatrixEye(g_3d_view, to_eye);
+    const double dx = to_eye[0] - from_eye[0];
+    const double dy = to_eye[1] - from_eye[1];
+    const double dz = to_eye[2] - from_eye[2];
+    const double move = std::sqrt(dx * dx + dy * dy + dz * dz);
+    g_camera_motion = (float)move;
+
+    /* A cut is presented as the frame it is, every present of the tick: no
+     * camera blend, and so no geometry blend either.  Nothing else changes --
+     * the presents still happen, so the pacing does not hitch on the cut, and
+     * this frame's true camera is still what the next one blends from. */
+    if (CameraPairIsCut(g_prev_3d_view, g_prev_3d_projection, g_3d_view,
+                        g_3d_projection, move))
+    {
+        /* Counted only when there is a real camera to cut to.  Before the game
+         * sets its first one -- boot, logos, the title -- every tick pairs two
+         * all-zero matrices, and counting those would bury the cuts the figure
+         * exists to show. */
+        if (ViewRotationIsRigid(g_3d_view))
+        {
+            g_smoothing_cuts++;
+        }
+        return false;
+    }
+    return true;
+}
+
 /* The game's work since the last tick's presents finished, less what vfunc()
  * waited, into SmoothingFits()'s window.  Nothing is recorded across a tick
  * that presented nothing: that span would hold two ticks of work. */
@@ -11115,49 +11229,12 @@ bool PresentLogicalFrame()
     /* Held aside before the first reprojection replaces it. */
     float true_view[16];
     float true_projection[16];
-    bool interpolate =
-        g_interpolate_presents && MioPan_RendererHavePreviousCamera() != 0;
+    const bool interpolate = TickCameraBlends();
     if (interpolate)
     {
         std::memcpy(true_view, g_3d_view, sizeof(true_view));
         std::memcpy(true_projection, g_3d_projection,
                     sizeof(true_projection));
-    }
-
-    if (interpolate)
-    {
-        double from_eye[3];
-        double to_eye[3];
-        ViewMatrixEye(g_prev_3d_view, from_eye);
-        ViewMatrixEye(true_view, to_eye);
-        const double dx = to_eye[0] - from_eye[0];
-        const double dy = to_eye[1] - from_eye[1];
-        const double dz = to_eye[2] - from_eye[2];
-        const double move = std::sqrt(dx * dx + dy * dy + dz * dz);
-        g_camera_motion = (float)move;
-
-        /* A cut is presented as the frame it is, every present of the tick:
-         * no camera blend, and so no geometry blend either.  Nothing else
-         * changes -- the presents and their field waits still happen, so the
-         * pacing does not hitch on the cut, and this frame's true camera is
-         * still what the next one blends from. */
-        if (CameraPairIsCut(g_prev_3d_view, g_prev_3d_projection, true_view,
-                            true_projection, move))
-        {
-            interpolate = false;
-            /* Counted only when there is a real camera to cut to.  Before the
-             * game sets its first one -- boot, logos, the title -- every tick
-             * pairs two all-zero matrices, and counting those would bury the
-             * cuts the figure exists to show. */
-            if (ViewRotationIsRigid(true_view))
-            {
-                g_smoothing_cuts++;
-            }
-        }
-    }
-    else
-    {
-        g_camera_motion = -1.0f;
     }
 
     /* Geometry follows the camera: an in-between whose world is blended but
@@ -11219,6 +11296,1258 @@ bool PresentLogicalFrame()
 
     g_smoothing_present_end = MioPan_ProfilerNow();
     return presented;
+}
+
+/* ==========================================================================
+ *  Display-rate presentation  ([smoothing] mode = display)
+ *
+ *  The field loop above presents inside the game's tick, so the most it can
+ *  do is borrow the one field vfunc() lets go of: 60 Hz, paced by the emulated
+ *  CRTC rather than by the monitor, which on a 144 Hz panel holds each frame
+ *  for two refreshes or three and judders.  Display mode takes the presents
+ *  off the game thread altogether.
+ *
+ *   - The game thread ticks exactly as before.  At the end of the tick
+ *     EndFrame() runs the upload stage into the frame's own GPU buffers and
+ *     hands the frame over as a FramePacket stamped with T, the field edge
+ *     vfunc() was released on -- the moment the PS2 would have shown it, on a
+ *     grid that does not move with CPU load.  It presents nothing and waits
+ *     for nothing, so the next tick's work has both of its fields.
+ *   - A presenter thread loops on the swapchain.  Each time an image comes
+ *     free it estimates the refresh slot S the image belongs to, takes the
+ *     newest packet whose window has opened, and presents it at
+ *     t = (S - T - budget) / period through the same camera blend, geometry
+ *     blend and record stage the field loop uses.
+ *
+ *  Why t counts from T + budget and not from T.  Evenly spaced frames need
+ *  the displayed game time to be S less a constant, and interpolation needs
+ *  tick N in hand at every S that shows anything past tick N-1 -- so the
+ *  constant cannot be less than a tick plus the time from the field edge to
+ *  the hand-off.  `budget` is that hand-off time, learned from the packets as
+ *  they arrive.  A packet is adopted once S passes T + budget, and until then
+ *  the previous one carries on toward t = 1: the last present before a
+ *  hand-off lands near t = 1 and the first after it near t = 0, which at 60 Hz
+ *  with aligned refreshes is exactly the field loop's 0.5 / 1.0.  The price is
+ *  latency.  At the first refresh after a hand-off the screen shows about a
+ *  tick less one refresh of age, where the field loop shows half a tick:
+ *  +12.5 ms at 240 Hz, +9.7 ms at 144 Hz, nothing at 60.  Only extrapolation
+ *  avoids that, and the camera policy is interpolation.
+ *
+ *  Threads.  Everything the record stage reads is thread_local (see the note
+ *  above g_shadow_episodes), so the presenter records from its own copy of the
+ *  frame while the game thread builds the next one into its own.  Three
+ *  packet slots mean the game never waits for the presenter: one presented, at
+ *  most one published and waiting for its window, one free.  Packets move by
+ *  swapping, and a retired one goes back to the game thread with its storage
+ *  and buffers, so everything a draw owns is still destroyed on the game
+ *  thread.
+ *
+ *  The presenter acquires, records and submits; the game thread uploads, on a
+ *  command buffer of its own submitted before the hand-off, so queue order
+ *  puts every upload ahead of the first present that reads it.  SDL documents
+ *  the swapchain calls as belonging to the thread that created the window,
+ *  which today is the game thread (SDL_AppIterate).  On D3D12 the acquire is
+ *  fence waits and GetBuffer, a resize is ResizeBuffers, and a flip-model
+ *  windowed Present needs nothing from the window's thread -- so this holds as
+ *  long as the game thread never blocks on the presenter for long.  It takes
+ *  g_present_state_lock for short sections only, and g_swapchain_lock only to
+ *  change swapchain parameters.  PresenterStep() is one refresh and nothing
+ *  else: once the game loop moves off the main thread, the main thread can
+ *  drive it instead and the caveat goes away.
+ * ======================================================================== */
+
+enum PacketStatus
+{
+    PACKET_FREE,
+    PACKET_FILLING,
+    PACKET_PUBLISHED,
+    PACKET_PRESENTING,
+};
+
+/* One tick's frame, between the thread that built it and the one that shows
+ * it.  The first group is the frame itself and moves by swap; the second is
+ * state the game thread carries into its next tick, so it is copied in. */
+struct FramePacket
+{
+    std::vector<DrawCommand> draws;
+    std::vector<SpriteVertex> vertices;
+    std::vector<Uint32> stream_indices;
+    std::vector<MeshColour> mesh_colours;
+    std::vector<AnimatedMeshVertex> animated_vertices;
+    std::vector<MioPanLightState> vertex_lights;
+    std::vector<MioPanLightState> fragment_lights;
+    std::vector<CapturePoint> capture_points;
+    std::vector<ShadowEpisode> shadow_episodes;
+    SDL_GPUBuffer *vertex_buffer = nullptr;
+    Uint32 vertex_buffer_size = 0;
+    SDL_GPUBuffer *stream_index_buffer = nullptr;
+    Uint32 stream_index_buffer_size = 0;
+    SDL_GPUBuffer *mesh_colour_buffer = nullptr;
+    Uint32 mesh_colour_buffer_size = 0;
+    SDL_GPUBuffer *animated_mesh_buffer = nullptr;
+    Uint32 animated_mesh_buffer_size = 0;
+    /* Last tick's half of the geometry pair, which the game thread is done
+     * with once this one is snapshotted. */
+    std::vector<GeometrySnapshotDraw> geo_prev_draws;
+    std::vector<float> geo_prev_positions;
+
+    std::vector<CaptureSlot> capture_slots;
+    std::vector<float> geo_curr_positions;
+    size_t geo_match_count = 0;
+    bool geo_vertices_valid = false;
+    SpriteUniformBlock uniforms{};
+    float view[16]{};
+    float projection[16]{};
+    float view_projection[16]{};
+    bool camera_valid = false;
+    float prev_view[16]{};
+    float prev_projection[16]{};
+    bool prev_camera_valid = false;
+    float fog[4]{};
+    float fog_color[4]{};
+    float view_extend_x = 1.0f;
+    float view_extend_y = 1.0f;
+    FrameUploadState upload{};
+    DepthProbe depth_probes[MIOPAN_DEPTH_PROBE_SLOTS];
+    MioPanUi::DrawSnapshot *ui = nullptr;
+
+    /* Decided once per tick on the game thread, as the field loop does. */
+    bool interpolate = false;
+    bool blend_geometry = false;
+    /* Performance-counter ticks: the field edge, the time to the tick before
+     * it, and when the packet was handed over. */
+    uint64_t field_counter = 0;
+    uint64_t period = 0;
+    uint64_t handoff_counter = 0;
+
+    uint64_t seq = 0;
+    PacketStatus status = PACKET_FREE;
+};
+
+constexpr int kPacketSlots = 3;
+FramePacket g_packets[kPacketSlots];
+/* Every packet's status and seq.  Held only while slots change hands. */
+SDL_Mutex *g_packet_lock;
+/* A present from the swapchain wait to the submit.  The game thread takes it
+ * only to change swapchain parameters. */
+SDL_Mutex *g_swapchain_lock;
+/* The record stage and the shared objects around it: the depth-probe read-
+ * back, the displayed page, the screen mirror, the pipeline and sampler sets,
+ * the in-flight mesh pins.  Held by the presenter across a record and submit,
+ * and by the game thread around the few calls that touch those.  SDL mutexes
+ * are recursive, which some of those calls rely on. */
+SDL_Mutex *g_present_state_lock;
+SDL_Thread *g_presenter_thread;
+std::atomic<bool> g_presenter_stop{false};
+/* Mirrors g_holding_in_background for the presenter. */
+std::atomic<bool> g_presenter_hold{false};
+int g_smoothing_mode = MIOPAN_SMOOTHING_FIELD;
+bool g_presenter_atexit_registered;
+/* The seq the next published packet gets, and the one the presenter shows. */
+std::atomic<uint64_t> g_next_packet_seq{1};
+std::atomic<uint64_t> g_presented_seq{0};
+/* The display's refresh period, counter ticks; written by the game thread,
+ * which owns the window. */
+std::atomic<uint64_t> g_display_refresh_ticks{0};
+uint64_t g_display_refresh_check;
+/* The previous tick's field edge, for the next one's period. */
+uint64_t g_last_field_counter;
+/* The presenter's counters, totals since it started.  Read once per stats
+ * window by the game thread. */
+struct PresenterCounters
+{
+    std::atomic<uint64_t> presents{0};
+    std::atomic<uint64_t> packets{0};
+    std::atomic<uint64_t> held{0};
+    std::atomic<uint64_t> cpu_ticks{0};
+    std::atomic<uint64_t> cpu_max_ticks{0};
+    std::atomic<uint64_t> wait_ticks{0};
+    std::atomic<uint64_t> t_bins[8]{};
+    std::atomic<unsigned int> late{0};
+    std::atomic<unsigned int> dropped{0};
+    std::atomic<uint64_t> budget_ticks{0};
+};
+PresenterCounters g_presenter_counters;
+/* Game-thread side of the stats window. */
+struct DisplayStatsWindow
+{
+    uint64_t presents;
+    uint64_t packets;
+    uint64_t held;
+    uint64_t cpu_ticks;
+    uint64_t wait_ticks;
+    uint64_t t_bins[8];
+    uint64_t handoff_ticks;
+    uint64_t handoffs;
+};
+DisplayStatsWindow g_display_window_start;
+uint64_t g_handoff_ticks_total;
+uint64_t g_handoffs_total;
+
+/* Textures released while a packet that may name them is still held: each
+ * waits for the presenter to reach `safe_seq`.  Either thread may add; the
+ * game thread drains. */
+struct DeferredTextureRelease
+{
+    SDL_GPUTexture *texture;
+    uint64_t safe_seq;
+};
+std::vector<DeferredTextureRelease> g_deferred_texture_releases;
+
+/* The presenter's own state.  Only it touches these. */
+FramePacket *g_current_packet;
+bool g_packet_first_present_done;
+/* The geometry t the packet's vertex buffer holds; 1 is the frame as built. */
+float g_packet_uploaded_t = 1.0f;
+/* The packet's last present was at its own t = 1 and nothing newer has come:
+ * presenting again would only draw the same picture. */
+bool g_packet_shown_at_end;
+/* The packet's own camera, held aside: reprojection overwrites the live one. */
+float g_packet_true_view[16];
+float g_packet_true_projection[16];
+double g_handoff_budget_ticks;
+uint64_t g_display_slot;
+uint64_t g_last_present_slot;
+
+/* Exclusive use of what the presenter records with, for the game thread.  A
+ * no-op in field mode, where nothing else records. */
+class PresentStateGuard
+{
+public:
+    explicit PresentStateGuard(bool with_swapchain = false)
+        : m_swapchain(with_swapchain && g_display_mode_active),
+          m_state(g_display_mode_active)
+    {
+        if (m_swapchain)
+        {
+            SDL_LockMutex(g_swapchain_lock);
+        }
+        if (m_state)
+        {
+            SDL_LockMutex(g_present_state_lock);
+        }
+    }
+    ~PresentStateGuard()
+    {
+        if (m_state)
+        {
+            SDL_UnlockMutex(g_present_state_lock);
+        }
+        if (m_swapchain)
+        {
+            SDL_UnlockMutex(g_swapchain_lock);
+        }
+    }
+    PresentStateGuard(const PresentStateGuard &) = delete;
+    PresentStateGuard &operator=(const PresentStateGuard &) = delete;
+
+private:
+    bool m_swapchain;
+    bool m_state;
+};
+
+void NotePresenterHold(bool held)
+{
+    g_presenter_hold.store(held, std::memory_order_release);
+}
+
+/* BeginFrame's swapchain re-negotiation.  In display mode the presenter is
+ * using the swapchain, so a change waits for it to finish its present -- and
+ * so does the asking, since ResolveHdrComposition() queries the swapchain: it
+ * is only re-run when one of its inputs has moved. */
+void ApplySwapchainSettings()
+{
+    static int applied_hdr_mode = -1;
+    static bool applied_hdr_display;
+    static int applied_vsync = -1;
+    static bool applied_display_mode;
+
+    if (!g_display_mode_active)
+    {
+        applied_display_mode = false;
+        ApplyHdrComposition();
+        ApplyPresentMode();
+        return;
+    }
+    if (applied_display_mode && applied_hdr_mode == g_hdr_mode &&
+        applied_hdr_display == g_display_hdr_enabled &&
+        applied_vsync == g_vsync_mode &&
+        g_swapchain_format != SDL_GPU_TEXTUREFORMAT_INVALID)
+    {
+        return;
+    }
+    applied_display_mode = true;
+    applied_hdr_mode = g_hdr_mode;
+    applied_hdr_display = g_display_hdr_enabled;
+    applied_vsync = g_vsync_mode;
+
+    PresentStateGuard guard(true);
+    ApplyHdrComposition();
+    ApplyPresentMode();
+}
+
+uint64_t MsToCounterTicks(double ms)
+{
+    return (uint64_t)(ms * (double)SDL_GetPerformanceFrequency() / 1000.0);
+}
+
+double CounterTicksToMs(double ticks)
+{
+    const double frequency = (double)SDL_GetPerformanceFrequency();
+    return frequency > 0.0 ? ticks * 1000.0 / frequency : 0.0;
+}
+
+void ReleaseFrameTexture(SDL_GPUTexture *texture)
+{
+    if (texture == nullptr)
+    {
+        return;
+    }
+    if (!g_display_mode_active)
+    {
+        SDL_ReleaseGPUTexture(g_device, texture);
+        return;
+    }
+    /* Any packet up to the one being built may name it; the presenter is past
+     * all of them once it holds the one after.  The +1 also covers a release
+     * from the presenter itself, whose packet the game may already have
+     * passed. */
+    SDL_LockMutex(g_present_state_lock);
+    g_deferred_texture_releases.push_back(
+        {texture, g_next_packet_seq.load(std::memory_order_acquire) + 1});
+    SDL_UnlockMutex(g_present_state_lock);
+}
+
+void FlushDeferredTextureReleases(bool all)
+{
+    if (g_present_state_lock == nullptr)
+    {
+        return;
+    }
+    SDL_LockMutex(g_present_state_lock);
+    const uint64_t presented = g_presented_seq.load(std::memory_order_acquire);
+    g_deferred_texture_releases.erase(
+        std::remove_if(g_deferred_texture_releases.begin(),
+                       g_deferred_texture_releases.end(),
+                       [all, presented](const DeferredTextureRelease &entry) {
+                           if (!all && entry.safe_seq > presented)
+                           {
+                               return false;
+                           }
+                           SDL_ReleaseGPUTexture(g_device, entry.texture);
+                           return true;
+                       }),
+        g_deferred_texture_releases.end());
+    SDL_UnlockMutex(g_present_state_lock);
+}
+
+/* Game thread: the frame moves into `packet`, and the game thread gets back
+ * the storage and the GPU buffers of a frame the presenter has finished with. */
+void HandOverFrameState(FramePacket &packet)
+{
+    g_draws.swap(packet.draws);
+    g_vertices.swap(packet.vertices);
+    g_stream_indices.swap(packet.stream_indices);
+    g_mesh_colours.swap(packet.mesh_colours);
+    g_animated_mesh_vertices_stream.swap(packet.animated_vertices);
+    g_vertex_light_states.swap(packet.vertex_lights);
+    g_fragment_light_states.swap(packet.fragment_lights);
+    g_capture_points.swap(packet.capture_points);
+    g_shadow_episodes.swap(packet.shadow_episodes);
+    std::swap(g_vertex_buffer, packet.vertex_buffer);
+    std::swap(g_vertex_buffer_size, packet.vertex_buffer_size);
+    std::swap(g_stream_index_buffer, packet.stream_index_buffer);
+    std::swap(g_stream_index_buffer_size, packet.stream_index_buffer_size);
+    std::swap(g_mesh_colour_buffer, packet.mesh_colour_buffer);
+    std::swap(g_mesh_colour_buffer_size, packet.mesh_colour_buffer_size);
+    std::swap(g_animated_mesh_buffer, packet.animated_mesh_buffer);
+    std::swap(g_animated_mesh_buffer_size, packet.animated_mesh_buffer_size);
+    /* FinishGeometrySnapshot() is about to replace last tick's half with this
+     * tick's, so last tick's can move; this tick's is copied. */
+    g_geo_prev_draws.swap(packet.geo_prev_draws);
+    g_geo_prev_positions.swap(packet.geo_prev_positions);
+
+    packet.capture_slots = g_capture_slots;
+    packet.geo_curr_positions = g_geo_curr_positions;
+    packet.geo_match_count = g_geo_match_count;
+    packet.geo_vertices_valid = g_geo_vertices_valid;
+    packet.uniforms = g_uniforms;
+    std::memcpy(packet.view, g_3d_view, sizeof(packet.view));
+    std::memcpy(packet.projection, g_3d_projection, sizeof(packet.projection));
+    std::memcpy(packet.view_projection, g_3d_view_projection,
+                sizeof(packet.view_projection));
+    packet.camera_valid = g_3d_camera_valid;
+    std::memcpy(packet.prev_view, g_prev_3d_view, sizeof(packet.prev_view));
+    std::memcpy(packet.prev_projection, g_prev_3d_projection,
+                sizeof(packet.prev_projection));
+    packet.prev_camera_valid = g_prev_3d_camera_valid;
+    std::memcpy(packet.fog, g_gs_fog, sizeof(packet.fog));
+    std::memcpy(packet.fog_color, g_gs_fog_color, sizeof(packet.fog_color));
+    packet.view_extend_x = g_view_extend_x;
+    packet.view_extend_y = g_view_extend_y;
+    packet.upload = g_frame_upload;
+    std::memcpy(packet.depth_probes, g_depth_probes,
+                sizeof(packet.depth_probes));
+}
+
+/* Presenter: exchange everything with `packet`.  Called once to take a packet
+ * up and once more to put it back, so the presenter's own copies only ever
+ * hold the packet it is showing. */
+void ExchangePresenterState(FramePacket &packet)
+{
+    g_draws.swap(packet.draws);
+    g_vertices.swap(packet.vertices);
+    g_stream_indices.swap(packet.stream_indices);
+    g_mesh_colours.swap(packet.mesh_colours);
+    g_animated_mesh_vertices_stream.swap(packet.animated_vertices);
+    g_vertex_light_states.swap(packet.vertex_lights);
+    g_fragment_light_states.swap(packet.fragment_lights);
+    g_capture_points.swap(packet.capture_points);
+    g_shadow_episodes.swap(packet.shadow_episodes);
+    std::swap(g_vertex_buffer, packet.vertex_buffer);
+    std::swap(g_vertex_buffer_size, packet.vertex_buffer_size);
+    std::swap(g_stream_index_buffer, packet.stream_index_buffer);
+    std::swap(g_stream_index_buffer_size, packet.stream_index_buffer_size);
+    std::swap(g_mesh_colour_buffer, packet.mesh_colour_buffer);
+    std::swap(g_mesh_colour_buffer_size, packet.mesh_colour_buffer_size);
+    std::swap(g_animated_mesh_buffer, packet.animated_mesh_buffer);
+    std::swap(g_animated_mesh_buffer_size, packet.animated_mesh_buffer_size);
+    g_geo_prev_draws.swap(packet.geo_prev_draws);
+    g_geo_prev_positions.swap(packet.geo_prev_positions);
+    g_capture_slots.swap(packet.capture_slots);
+    g_geo_curr_positions.swap(packet.geo_curr_positions);
+    std::swap(g_geo_match_count, packet.geo_match_count);
+    std::swap(g_geo_vertices_valid, packet.geo_vertices_valid);
+    std::swap(g_uniforms, packet.uniforms);
+    std::swap(g_3d_view, packet.view);
+    std::swap(g_3d_projection, packet.projection);
+    std::swap(g_3d_view_projection, packet.view_projection);
+    std::swap(g_3d_camera_valid, packet.camera_valid);
+    std::swap(g_prev_3d_view, packet.prev_view);
+    std::swap(g_prev_3d_projection, packet.prev_projection);
+    std::swap(g_prev_3d_camera_valid, packet.prev_camera_valid);
+    std::swap(g_gs_fog, packet.fog);
+    std::swap(g_gs_fog_color, packet.fog_color);
+    std::swap(g_view_extend_x, packet.view_extend_x);
+    std::swap(g_view_extend_y, packet.view_extend_y);
+    std::swap(g_frame_upload, packet.upload);
+    std::swap(g_depth_probes, packet.depth_probes);
+}
+
+/* Game thread: a slot to hand the frame into -- a free one, or failing that
+ * the oldest one still waiting to be shown, which is then never shown.  With
+ * three slots there is always one: at most one is being presented and only
+ * this thread fills. */
+FramePacket *ClaimPacketSlot()
+{
+    SDL_LockMutex(g_packet_lock);
+    FramePacket *chosen = nullptr;
+    for (FramePacket &packet : g_packets)
+    {
+        if (packet.status == PACKET_FREE)
+        {
+            chosen = &packet;
+            break;
+        }
+    }
+    if (chosen == nullptr)
+    {
+        for (FramePacket &packet : g_packets)
+        {
+            if (packet.status == PACKET_PUBLISHED &&
+                (chosen == nullptr || packet.seq < chosen->seq))
+            {
+                chosen = &packet;
+            }
+        }
+        if (chosen != nullptr)
+        {
+            g_presenter_counters.dropped.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        }
+    }
+    if (chosen != nullptr)
+    {
+        chosen->status = PACKET_FILLING;
+    }
+    SDL_UnlockMutex(g_packet_lock);
+    return chosen;
+}
+
+/* The tick's frame would have gone on screen at the field edge vfunc() was
+ * released on; that is the time a packet is stamped with.  A tick that took
+ * longer than four fields -- a load, a hold, the first frame -- is given the
+ * ordinary period instead, so the next packet does not crawl. */
+void StampPacketTiming(FramePacket &packet, uint64_t handoff)
+{
+    const uint64_t frequency = (uint64_t)SDL_GetPerformanceFrequency();
+    const uint64_t field = (uint64_t)((double)MioPan_PacingFieldPeriodNs() *
+                                      (double)frequency / 1.0e9);
+    int fields = MioPan_PacingLastVBlankWait();
+    fields = fields > 0 ? fields : 2;
+    const uint64_t nominal = field * (uint64_t)fields;
+
+    uint64_t edge = MioPan_PacingLastFieldCounter();
+    if (edge == 0 || edge > handoff)
+    {
+        edge = handoff;
+    }
+    uint64_t period = nominal;
+    if (g_last_field_counter != 0 && edge > g_last_field_counter &&
+        edge - g_last_field_counter <= field * 4u)
+    {
+        period = edge - g_last_field_counter;
+    }
+    g_last_field_counter = edge;
+
+    packet.field_counter = edge;
+    packet.period = period != 0 ? period : 1;
+    packet.handoff_counter = handoff;
+    g_handoff_ticks_total += handoff - edge;
+    g_handoffs_total++;
+}
+
+/*
+ * The end of a tick in display mode: the upload stage, on the game thread's
+ * own command buffer, and then the hand-off.  Presents nothing.
+ *
+ * The camera and geometry decisions are the field loop's, made at the same
+ * point -- after the game's last draw and before anything is reprojected --
+ * so the cut guard, the motion figure and the snapshot behave the same way in
+ * both modes.
+ */
+bool HandOffFrame()
+{
+    const bool interpolate = TickCameraBlends();
+    /* Taken every tick, smoothed or not, so the pair stays continuous; the
+     * presenter decides per present whether to use it. */
+    CaptureGeometrySnapshot(1);
+    const bool blend_geometry =
+        interpolate && g_interpolate_geometry && g_geo_match_count != 0;
+
+    const uint64_t acquire_start =
+        MioPan_ProfilerBeginPhase(MIOPAN_PROFILE_RENDERER_ACQUIRE);
+    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(g_device);
+    MioPan_ProfilerEndPhase(MIOPAN_PROFILE_RENDERER_ACQUIRE, acquire_start);
+    if (cmd == nullptr)
+    {
+        LogSdlError("SDL_AcquireGPUCommandBuffer(hand-off)");
+        InvalidateGeometrySnapshot();
+        return false;
+    }
+
+    TextureUploadResult texture_upload;
+    MeshUploadResult mesh_upload;
+    UploadFrameResources(cmd, &texture_upload, &mesh_upload, -1.0f);
+
+    std::vector<MeshCacheEntryPtr> submission_pins;
+    const bool pins_ready = BuildMeshSubmissionPins(
+        mesh_upload.uploaded_entries, true, &submission_pins);
+    const uint64_t submit_start =
+        MioPan_ProfilerBeginPhase(MIOPAN_PROFILE_RENDERER_SUBMIT);
+    bool submitted;
+    if (pins_ready && !submission_pins.empty())
+    {
+        /* The in-flight pin list is shared with the presenter's submits.
+         * Empty -- every frame of this build, which has no mesh-cache draws
+         * -- the submit is a plain one and needs nothing of the presenter. */
+        PresentStateGuard guard;
+        submitted = SubmitMeshCommandBuffer(cmd, std::move(submission_pins));
+    }
+    else
+    {
+        submitted = SDL_SubmitGPUCommandBuffer(cmd);
+    }
+    if (!pins_ready)
+    {
+        SDL_WaitForGPUIdle(g_device);
+    }
+    MioPan_ProfilerEndPhase(MIOPAN_PROFILE_RENDERER_SUBMIT, submit_start);
+    if (submitted)
+    {
+        CommitTextureUploads(texture_upload);
+        CommitMeshUploads(mesh_upload.uploaded_entries,
+                          mesh_upload.colour_bytes, mesh_upload.animated_bytes);
+    }
+    else
+    {
+        LogSdlError("SDL_SubmitGPUCommandBuffer(hand-off)");
+    }
+    for (SDL_GPUTransferBuffer *transfer : texture_upload.transfers)
+    {
+        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
+    }
+    for (SDL_GPUTransferBuffer *transfer : mesh_upload.transfers)
+    {
+        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
+    }
+    if (!submitted)
+    {
+        /* Nothing on the GPU for this frame to replay; the presenter keeps
+         * the last one. */
+        InvalidateGeometrySnapshot();
+        return false;
+    }
+
+    FramePacket *packet = ClaimPacketSlot();
+    if (packet == nullptr)
+    {
+        InvalidateGeometrySnapshot();
+        return false;
+    }
+    g_handoff_draws = g_draws.size();
+    g_handoff_vertices = g_vertices.size();
+    g_handoff_indices = g_stream_indices.size();
+    g_handoff_stream_elements = g_vertices.size() + g_mesh_colours.size() +
+                                g_animated_mesh_vertices_stream.size();
+    HandOverFrameState(*packet);
+    packet->interpolate = interpolate;
+    packet->blend_geometry = blend_geometry;
+    MioPanUi::CaptureDrawData(&packet->ui);
+    StampPacketTiming(*packet, MioPan_ProfilerNow());
+
+    SDL_LockMutex(g_packet_lock);
+    packet->seq = g_next_packet_seq.fetch_add(1, std::memory_order_acq_rel);
+    packet->status = PACKET_PUBLISHED;
+    SDL_UnlockMutex(g_packet_lock);
+    return true;
+}
+
+/* The refresh slot an image acquired at `now` belongs to.  Phase-locked to
+ * the display: the period is the mode's, and each acquire nudges the phase by
+ * an eighth of its error, so the jitter of when a swapchain wait happens to
+ * return -- GPU time, scheduling -- does not reach t.  An error over half a
+ * refresh is a refresh missed or a stall, and restarts the lock there. */
+uint64_t AdvanceDisplaySlot(uint64_t now, uint64_t period)
+{
+    if (g_display_slot == 0 || period == 0)
+    {
+        g_display_slot = now;
+        return g_display_slot;
+    }
+    const uint64_t predicted = g_display_slot + period;
+    const int64_t error = (int64_t)(now - predicted);
+    const int64_t half = (int64_t)(period / 2u);
+    if (error > half || error < -half)
+    {
+        g_display_slot = now;
+    }
+    else
+    {
+        g_display_slot = predicted + (uint64_t)(error / 8);
+    }
+    return g_display_slot;
+}
+
+/* Presenter, under g_packet_lock: whether a packet newer than the one shown
+ * has been published. */
+bool NewerPacketPublishedLocked()
+{
+    const uint64_t current =
+        g_current_packet != nullptr ? g_current_packet->seq : 0;
+    for (const FramePacket &packet : g_packets)
+    {
+        if (packet.status == PACKET_PUBLISHED && packet.seq > current)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * Presenter: move to the newest packet whose window has opened by `slot`.
+ *
+ * The budget follows the hand-offs.  A packet that came in later than its
+ * window opened has already cost a held refresh; the budget rises to cover it
+ * at once, and comes back down slowly -- a step in it moves every packet's t
+ * at once, so it must not wander -- and never past 10 ms, beyond which a
+ * hand-off is a stall rather than something to wait out.
+ */
+void AdoptPacket(uint64_t slot)
+{
+    SDL_LockMutex(g_packet_lock);
+    FramePacket *best = nullptr;
+    const uint64_t current =
+        g_current_packet != nullptr ? g_current_packet->seq : 0;
+    for (FramePacket &packet : g_packets)
+    {
+        if (packet.status != PACKET_PUBLISHED || packet.seq <= current)
+        {
+            continue;
+        }
+        const bool open =
+            g_current_packet == nullptr ||
+            (double)slot >= (double)packet.field_counter + g_handoff_budget_ticks;
+        if (open && (best == nullptr || packet.seq > best->seq))
+        {
+            best = &packet;
+        }
+    }
+    if (best == nullptr)
+    {
+        SDL_UnlockMutex(g_packet_lock);
+        return;
+    }
+
+    for (FramePacket &packet : g_packets)
+    {
+        if (packet.status == PACKET_PUBLISHED && packet.seq < best->seq)
+        {
+            packet.status = PACKET_FREE;
+            g_presenter_counters.dropped.fetch_add(1,
+                                                   std::memory_order_relaxed);
+        }
+    }
+    if (g_current_packet != nullptr)
+    {
+        ExchangePresenterState(*g_current_packet);
+        g_current_packet->status = PACKET_FREE;
+    }
+    ExchangePresenterState(*best);
+    best->status = PACKET_PRESENTING;
+    g_current_packet = best;
+    g_presented_seq.store(best->seq, std::memory_order_release);
+    SDL_UnlockMutex(g_packet_lock);
+
+    g_frame_ui = best->ui;
+    g_frame_active = true;
+    g_shadow_valid = false;
+    g_packet_first_present_done = false;
+    g_packet_uploaded_t = 1.0f;
+    g_packet_shown_at_end = false;
+    std::memcpy(g_packet_true_view, g_3d_view, sizeof(g_packet_true_view));
+    std::memcpy(g_packet_true_projection, g_3d_projection,
+                sizeof(g_packet_true_projection));
+
+    const double handoff = best->handoff_counter > best->field_counter
+        ? (double)(best->handoff_counter - best->field_counter) : 0.0;
+    const double margin = (double)MsToCounterTicks(0.5);
+    const double ceiling = (double)MsToCounterTicks(10.0);
+    if (handoff > g_handoff_budget_ticks)
+    {
+        g_presenter_counters.late.fetch_add(1, std::memory_order_relaxed);
+    }
+    const double wanted = std::min(handoff + margin, ceiling);
+    if (wanted > g_handoff_budget_ticks)
+    {
+        g_handoff_budget_ticks = wanted;
+    }
+    else
+    {
+        g_handoff_budget_ticks = std::max(
+            wanted, g_handoff_budget_ticks - (double)MsToCounterTicks(0.05));
+    }
+    g_presenter_counters.budget_ticks.store((uint64_t)g_handoff_budget_ticks,
+                                            std::memory_order_relaxed);
+    g_presenter_counters.packets.fetch_add(1, std::memory_order_relaxed);
+}
+
+/* Presenter: hand the shown packet back, so its draws are destroyed on the
+ * game thread like every other frame's. */
+void ReturnCurrentPacket()
+{
+    SDL_LockMutex(g_packet_lock);
+    if (g_current_packet != nullptr)
+    {
+        ExchangePresenterState(*g_current_packet);
+        g_current_packet->status = PACKET_FREE;
+        g_current_packet = nullptr;
+    }
+    SDL_UnlockMutex(g_packet_lock);
+    g_frame_ui = nullptr;
+    g_frame_active = false;
+}
+
+/* Black, for an image acquired with no frame to put in it. */
+void RecordClearPass(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target)
+{
+    SDL_GPUColorTargetInfo clear{};
+    clear.texture = target;
+    clear.clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
+    clear.load_op = SDL_GPU_LOADOP_CLEAR;
+    clear.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &clear, 1, nullptr);
+    if (pass != nullptr)
+    {
+        SDL_EndGPURenderPass(pass);
+    }
+}
+
+/*
+ * One refresh: wait for an image, place it in time, blend, record, submit.
+ *
+ * The first present of each packet is the one that does the packet's once-
+ * only work, exactly as the field loop's first present does -- the shadow
+ * map, the GS block captures, the displayed page and the screen mirror, the
+ * depth-probe read-back -- and every later one is a repeat over the same
+ * buffers.  A packet that has been shown at t = 1 with nothing newer behind it
+ * is not presented again: the screen already holds that picture, and the
+ * thread waits for the next tick rather than redrawing it every refresh.
+ */
+void PresenterStep()
+{
+    if (g_presenter_hold.load(std::memory_order_acquire))
+    {
+        SDL_Delay(5);
+        return;
+    }
+
+    SDL_LockMutex(g_packet_lock);
+    const bool have_frame = g_current_packet != nullptr;
+    const bool newer = NewerPacketPublishedLocked();
+    SDL_UnlockMutex(g_packet_lock);
+    if (!newer && (!have_frame || g_packet_shown_at_end))
+    {
+        SDL_DelayNS(500000);
+        return;
+    }
+
+    const uint64_t period =
+        g_display_refresh_ticks.load(std::memory_order_relaxed);
+    SDL_LockMutex(g_swapchain_lock);
+
+    /* Without vsync the swapchain does not pace anything; hold to the
+     * refresh grid here instead of drawing as fast as the GPU allows. */
+    if (g_present_mode != SDL_GPU_PRESENTMODE_VSYNC && g_display_slot != 0 &&
+        period != 0)
+    {
+        const uint64_t due = g_display_slot + period;
+        const uint64_t now = SDL_GetPerformanceCounter();
+        if (due > now)
+        {
+            const uint64_t frequency = SDL_GetPerformanceFrequency();
+            SDL_DelayPrecise((due - now) * 1000000000ull / frequency);
+        }
+    }
+
+    const uint64_t wait_start = SDL_GetPerformanceCounter();
+    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(g_device);
+    if (cmd == nullptr)
+    {
+        SDL_UnlockMutex(g_swapchain_lock);
+        LogSdlError("SDL_AcquireGPUCommandBuffer(presenter)");
+        SDL_Delay(1);
+        return;
+    }
+    /*
+     * Not SDL_WaitAndAcquireGPUSwapchainTexture().  On D3D12 that blocks in
+     * WaitForFences() with the device's submit lock held, and every other
+     * thread's submit then waits behind it for up to a refresh -- measured,
+     * the game thread's hand-off submit took 2.8 ms at the median and 4.4 at
+     * worst, which is what the hand-off budget and so the latency were made
+     * of.  The non-blocking acquire only queries the fence, so it is polled
+     * instead, a fifth of a millisecond apart; the slot lock below absorbs
+     * the granularity.  A minimised window never frees an image, so after
+     * 50 ms the attempt is given up as one.
+     */
+    SDL_GPUTexture *swapchain_texture = nullptr;
+    Uint32 swapchain_width = 0;
+    Uint32 swapchain_height = 0;
+    bool acquire_ok = false;
+    for (;;)
+    {
+        acquire_ok = SDL_AcquireGPUSwapchainTexture(cmd, g_window,
+                                                    &swapchain_texture,
+                                                    &swapchain_width,
+                                                    &swapchain_height);
+        if (!acquire_ok || swapchain_texture != nullptr ||
+            g_presenter_stop.load(std::memory_order_acquire) ||
+            SDL_GetPerformanceCounter() - wait_start > MsToCounterTicks(50.0))
+        {
+            break;
+        }
+        SDL_DelayNS(200000);
+    }
+    if (!acquire_ok)
+    {
+        LogSdlError("SDL_AcquireGPUSwapchainTexture(presenter)");
+        SDL_CancelGPUCommandBuffer(cmd);
+        SDL_UnlockMutex(g_swapchain_lock);
+        SDL_Delay(1);
+        return;
+    }
+    const uint64_t acquired = SDL_GetPerformanceCounter();
+    if (swapchain_texture == nullptr)
+    {
+        /* Minimised, or otherwise nothing to draw into. */
+        SDL_CancelGPUCommandBuffer(cmd);
+        SDL_UnlockMutex(g_swapchain_lock);
+        SDL_Delay(4);
+        return;
+    }
+    const uint64_t slot = AdvanceDisplaySlot(acquired, period);
+
+    SDL_LockMutex(g_present_state_lock);
+    AdoptPacket(slot);
+    FramePacket *packet = g_current_packet;
+    if (packet == nullptr)
+    {
+        RecordClearPass(cmd, swapchain_texture);
+        SDL_SubmitGPUCommandBuffer(cmd);
+        SDL_UnlockMutex(g_present_state_lock);
+        SDL_UnlockMutex(g_swapchain_lock);
+        return;
+    }
+
+    const double raw_t =
+        ((double)slot - (double)packet->field_counter - g_handoff_budget_ticks) /
+        (double)packet->period;
+    const float t = raw_t <= 0.0 ? 0.0f : (raw_t >= 1.0 ? 1.0f : (float)raw_t);
+
+    if (packet->interpolate)
+    {
+        float view[16];
+        float projection[16];
+        if (BlendCameraBetween(g_prev_3d_view, g_prev_3d_projection,
+                               g_packet_true_view, g_packet_true_projection, t,
+                               view, projection))
+        {
+            ReprojectDrawsAt(view, projection,
+                             packet->blend_geometry ? t : -1.0f);
+        }
+    }
+    bool ready = true;
+    if (packet->blend_geometry && g_geo_vertices_valid &&
+        t != g_packet_uploaded_t)
+    {
+        /* At t = 1 this restores the frame's own positions rather than
+         * blending to them, for the reason BlendViewMatrix() copies its
+         * endpoint. */
+        ApplyGeometryVertexBlend(t);
+        ready = UploadVertexBuffer(cmd);
+        g_packet_uploaded_t = ready ? t : -1.0f;
+    }
+
+    bool capture_recorded = false;
+    bool mirror_recorded = false;
+    const bool first = !g_packet_first_present_done;
+    if (ready)
+    {
+        RecordFramePasses(cmd, swapchain_texture, swapchain_width,
+                          swapchain_height, !first, &capture_recorded,
+                          &mirror_recorded);
+    }
+    else
+    {
+        /* The buffer holds a pose this camera was not blended for.  An image
+         * has been acquired and has to be submitted, so it goes out black
+         * rather than wrong -- and the next present uploads again. */
+        RecordClearPass(cmd, swapchain_texture);
+    }
+
+    static const std::vector<MeshCacheEntryPtr> kNoUploads;
+    std::vector<MeshCacheEntryPtr> submission_pins;
+    const bool pins_ready =
+        BuildMeshSubmissionPins(kNoUploads, true, &submission_pins);
+    const bool submitted = pins_ready
+        ? SubmitMeshCommandBuffer(cmd, std::move(submission_pins))
+        : SDL_SubmitGPUCommandBuffer(cmd);
+    if (!pins_ready)
+    {
+        SDL_WaitForGPUIdle(g_device);
+    }
+    if (!submitted)
+    {
+        LogSdlError("SDL_SubmitGPUCommandBuffer(presenter)");
+    }
+    else if (ready)
+    {
+        if (capture_recorded)
+        {
+            g_displayed_page_valid = true;
+        }
+        if (mirror_recorded)
+        {
+            g_screen_mirror_valid = true;
+        }
+        if (first)
+        {
+            RecordDepthProbeDownload();
+            g_packet_first_present_done = true;
+        }
+        g_packet_shown_at_end = raw_t >= 1.0;
+    }
+    SDL_UnlockMutex(g_present_state_lock);
+    SDL_UnlockMutex(g_swapchain_lock);
+
+    const uint64_t done = SDL_GetPerformanceCounter();
+    PresenterCounters &counters = g_presenter_counters;
+    if (submitted)
+    {
+        counters.presents.fetch_add(1, std::memory_order_relaxed);
+        counters.wait_ticks.fetch_add(acquired - wait_start,
+                                      std::memory_order_relaxed);
+        const uint64_t cpu = done - acquired;
+        counters.cpu_ticks.fetch_add(cpu, std::memory_order_relaxed);
+        if (cpu > counters.cpu_max_ticks.load(std::memory_order_relaxed))
+        {
+            counters.cpu_max_ticks.store(cpu, std::memory_order_relaxed);
+        }
+        const int bin = std::min(7, (int)(t * 8.0f));
+        counters.t_bins[bin].fetch_add(1, std::memory_order_relaxed);
+        /* Refreshes that went by with no new in-between: ones skipped since
+         * the last present, and this one if it could only repeat t = 1. */
+        uint64_t held = 0;
+        if (g_last_present_slot != 0 && period != 0 &&
+            slot > g_last_present_slot)
+        {
+            const uint64_t gap =
+                (slot - g_last_present_slot + period / 2u) / period;
+            held += gap > 1 ? gap - 1 : 0;
+        }
+        if (raw_t > 1.0 + 0.5 * (double)period / (double)packet->period)
+        {
+            held++;
+        }
+        counters.held.fetch_add(held, std::memory_order_relaxed);
+        g_last_present_slot = slot;
+    }
+}
+
+int SDLCALL PresenterThreadMain(void *data)
+{
+    (void)data;
+    /* Its deadline is a refresh, a few milliseconds, where the game's is a
+     * tick.  It never spins -- it sleeps in the swapchain wait or between
+     * ticks -- so the priority costs the game thread nothing. */
+    SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+    while (!g_presenter_stop.load(std::memory_order_acquire))
+    {
+        PresenterStep();
+    }
+    ReturnCurrentPacket();
+    /* This thread's own staging buffers; nothing else can reach them. */
+    for (StreamTransfer *stream :
+         {&g_vertex_transfer, &g_mesh_colour_transfer,
+          &g_animated_mesh_transfer})
+    {
+        if (stream->buffer != nullptr)
+        {
+            SDL_ReleaseGPUTransferBuffer(g_device, stream->buffer);
+            stream->buffer = nullptr;
+            stream->size = 0;
+        }
+    }
+    return 0;
+}
+
+/* Game thread: put every slot's frame and buffers away. */
+void ReleasePacketSlots()
+{
+    for (FramePacket &packet : g_packets)
+    {
+        packet.draws.clear();
+        packet.vertices.clear();
+        packet.stream_indices.clear();
+        packet.mesh_colours.clear();
+        packet.animated_vertices.clear();
+        packet.vertex_lights.clear();
+        packet.fragment_lights.clear();
+        packet.capture_points.clear();
+        packet.shadow_episodes.clear();
+        packet.geo_prev_draws.clear();
+        packet.geo_prev_positions.clear();
+        packet.geo_curr_positions.clear();
+        packet.capture_slots.clear();
+        for (SDL_GPUBuffer **buffer :
+             {&packet.vertex_buffer, &packet.stream_index_buffer,
+              &packet.mesh_colour_buffer, &packet.animated_mesh_buffer})
+        {
+            if (*buffer != nullptr)
+            {
+                SDL_ReleaseGPUBuffer(g_device, *buffer);
+                *buffer = nullptr;
+            }
+        }
+        packet.vertex_buffer_size = 0;
+        packet.stream_index_buffer_size = 0;
+        packet.mesh_colour_buffer_size = 0;
+        packet.animated_mesh_buffer_size = 0;
+        MioPanUi::FreeDrawData(packet.ui);
+        packet.ui = nullptr;
+        packet.status = PACKET_FREE;
+        packet.seq = 0;
+    }
+}
+
+void StopPresenter()
+{
+    if (g_presenter_thread == nullptr)
+    {
+        return;
+    }
+    g_presenter_stop.store(true, std::memory_order_release);
+    SDL_WaitThread(g_presenter_thread, nullptr);
+    g_presenter_thread = nullptr;
+    FlushDeferredTextureReleases(true);
+    g_display_mode_active = false;
+    ReleasePacketSlots();
+    g_presented_seq.store(0, std::memory_order_release);
+    SDL_Log("MioPan: display-rate presentation stopped");
+}
+
+/* Refresh rate of the display the window is on, re-read every 30 ticks so a
+ * window dragged to another monitor follows it.  Game thread: it owns the
+ * window.  A mode that does not say gives 60. */
+void UpdateDisplayRefresh(bool force)
+{
+    if (!force && g_display_refresh_check++ % 30u != 0u)
+    {
+        return;
+    }
+    double hz = 0.0;
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(g_window);
+    const SDL_DisplayMode *mode =
+        display != 0 ? SDL_GetCurrentDisplayMode(display) : nullptr;
+    if (mode != nullptr)
+    {
+        hz = mode->refresh_rate_numerator > 0 &&
+                     mode->refresh_rate_denominator > 0
+                 ? (double)mode->refresh_rate_numerator /
+                       (double)mode->refresh_rate_denominator
+                 : (double)mode->refresh_rate;
+    }
+    if (!(hz >= 20.0 && hz <= 1000.0))
+    {
+        hz = 60.0;
+    }
+    const uint64_t ticks =
+        (uint64_t)((double)SDL_GetPerformanceFrequency() / hz + 0.5);
+    if (ticks != g_display_refresh_ticks.load(std::memory_order_relaxed))
+    {
+        g_display_refresh_ticks.store(ticks, std::memory_order_relaxed);
+        SDL_Log("MioPan: display-rate presentation at %.3f Hz", hz);
+    }
+}
+
+bool StartPresenter()
+{
+    if (g_presenter_thread != nullptr)
+    {
+        return true;
+    }
+    if (g_packet_lock == nullptr)
+    {
+        g_packet_lock = SDL_CreateMutex();
+        g_swapchain_lock = SDL_CreateMutex();
+        g_present_state_lock = SDL_CreateMutex();
+        if (g_packet_lock == nullptr || g_swapchain_lock == nullptr ||
+            g_present_state_lock == nullptr)
+        {
+            LogSdlError("SDL_CreateMutex(presenter)");
+            return false;
+        }
+    }
+
+    ReleasePacketSlots();
+    g_current_packet = nullptr;
+    g_presented_seq.store(0, std::memory_order_release);
+    g_last_field_counter = 0;
+    g_display_slot = 0;
+    g_last_present_slot = 0;
+    g_handoff_budget_ticks = (double)MsToCounterTicks(2.0);
+    g_presenter_hold.store(g_holding_in_background, std::memory_order_release);
+    UpdateDisplayRefresh(true);
+
+    /* Before the thread exists, so nothing it does is ever unguarded. */
+    g_display_mode_active = true;
+    g_presenter_stop.store(false, std::memory_order_release);
+    g_presenter_thread =
+        SDL_CreateThread(PresenterThreadMain, "miopan-present", nullptr);
+    if (g_presenter_thread == nullptr)
+    {
+        LogSdlError("SDL_CreateThread(presenter)");
+        g_display_mode_active = false;
+        return false;
+    }
+    /* After the renderer's own teardown was registered, so it runs first: the
+     * presenter must be gone before ImGui and the device go. */
+    if (!g_presenter_atexit_registered)
+    {
+        g_presenter_atexit_registered = true;
+        std::atexit(StopPresenter);
+    }
+    SDL_Log("MioPan: display-rate presentation started");
+    return true;
+}
+
+/* BeginFrame: follow the setting.  The 60 Hz loop is what runs whenever
+ * display mode is off or cannot start. */
+void ApplySmoothingMode()
+{
+    const bool want = g_smoothing_mode == MIOPAN_SMOOTHING_DISPLAY;
+    if (want && !g_display_mode_active)
+    {
+        StartPresenter();
+    }
+    else if (!want && g_display_mode_active)
+    {
+        StopPresenter();
+    }
+    if (g_display_mode_active)
+    {
+        UpdateDisplayRefresh(false);
+        FlushDeferredTextureReleases(false);
+    }
+}
+
+/* Once per stats window, on the game thread. */
+void PublishDisplayStats(double elapsed)
+{
+    MioPanDisplayPresentStats stats{};
+    if (g_display_mode_active && elapsed > 0.0)
+    {
+        PresenterCounters &counters = g_presenter_counters;
+        DisplayStatsWindow now{};
+        now.presents = counters.presents.load(std::memory_order_relaxed);
+        now.packets = counters.packets.load(std::memory_order_relaxed);
+        now.held = counters.held.load(std::memory_order_relaxed);
+        now.cpu_ticks = counters.cpu_ticks.load(std::memory_order_relaxed);
+        now.wait_ticks = counters.wait_ticks.load(std::memory_order_relaxed);
+        for (int i = 0; i < 8; i++)
+        {
+            now.t_bins[i] = counters.t_bins[i].load(std::memory_order_relaxed);
+        }
+        now.handoff_ticks = g_handoff_ticks_total;
+        now.handoffs = g_handoffs_total;
+        const DisplayStatsWindow &was = g_display_window_start;
+
+        const uint64_t presents = now.presents - was.presents;
+        const uint64_t handoffs = now.handoffs - was.handoffs;
+        const uint64_t period =
+            g_display_refresh_ticks.load(std::memory_order_relaxed);
+        stats.active = 1;
+        stats.refresh_hz = period != 0
+            ? (double)SDL_GetPerformanceFrequency() / (double)period : 0.0;
+        stats.presents_per_s = (double)presents / elapsed;
+        stats.packets_per_s = (double)(now.packets - was.packets) / elapsed;
+        stats.held_per_s = (double)(now.held - was.held) / elapsed;
+        stats.late = counters.late.load(std::memory_order_relaxed);
+        stats.dropped = counters.dropped.load(std::memory_order_relaxed);
+        stats.handoff_ms = handoffs != 0
+            ? CounterTicksToMs((double)(now.handoff_ticks - was.handoff_ticks) /
+                               (double)handoffs)
+            : 0.0;
+        stats.budget_ms = CounterTicksToMs(
+            (double)counters.budget_ticks.load(std::memory_order_relaxed));
+        if (presents != 0)
+        {
+            stats.cpu_ms = CounterTicksToMs(
+                (double)(now.cpu_ticks - was.cpu_ticks) / (double)presents);
+            stats.wait_ms = CounterTicksToMs(
+                (double)(now.wait_ticks - was.wait_ticks) / (double)presents);
+            for (int i = 0; i < 8; i++)
+            {
+                stats.t_share[i] = (double)(now.t_bins[i] - was.t_bins[i]) /
+                                   (double)presents;
+            }
+        }
+        stats.cpu_max_ms = CounterTicksToMs((double)counters.cpu_max_ticks.exchange(
+            0, std::memory_order_relaxed));
+        g_display_window_start = now;
+    }
+    g_display_stats = stats;
 }
 }
 
@@ -11470,6 +12799,7 @@ void MioPan_RendererSetHdrMode(int mode)
     if (g_device != nullptr && g_window != nullptr)
     {
         RefreshDisplayHdrInfo();
+        PresentStateGuard guard(true);
         ApplyHdrComposition();
     }
 }
@@ -11671,6 +13001,9 @@ void MioPan_RendererSetMsaaSamples(int samples)
     {
         return;         /* EnsureRenderer() resolves it once there is a device */
     }
+    /* Pipelines and the multisample target are the presenter's to record
+     * with in display mode. */
+    PresentStateGuard guard;
     ApplyMsaaSetting();
     /* Warm the new count's set here rather than letting the first frame at it
      * compile 126 pipelines mid-scene.  Slots already built are skipped, so
@@ -11729,6 +13062,7 @@ void MioPan_RendererSetAnisotropy(int max_anisotropy)
     {
         return;
     }
+    PresentStateGuard guard;
     ApplyAnisotropySetting();
 }
 
@@ -11932,16 +13266,22 @@ void MioPan_RendererBeginFrame(void)
     /* SDL has already dispatched this tick's events (SDL_AppEvent, main.c);
      * nothing here polls for more. */
     FinishEventBatch();
+    /* Before anything this frame presents or hands off, so the whole frame is
+     * on one side of a mode change. */
+    ApplySmoothingMode();
     /* After the events, so an HDR state change they carried is acted on this
      * frame, and before anything acquires a swapchain texture -- the
-     * composition cannot be re-negotiated with one in flight. */
-    ApplyHdrComposition();
-    /* Same constraint, same place: a vsync change rebuilds the swapchain. */
-    ApplyPresentMode();
+     * composition cannot be re-negotiated with one in flight.  A vsync change
+     * rebuilds the swapchain too, and goes in the same place. */
+    ApplySwapchainSettings();
     UpdateViewExtend();
     MioPanUi::BeginFrame();
-    /* Drop last frame's pins before trimming the persistent cache. */
-    CollectInFlightMeshSubmissions();
+    /* Drop last frame's pins before trimming the persistent cache.  Under the
+     * presenter's lock, which submits against the same list. */
+    {
+        PresentStateGuard guard;
+        CollectInFlightMeshSubmissions();
+    }
     AbortActiveMeshStream();
     g_draws.clear();
     /* The buffers a repeated present replays are about to be refilled. */
@@ -11966,8 +13306,11 @@ void MioPan_RendererBeginFrame(void)
     g_fragment_light_states.clear();
     /* Take last frame's read-back before anything queries a probe, and drop
      * the postings so a probe whose caller stopped asking stops being
-     * downloaded for. */
-    ResolveDepthProbes();
+     * downloaded for.  In display mode the presenter issues the download. */
+    {
+        PresentStateGuard guard;
+        ResolveDepthProbes();
+    }
     ClearDepthProbePostings();
     for (DrawSourceFrameMetrics &metrics : g_draw_source_metrics)
     {
@@ -12055,7 +13398,14 @@ void MioPan_RendererEndFrame(void)
                                   "SDL_SubmitGPUCommandBuffer(texture batch)");
         }
     }
-    if (g_frame_active && present_due)
+    if (g_frame_active && present_due && g_display_mode_active)
+    {
+        /* Display mode: hand the frame to the presenter.  No present here and
+         * no field borrowed, so SmoothingFits() has nothing to decide. */
+        presented = HandOffFrame();
+        g_smoothing_present_end = 0;
+    }
+    else if (g_frame_active && present_due)
     {
         presented = PresentLogicalFrame();
     }
@@ -12065,8 +13415,9 @@ void MioPan_RendererEndFrame(void)
     }
     /* After the frame's own submit: the render pass has ended, so a copy pass
      * may read the depth texture.  Its own command buffer, so the present path
-     * keeps its plain submit and needs no fence of its own. */
-    if (presented)
+     * keeps its plain submit and needs no fence of its own.  The presenter
+     * issues it in display mode, after each packet's first present. */
+    if (presented && !g_display_mode_active)
     {
         RecordDepthProbeDownload();
     }
@@ -12167,8 +13518,33 @@ int MioPan_RendererGetMaxExtraPresents(void)
 int MioPan_RendererRepeatPresent(void)
 {
     /* The frame exactly as it was built.  The present loop uses the internal
-     * form, which can additionally hand the repeat a blended vertex buffer. */
+     * form, which can additionally hand the repeat a blended vertex buffer.
+     * In display mode the frame has gone to the presenter. */
+    if (g_display_mode_active)
+    {
+        return 0;
+    }
     return RepeatPresentAt(-1.0f) ? 1 : 0;
+}
+
+void MioPan_RendererSetSmoothingMode(int mode)
+{
+    g_smoothing_mode = mode == MIOPAN_SMOOTHING_DISPLAY
+                           ? MIOPAN_SMOOTHING_DISPLAY
+                           : MIOPAN_SMOOTHING_FIELD;
+}
+
+int MioPan_RendererGetSmoothingMode(void)
+{
+    return g_smoothing_mode;
+}
+
+void MioPan_RendererGetDisplayPresentStats(MioPanDisplayPresentStats *out)
+{
+    if (out != nullptr)
+    {
+        *out = g_display_stats;
+    }
 }
 
 /*
@@ -12263,6 +13639,8 @@ void MioPan_RendererCaptureScreen(unsigned int addr)
         return;
     }
 
+    /* The presenter writes the displayed page in display mode. */
+    PresentStateGuard guard;
     if (g_displayed_page_valid)
     {
         std::swap(g_pause_capture_texture, g_displayed_page_texture);
@@ -12302,6 +13680,9 @@ int MioPan_RendererReadbackScreen(unsigned char *dst, int dst_pitch,
     {
         dst_pitch = dst_w;
     }
+    /* The presenter writes the mirror in display mode; the copy below is
+     * ordered after its last one by holding this across the download. */
+    PresentStateGuard guard;
     if (dst == nullptr || dst_w <= 0 || dst_h <= 0 || dst_pitch < dst_w ||
         src_w <= 0 ||
         src_h <= 0 || !EnsureRenderer() || !g_screen_mirror_valid ||
@@ -12459,6 +13840,9 @@ void MioPan_RendererDrawCapturedScreen(unsigned int addr,
     float xy[8];
     float uv[8];
 
+    /* MioPan_RendererCaptureScreen() swaps this texture under the same lock;
+     * the presenter writes the one it swaps with. */
+    PresentStateGuard guard;
     if (!g_frame_active || !g_pause_capture_valid ||
         addr != g_pause_capture_addr || g_pause_capture_texture == nullptr ||
         g_pause_capture_width == 0 || g_pause_capture_height == 0)

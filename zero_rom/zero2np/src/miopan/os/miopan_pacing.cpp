@@ -20,6 +20,7 @@ static int s_last_resolved_wait;
  */
 static MioPan_Sema *const s_field_sema = MioPan_SemaCreate(0);
 static std::atomic<uint64_t> s_field_signals{0};
+static std::atomic<uint64_t> s_field_counter{0};
 
 /* Set by the game thread, polled by the V-blank and IOP timer threads. */
 static std::atomic<int> s_host_hold{0};
@@ -65,8 +66,11 @@ int MioPan_ResolveVBlankWait(int game_requested)
     return s_last_resolved_wait;
 }
 
-void MioPan_PacingSignalField(void)
+void MioPan_PacingSignalField(unsigned long long scheduled_counter)
 {
+    /* Before the semaphore check: the timestamp is useful on its own. */
+    s_field_counter.store(scheduled_counter, std::memory_order_release);
+
     if (s_field_sema == 0)
     {
         return;
@@ -88,6 +92,11 @@ void MioPan_PacingWaitField(void)
     {
     }
     MioPan_SemaWait(s_field_sema);
+}
+
+unsigned long long MioPan_PacingLastFieldCounter(void)
+{
+    return s_field_counter.load(std::memory_order_acquire);
 }
 
 void MioPan_PacingSetHostHold(int held)

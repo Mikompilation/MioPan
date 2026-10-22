@@ -45,6 +45,7 @@ MioPan_Config miopan_config = {
         /* .extra_presents    = */ 0,
         /* .interpolate_presents = */ 1,
         /* .interpolate_geometry = */ 1,
+        /* .smoothing_mode    = */ MIOPAN_SMOOTHING_FIELD,
         /* HDR is off by default and deliberately so: it is the one setting
          * here that cannot be judged from the code, only from the panel in
          * front of the player, and a first run that silently re-grades the
@@ -205,6 +206,12 @@ const EnumName kHdrModes[] = {
     {"on", MIOPAN_HDR_AUTO},
     {"pq", MIOPAN_HDR_HDR10},
     {"st2084", MIOPAN_HDR_HDR10},
+    {nullptr, 0},
+};
+
+const EnumName kSmoothingModes[] = {
+    {"field", MIOPAN_SMOOTHING_FIELD},
+    {"display", MIOPAN_SMOOTHING_DISPLAY},
     {nullptr, 0},
 };
 
@@ -858,7 +865,7 @@ bool EnvOverrideActive()
         "MIOPAN_RENDER_FILTER", "MIOPAN_ASPECT",
         "MIOPAN_WINDOW_MODE",  "MIOPAN_LIGHTING_MODE",
         "MIOPAN_VSYNC",        "MIOPAN_VOLUME",
-        "MIOPAN_UI_SCALE",
+        "MIOPAN_UI_SCALE",     "MIOPAN_SMOOTHING",
     };
     for (const char *name : kNames)
     {
@@ -889,9 +896,18 @@ const char *EnvValue(const char *name)
  *   MIOPAN_VSYNC     off | on | mailbox
  *   MIOPAN_VOLUME    0 .. 1
  *   MIOPAN_UI_SCALE  0 to follow the display, else a fixed factor
+ *   MIOPAN_SMOOTHING field | display
  */
-void ApplyEnvironmentOverrides(int *vsync, float *volume, float *ui_scale)
+void ApplyEnvironmentOverrides(int *vsync, float *volume, float *ui_scale,
+                               int *smoothing)
 {
+    if (const char *value = EnvValue("MIOPAN_SMOOTHING"))
+    {
+        if (!ParseEnum(kSmoothingModes, value, smoothing))
+        {
+            SDL_Log("MioPan: MIOPAN_SMOOTHING=\"%s\" not understood", value);
+        }
+    }
     if (const char *value = EnvValue("MIOPAN_VSYNC"))
     {
         if (!ParseEnum(kVsyncModes, value, vsync))
@@ -997,6 +1013,7 @@ static void ConfigLoadOnce(void)
     ReadEnum("lighting", "animated_characters", kAnimatedLighting,
              &r->animated_lighting);
     ReadEnum("shadow", "filter", kShadowFilters, &r->shadow_filter);
+    ReadEnum("smoothing", "mode", kSmoothingModes, &r->smoothing_mode);
     ReadInt("smoothing", "extra_presents", &r->extra_presents);
     ReadInt("smoothing", "interpolate_camera", &r->interpolate_presents);
     ReadInt("smoothing", "interpolate_motion", &r->interpolate_geometry);
@@ -1214,6 +1231,13 @@ int MioPan_ConfigSave(void)
         "animated_characters = %s\n"
         "\n"
         "[smoothing]\n"
+        "; field | display\n"
+        ";   field presents inside the game's own tick, at most 60 Hz, using\n"
+        ";   extra_presents below.  display hands each tick to a presenter\n"
+        ";   thread that shows it once per monitor refresh -- 120, 144, 240\n"
+        ";   Hz -- blended to the moment each frame reaches the screen;\n"
+        ";   extra_presents is then not used.\n"
+        "mode = %s\n"
         "; Extra presents of each simulated frame, 0..3.  The game keeps its\n"
         ";   own 30 Hz tick either way -- these are the same frame shown\n"
         ";   again through a camera interpolated toward it, so 1 gives 60\n"
@@ -1338,6 +1362,7 @@ int MioPan_ConfigSave(void)
         r->indexed_streams,
         EnumToName(kLightingModes, r->lighting_mode),
         EnumToName(kAnimatedLighting, r->animated_lighting),
+        EnumToName(kSmoothingModes, r->smoothing_mode),
         r->extra_presents,
         r->interpolate_presents,
         r->interpolate_geometry,
@@ -1476,7 +1501,10 @@ void MioPan_ConfigApply(void)
     int vsync = r->vsync;
     float volume = miopan_config.audio.volume;
     float ui_scale = miopan_config.ui.scale;
-    ApplyEnvironmentOverrides(&vsync, &volume, &ui_scale);
+    int smoothing = r->smoothing_mode;
+    ApplyEnvironmentOverrides(&vsync, &volume, &ui_scale, &smoothing);
+
+    MioPan_RendererSetSmoothingMode(smoothing);
 
     /* Before the device exists, like the HDR mode, so the swapchain is
      * created in the right present mode rather than switched into it. */
@@ -1504,6 +1532,7 @@ void MioPan_ConfigCapture(void)
     r->lighting_mode = MioPan_RendererGetLightingMode();
     r->animated_lighting = MioPan_RendererGetAnimatedLightingBackend();
     r->shadow_filter = MioPan_RendererGetShadowFilter();
+    r->smoothing_mode = MioPan_RendererGetSmoothingMode();
     r->extra_presents = MioPan_RendererGetExtraPresents();
     r->interpolate_presents = MioPan_RendererGetPresentInterpolation();
     r->interpolate_geometry = MioPan_RendererGetGeometryInterpolation();
