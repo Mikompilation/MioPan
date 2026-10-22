@@ -981,6 +981,19 @@ Uint32 g_animated_mesh_buffer_size;
  * the same upload, so a draw that can read one can read the other. */
 SDL_GPUBuffer *g_stream_index_buffer;
 Uint32 g_stream_index_buffer_size;
+/*
+ * The staging side of the three streams above, kept across frames -- see
+ * MapStreamTransfer().  Vertices and stream indices share one, as they share
+ * one upload.
+ */
+struct StreamTransfer
+{
+    SDL_GPUTransferBuffer *buffer = nullptr;
+    Uint32 size = 0;
+};
+StreamTransfer g_vertex_transfer;
+StreamTransfer g_mesh_colour_transfer;
+StreamTransfer g_animated_mesh_transfer;
 Uint32 g_depth_width;
 Uint32 g_depth_height;
 Uint32 g_pause_capture_width;
@@ -3350,6 +3363,15 @@ void ShutdownMeshCache()
         SDL_ReleaseGPUBuffer(g_device, g_animated_mesh_buffer);
         g_animated_mesh_buffer = nullptr;
         g_animated_mesh_buffer_size = 0;
+    }
+    for (StreamTransfer *stream : {&g_vertex_transfer, &g_mesh_colour_transfer,
+                                   &g_animated_mesh_transfer})
+    {
+        if (g_device != nullptr && stream->buffer != nullptr)
+        {
+            SDL_ReleaseGPUTransferBuffer(g_device, stream->buffer);
+        }
+        *stream = StreamTransfer{};
     }
     g_animated_mesh_vertices_stream.clear();
     g_vertex_light_states.clear();
@@ -7175,15 +7197,66 @@ bool EnsureStreamIndexBuffer(size_t byte_count)
  * transfer, one copy pass, and one answer, so a draw whose vertices arrived
  * cannot find its indices missing.  A repeated present that owes a vertex
  * blend re-sends the indices too; they are a few hundred KB at most. */
-bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
-                        SDL_GPUTransferBuffer **out_transfer)
+/*
+ * Map a per-frame stream's staging buffer for `bytes` of this frame's data.
+ *
+ * These streams used to create a transfer buffer for every upload and release
+ * it after the submit: a driver allocation and a release every frame for each
+ * stream, and once more for a repeat present's vertex upload.  That churn was
+ * a steady few percent of a Debug frame and the likely cause of the occasional
+ * 12-46 ms upload or submit stall.  One buffer kept per stream, mapped with
+ * cycle set, gets the same safety without it: when the GPU is still reading
+ * the last frame's copy, SDL hands back another instance of the buffer it has
+ * finished with, so after the first few frames nothing is allocated.
+ *
+ * Grows geometrically and never shrinks.  Releasing the outgrown buffer at
+ * once is safe: SDL defers it until the GPU is done with it.
+ */
+void *MapStreamTransfer(StreamTransfer &stream, size_t bytes, const char *what)
+{
+    if (bytes == 0 || bytes > std::numeric_limits<Uint32>::max())
+    {
+        return nullptr;
+    }
+    if (stream.buffer == nullptr || stream.size < bytes)
+    {
+        const size_t limit = std::numeric_limits<Uint32>::max();
+        size_t size = std::max<size_t>(bytes, (size_t)1 << 20);
+        if (stream.size != 0 && (size_t)stream.size <= limit / 2)
+        {
+            size = std::max<size_t>(size, (size_t)stream.size * 2);
+        }
+
+        SDL_GPUTransferBufferCreateInfo info{};
+        info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        info.size = (Uint32)size;
+        SDL_GPUTransferBuffer *replacement =
+            SDL_CreateGPUTransferBuffer(g_device, &info);
+        if (replacement == nullptr)
+        {
+            LogSdlError(what);
+            return nullptr;
+        }
+        if (stream.buffer != nullptr)
+        {
+            SDL_ReleaseGPUTransferBuffer(g_device, stream.buffer);
+        }
+        stream.buffer = replacement;
+        stream.size = (Uint32)size;
+    }
+
+    void *mapped = SDL_MapGPUTransferBuffer(g_device, stream.buffer, true);
+    if (mapped == nullptr)
+    {
+        LogSdlError(what);
+    }
+    return mapped;
+}
+
+bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd)
 {
     const size_t byte_count = g_vertices.size() * sizeof(SpriteVertex);
     const size_t index_bytes = g_stream_indices.size() * sizeof(Uint32);
-    if (out_transfer != nullptr)
-    {
-        *out_transfer = nullptr;
-    }
     if (byte_count == 0)
     {
         return true;
@@ -7196,24 +7269,14 @@ bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo transfer_info{};
-    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transfer_info.size = (Uint32)(byte_count + index_bytes);
-    SDL_GPUTransferBuffer *transfer =
-        SDL_CreateGPUTransferBuffer(g_device, &transfer_info);
-    if (transfer == nullptr)
-    {
-        LogSdlError("SDL_CreateGPUTransferBuffer");
-        return false;
-    }
-
-    void *mapped = SDL_MapGPUTransferBuffer(g_device, transfer, true);
+    void *mapped = MapStreamTransfer(g_vertex_transfer,
+                                     byte_count + index_bytes,
+                                     "SDL_MapGPUTransferBuffer(vertices)");
     if (mapped == nullptr)
     {
-        LogSdlError("SDL_MapGPUTransferBuffer");
-        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
         return false;
     }
+    SDL_GPUTransferBuffer *transfer = g_vertex_transfer.buffer;
     std::memcpy(mapped, g_vertices.data(), byte_count);
     if (index_bytes != 0)
     {
@@ -7246,14 +7309,6 @@ bool UploadVertexBuffer(SDL_GPUCommandBuffer *cmd,
         SDL_UploadToGPUBuffer(copy, &index_src, &index_dst, true);
     }
     SDL_EndGPUCopyPass(copy);
-    if (out_transfer != nullptr)
-    {
-        *out_transfer = transfer;
-    }
-    else
-    {
-        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
-    }
     return true;
 }
 
@@ -7491,24 +7546,13 @@ bool UploadMeshColours(SDL_GPUCommandBuffer *cmd, MeshUploadResult &result)
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo transfer_info{};
-    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transfer_info.size = (Uint32)colour_bytes;
-    SDL_GPUTransferBuffer *transfer =
-        SDL_CreateGPUTransferBuffer(g_device, &transfer_info);
-    if (transfer == nullptr)
-    {
-        LogSdlError("SDL_CreateGPUTransferBuffer(mesh colours)");
-        return false;
-    }
-
-    void *mapped = SDL_MapGPUTransferBuffer(g_device, transfer, true);
+    void *mapped = MapStreamTransfer(g_mesh_colour_transfer, colour_bytes,
+                                     "SDL_MapGPUTransferBuffer(mesh colours)");
     if (mapped == nullptr)
     {
-        LogSdlError("SDL_MapGPUTransferBuffer(mesh colours)");
-        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
         return false;
     }
+    SDL_GPUTransferBuffer *transfer = g_mesh_colour_transfer.buffer;
     std::memcpy(mapped, g_mesh_colours.data(), colour_bytes);
     SDL_UnmapGPUTransferBuffer(g_device, transfer);
 
@@ -7516,7 +7560,6 @@ bool UploadMeshColours(SDL_GPUCommandBuffer *cmd, MeshUploadResult &result)
     if (copy == nullptr)
     {
         LogSdlError("SDL_BeginGPUCopyPass(mesh colours)");
-        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
         return false;
     }
     SDL_GPUTransferBufferLocation src{};
@@ -7530,7 +7573,6 @@ bool UploadMeshColours(SDL_GPUCommandBuffer *cmd, MeshUploadResult &result)
     SDL_EndGPUCopyPass(copy);
 
     result.colour_bytes = colour_bytes;
-    result.transfers.push_back(transfer);
     return true;
 }
 
@@ -7549,24 +7591,14 @@ bool UploadAnimatedMeshVertices(SDL_GPUCommandBuffer *cmd,
         return false;
     }
 
-    SDL_GPUTransferBufferCreateInfo transfer_info{};
-    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    transfer_info.size = (Uint32)byte_count;
-    SDL_GPUTransferBuffer *transfer =
-        SDL_CreateGPUTransferBuffer(g_device, &transfer_info);
-    if (transfer == nullptr)
-    {
-        LogSdlError("SDL_CreateGPUTransferBuffer(animated meshes)");
-        return false;
-    }
-
-    void *mapped = SDL_MapGPUTransferBuffer(g_device, transfer, true);
+    void *mapped =
+        MapStreamTransfer(g_animated_mesh_transfer, byte_count,
+                          "SDL_MapGPUTransferBuffer(animated meshes)");
     if (mapped == nullptr)
     {
-        LogSdlError("SDL_MapGPUTransferBuffer(animated meshes)");
-        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
         return false;
     }
+    SDL_GPUTransferBuffer *transfer = g_animated_mesh_transfer.buffer;
     std::memcpy(mapped, g_animated_mesh_vertices_stream.data(), byte_count);
     SDL_UnmapGPUTransferBuffer(g_device, transfer);
 
@@ -7574,7 +7606,6 @@ bool UploadAnimatedMeshVertices(SDL_GPUCommandBuffer *cmd,
     if (copy == nullptr)
     {
         LogSdlError("SDL_BeginGPUCopyPass(animated meshes)");
-        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
         return false;
     }
     SDL_GPUTransferBufferLocation src{};
@@ -7588,7 +7619,6 @@ bool UploadAnimatedMeshVertices(SDL_GPUCommandBuffer *cmd,
     SDL_EndGPUCopyPass(copy);
 
     result.animated_bytes = byte_count;
-    result.transfers.push_back(transfer);
     return true;
 }
 
@@ -10138,7 +10168,6 @@ void RecordCopyOnlyUploads(SDL_GPUCommandBuffer *cmd, const char *submit_label)
 void UploadFrameResources(SDL_GPUCommandBuffer *cmd,
                           TextureUploadResult *texture_upload,
                           MeshUploadResult *mesh_upload,
-                          SDL_GPUTransferBuffer **vertex_transfer,
                           float geometry_t)
 {
     const uint64_t upload_start =
@@ -10215,7 +10244,7 @@ void UploadFrameResources(SDL_GPUCommandBuffer *cmd,
     /* Last, and after the conversion: the blend writes positions into
      * g_vertices and the upload has to carry them. */
     ApplyGeometryVertexBlend(geometry_t);
-    const bool vertices_uploaded = UploadVertexBuffer(cmd, vertex_transfer);
+    const bool vertices_uploaded = UploadVertexBuffer(cmd);
     MioPan_ProfilerEndPhase(MIOPAN_PROFILE_RENDERER_UPLOAD, upload_start);
 
     g_frame_upload.valid = true;
@@ -10787,11 +10816,9 @@ bool PresentFrame(bool repeat, float geometry_t = -1.0f)
      * below a no-op without a second copy of the tail. */
     TextureUploadResult texture_upload;
     MeshUploadResult mesh_upload;
-    SDL_GPUTransferBuffer *vertex_transfer = nullptr;
     if (!repeat)
     {
-        UploadFrameResources(cmd, &texture_upload, &mesh_upload,
-                             &vertex_transfer, geometry_t);
+        UploadFrameResources(cmd, &texture_upload, &mesh_upload, geometry_t);
     }
     else if (geometry_t >= 0.0f && g_geo_vertices_valid)
     {
@@ -10801,7 +10828,7 @@ bool PresentFrame(bool repeat, float geometry_t = -1.0f)
         const uint64_t upload_start =
             MioPan_ProfilerBeginPhase(MIOPAN_PROFILE_RENDERER_UPLOAD);
         ApplyGeometryVertexBlend(geometry_t);
-        const bool uploaded = UploadVertexBuffer(cmd, &vertex_transfer);
+        const bool uploaded = UploadVertexBuffer(cmd);
         MioPan_ProfilerEndPhase(MIOPAN_PROFILE_RENDERER_UPLOAD, upload_start);
         if (!uploaded)
         {
@@ -10809,10 +10836,6 @@ bool PresentFrame(bool repeat, float geometry_t = -1.0f)
              * pose the previous present left in the buffer.  Drop the extra
              * instead -- one fewer in-between costs nothing. */
             SDL_CancelGPUCommandBuffer(cmd);
-            if (vertex_transfer != nullptr)
-            {
-                SDL_ReleaseGPUTransferBuffer(g_device, vertex_transfer);
-            }
             return false;
         }
     }
@@ -10858,10 +10881,6 @@ bool PresentFrame(bool repeat, float geometry_t = -1.0f)
         {
             g_screen_mirror_valid = true;
         }
-    }
-    if (vertex_transfer != nullptr)
-    {
-        SDL_ReleaseGPUTransferBuffer(g_device, vertex_transfer);
     }
     for (SDL_GPUTransferBuffer *transfer : texture_upload.transfers)
     {

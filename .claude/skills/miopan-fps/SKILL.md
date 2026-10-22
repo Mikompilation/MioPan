@@ -30,6 +30,7 @@ stated otherwise.
 | 2. Split `MioPan_RendererEndFrame` into upload / re-callable present | **done** |
 | 3. Drive reprojected presents from the frame loop | **done**, verified in-game |
 | 4. Interpolated geometry | **built**, maths verified, **not yet judged in-game** |
+| Smoothing admission check (`SmoothingFits()`) | **done** — a tick that cannot spare the in-between's field presents once; see Part 10 |
 
 The build is clean and the whole chain runs: menu bar → **Settings → Graphics →
 Frame smoothing** presents each logical frame up to four times, on an interpolated
@@ -834,7 +835,7 @@ The profiler split falls exactly on the boundary that matters, because
 | Option | Requirement |
 |---|---|
 | 60 Hz sim | `workload_ms ≤ 16.7` |
-| Sim 30 / present 60 | `game_cpu_ms + 2 × renderer_ms ≤ 33.3` |
+| Sim 30 / present 60 | `game_cpu_ms + repeat present ≤ 16.7` — one field, not two (Part 10, first hazard) |
 | Either | `vblank_deadline_misses == 0` |
 
 Overlay: menu bar → **Debug → Summary**, or **Summary → FPS only** for
@@ -849,14 +850,109 @@ averages, `MIOPAN_STUTTER_MS=15` appends every frame over threshold to
 Measure in a room with ghosts and furniture, and separately in finder mode —
 they stress different halves of the split.
 
+### Debug builds: the cost is per element, not per draw
+
+Measured 2026-10-21 on the MSVC x64-Debug build (`/Od /RTC1`,
+`_ITERATOR_DEBUG_LEVEL=2`) with one extra present and `spotlights =
+fragment-all`, on chapter 0's rope bridge — room 9, event 1819, the shot across
+the bridge to the village, the one that missed 30 fps. About 1,077 draws, and
+`rrecord + rsubmit` was ~2 ms of it. **Draw count was never the problem**:
+restitching model parts into fewer draws (MikuPan's sgdstitch) could have
+bought those 2 ms at most.
+
+A sampling profile put the time in per-vertex host code that `/Od` turns into
+calls:
+
+- **`push_back` per element.** At iterator-debug level 2 each one runs
+  `_Orphan_range`, which takes the global `_Lockit` — ~5% of the frame was
+  lock traffic alone.
+- **`std::isfinite`, `std::min`, `std::max`, `Clamp()` per colour component**,
+  each a real call.
+- **Shadow receivers were lit for nothing.** `gra3dShadow.c` walks every
+  receiver block a second time, and the preset path ran the full colour pass on
+  it again — 47% of all preset strips — for `shadow_receiver.vert`, which reads
+  only the position and `model`.
+
+The fixes: the colour path is decided once per unit (`BeginPresetColorPass()`)
+and each strip is written in place into storage sized once
+(`WritePresetStripColors()`; the same for `MioPan_RendererDrawResidentMesh()`'s
+colours and `MioPan_RendererAppendIndexedMesh()`'s vertices and indices); the
+clamps are spelled with operators (`ClampMeshColour()`, `Ps2ColorFloat()`:
+`v - v == 0` is `isfinite`, checked bit-identical over all 2³² floats at `/Od`
+and `/O2`); and a receiver skips its colours and its fragment light state
+(`MioPan_RendererShadowReceiverActive()`). An in-game check ran the old colour
+code beside the new for every strip, in all three lighting modes: no mismatch
+in 4.2 M (fragment-all) and 3.6 M (vertex, fragment) strips.
+
+Bridge frame work went from **29.3 / 34.1 ms** (median / p99) to
+**15.3 / 19.3 ms** — and the game was *still* not at 30, because of frame
+smoothing's budget (Part 10, the first hazard): with one extra present the
+game's work has one field, not two. `SmoothingFits()` fixed that by presenting
+a tick once when its successor's work would not fit.
+
+Then the per-frame transfer buffers: the vertex, colour and animated streams
+each created an upload transfer buffer every frame and released it after the
+submit — steady `NtGdiDdDDICreateAllocation` / `DestroyAllocation2` traffic and,
+every few hundred ticks, a 12–46 ms `rupload` or `rsubmit` stall.
+`MapStreamTransfer()` keeps one per stream and maps it with cycle set; the
+stalls went to zero and `rupload` from ~1 ms to 0.1 ms.
+
+Game FPS over 900 in-room ticks, Debug, one extra present, fragment-all:
+
+| Room | Before | After | Missed fields after |
+|---|---|---|---|
+| Forest start (65) | 20.00 | 30.00 | 0 |
+| Torii (0, ev1550) | 23.70 | 30.00 | 0 |
+| Rope bridge (9, ev1819) | 19.99 | 29.97 | 2 (one 39 ms tick, unattributed) |
+
+Smoothing was skipped on ~99% of the forest and bridge ticks and ~12% of the
+torii's: in Debug those rooms run at their own 30 Hz. Getting the in-betweens
+back there means getting the game's work plus a repeat present under ~13.7 ms
+(a field less the 3 ms margin) — about 3 ms more off the bridge.
+
+**Measuring missed ticks: do not count `paced` ≥ 45 ms.** `paced` runs from one
+EndFrame's end to the next, and turning smoothing on moves the tick's last
+present a field later, so the first smoothed tick reads 50 ms (and the first
+unsmoothed one ~17 ms) with no field lost. Sum `paced` over the window against
+two fields a tick instead.
+
+So: **on a per-vertex path, size the destination once and write through a
+pointer, and make no library call per component.** It costs nothing in an
+optimised build and is most of a Debug frame. And do not read a Debug profile's
+ranking as Release's.
+
+What was left on the bridge afterwards: the preset walk and its colours ~14% of
+wall time, `DrawGirl` ~7%, the shadow caster projection (`AssignShadowPrim`)
+~6%, and the sky's TIM2 being re-uploaded through the GS every frame
+(`MapSkySetTim2Vram` → `UploadPSMT8`) ~4%.
+
+The ranking came from a temporary in-process sampler, not the stutter log
+(which only splits phases): a thread that suspends the game thread at ~1 kHz,
+unwinds it with `GetThreadContext` + `RtlVirtualUnwind` (nothing allocates
+while it is suspended), and symbolises with DbgHelp at the end. ~150 lines;
+rebuild it rather than keep it.
+
 ---
 
 ## Part 10 — Hazards
 
+- **An in-between's field comes out of the game's next tick.** `vfunc()` runs
+  *before* `MioPan_RendererEndFrame()` (`SendDMAMain()`), so a smoothed tick
+  presents its in-between and waits out a field right after the game's wait,
+  and the next tick's whole work — end of the presents to `vfunc()` — has the
+  one field left: `game_cpu + repeat ≲ 16.7 ms`, not the `game_cpu + 2 ×
+  renderer ≤ 33.3` this skill used to give. Past it, `vfunc()` finds both fields banked
+  and still waits its unconditional one: a 50 ms tick, a 20 Hz game. Before
+  `SmoothingFits()` existed, the Debug rope bridge did that on every tick.
+  `SmoothingFits()` admits an in-between only when the longest span of the last
+  16 ticks plus the last repeat present plus 3 ms fits a field; a skipped tick
+  presents once and counts in the summary line's `late`. Do not loosen it
+  without measuring: at 8 ticks and 1.5 ms, ~3% of admitted Debug bridge ticks
+  overran.
 - **The `Pacing target %d VBlanks (~%.1f ms)` line in the profiler summary
   hardcodes `1000.0/60.0`.** Now that PAL really is 50 Hz, that ms figure is 20%
-  wrong in PAL mode. Display-only; left alone deliberately to avoid exposing the
-  field rate out of `libgraph.cpp`.
+  wrong in PAL mode. Display-only. `MioPan_PacingFieldPeriodNs()` now exposes
+  the real field period, so the fix is a one-liner when someone wants it.
 - **`g_present_interval`'s skip branch has never run.** Nothing sets the interval
   above 1. If increment 3 starts using it, expect first-run bugs in the bounded
   copy-only upload path in `EndFrame`.
