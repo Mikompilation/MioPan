@@ -354,6 +354,11 @@ struct DrawCommand
      * screen-space primitive can still want REPEAT -- the sky dome in
      * MapSky.c walks its UVs across several copies of a 256x256 tile. */
     bool repeat_uv;
+    /* GS fogging from a per-vertex F rather than from the depth ramp: a 2D
+     * primitive with FGE set that carries its own F in each XYZF2, which is
+     * only the sky dome.  The corners' F rides in uv.z, interpolated across
+     * the primitive the way the GS interpolated it. */
+    bool vertex_fog = false;
     bool min_linear;
     bool mag_linear;
     bool preserve_original_aspect;
@@ -9250,6 +9255,7 @@ bool DrawCommandsAreMergeCompatible(const DrawCommand &previous,
         previous.depth_test != next.depth_test ||
         previous.depth_compare != next.depth_compare ||
         previous.repeat_uv != next.repeat_uv ||
+        previous.vertex_fog != next.vertex_fog ||
         previous.min_linear != next.min_linear ||
         previous.mag_linear != next.mag_linear ||
         previous.preserve_original_aspect !=
@@ -9400,7 +9406,8 @@ void QueueQuad(SDL_GPUTexture *texture, int texture_width, int texture_height,
                DrawSource source = DRAW_SOURCE_GENERIC,
                bool depth_test = false,
                GsDepthCompare depth_compare = GS_DEPTH_GEQUAL,
-               bool clip_z_reversed = false)
+               bool clip_z_reversed = false,
+               bool vertex_fog = false)
 {
     static const int indices[6] = {0, 1, 2, 2, 1, 3};
 
@@ -9420,6 +9427,7 @@ void QueueQuad(SDL_GPUTexture *texture, int texture_width, int texture_height,
     command.depth_test = depth_test;
     command.depth_compare = depth_compare;
     command.repeat_uv = repeat_uv;
+    command.vertex_fog = vertex_fog;
     command.min_linear = min_linear;
     command.mag_linear = mag_linear;
     command.preserve_original_aspect = preserve_original_aspect;
@@ -9881,6 +9889,14 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         if (!draw.transform_mesh)
         {
             g_uniforms.fogColor[3] = 0.0f;
+        }
+        /* The exception: a 2D primitive that brought its own F.  FGE was set
+         * on it whatever gra3dIsFogEnable() says, and FOGCOL is the register,
+         * so only the enable changes -- to the negative value sprite.frag
+         * takes as "F is in uv.z". */
+        if (draw.vertex_fog)
+        {
+            g_uniforms.fogColor[3] = -1.0f;
         }
 
         g_uniforms.textureSize[0] = (float)draw.texture_width;
@@ -14733,20 +14749,28 @@ void MioPan_RendererDrawTexturedQuadDepth(const sceGsTex0 *tex0,
                          kClampBothAxes, GS_DEPTH_GEQUAL);
 }
 
-/* MapSky.c's own quad path: no TEX1, so always the nearest-filter sampler.
+/* MapSky.c's own quad path.
  *
- * Clamped, not wrapped, even though the GS CLAMP register the sky draws under
- * says WMS/WMT = REPEAT.  Both sky pages were read out of the pak to settle
- * it: the dome page is a single soft decal whose alpha is 0 along all four
- * edges (centre ~43), so tiling it puts a hard transparent seam at every
- * boundary -- which is exactly the lattice that showed up on screen.  The
- * horizon strip does wrap left-to-right (both edge columns sit at alpha 119),
- * but each sprite covers exactly one page, UV 0..0x1000, so the panorama
- * repeats by laying sprites side by side and never leans on the sampler.
- * Clamping is therefore right for the dome and a no-op for the strip. */
+ * Wrapped on both axes, which is what the GS does with the CLAMP register the
+ * sky draws under: the strip's own draw env writes 0x3fcff0, and the dome sets
+ * none and inherits 0 (draw_env.c's shadow reads 0 there every frame) --
+ * WMS/WMT = REPEAT either way.  The dome needs it: its U and V each walk 3.5
+ * copies of the page, and U scrolls by one whole page per `frame`, so the
+ * cloud drift loops.  The strip's sprites each cover exactly one page, UV
+ * 0..0x1000, and tile by being laid side by side.
+ *
+ * What keeps the dome's repeats from showing towards the horizon is the GS
+ * fog its PRIM asks for, not the addressing.  Each cell corner carries
+ * F = 250 - w/64 (MapSkyBlockPoly()), so everything past ~16000 units --
+ * including the far edge of the plane, where V is a third of the way into
+ * its fourth copy -- is pure FOGCOL, MapFog's colour, which is also what
+ * MapSkySetBg() fills the band underneath with.  Without it the dome ended
+ * in a hard line part way through a repeat of the page.  `fog` is NULL for
+ * the strip, whose PRIM has FGE off. */
 void MioPan_RendererDrawSkyQuad(const sceGsTex0 *tex0,
                                 const float *xy,
                                 const float *uv,
+                                const unsigned char *fog,
                                 unsigned char r,
                                 unsigned char g,
                                 unsigned char b,
@@ -14766,45 +14790,20 @@ void MioPan_RendererDrawSkyQuad(const sceGsTex0 *tex0,
         return;
     }
 
-    /* TEMP PROBE -- remove.  Which decoded page each sky layer actually gets.
-     * The dome and the horizon strip upload different images to the same TBP
-     * with an identical TEX0, so a stale cache entry would silently hand one
-     * layer the other's page. */
-    {
-        static int dbg_dome = 0;
-        static int dbg_strip = 0;
-        float ylo = xy[1], yhi = xy[1];
-        float xlo = xy[0], xhi = xy[0];
-        for (int n = 1; n < 4; n++)
-        {
-            ylo = std::min(ylo, xy[n * 2 + 1]);
-            yhi = std::max(yhi, xy[n * 2 + 1]);
-            xlo = std::min(xlo, xy[n * 2 + 0]);
-            xhi = std::max(xhi, xy[n * 2 + 0]);
-        }
-        const bool is_strip = (yhi - ylo) > 200.0f;
-        /* Dome: only cells that actually land in the frame.  Strip: all of
-         * them, so the tiling across x is visible in the log. */
-        const bool want = is_strip ? (dbg_strip < 6)
-                                   : (dbg_dome < 4 && yhi > 0.0f && ylo < 448.0f);
-        if (want)
-        {
-            if (is_strip) dbg_strip++; else dbg_dome++;
-            SDL_Log("SKYQUAD %s x=%.0f..%.0f y=%.0f..%.0f "
-                    "uv=(%.1f,%.1f)..(%.1f,%.1f) tex=%dx%d entry=%p tex0=%016llx",
-                    is_strip ? "STRIP" : "dome ", xlo, xhi, ylo, yhi,
-                    uv[0], uv[1], uv[6], uv[7],
-                    entry->width, entry->height, (void *)entry,
-                    (unsigned long long)ReadTex0Value(tex0));
-        }
-    }
-
     BuildQuadVertices(vertices, xy, uv, (float)entry->width,
                       (float)entry->height, Ps2ColorToFloat(r),
                       Ps2ColorToFloat(g), Ps2ColorToFloat(b),
                       Ps2AlphaToFloat(a));
+    if (fog != nullptr)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            vertices[i].uv[2] = (float)fog[i] / 255.0f;
+        }
+    }
     QueueQuad(entry->texture, entry->width, entry->height, vertices, true,
-              true, true, true, DRAW_SOURCE_SKY);
+              true, true, true, DRAW_SOURCE_SKY, false, GS_DEPTH_GEQUAL, false,
+              fog != nullptr);
 }
 
 /*

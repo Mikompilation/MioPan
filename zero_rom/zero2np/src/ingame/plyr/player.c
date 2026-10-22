@@ -48,10 +48,6 @@
 // currently scores as sub-function-only: no ghost loses HP yet.  Each stub
 // says so where it stands.
 //
-// STILL STUBBED:
-//
-//   PlyrAttractSisMain 0x00236530  waits on sister.c's neck look-at
-//
 // Reconstructed from the Feb 6 2004 prototype (SLES_523.84).
 
 #include "player.h"
@@ -99,11 +95,13 @@
 #include "../../ingame/ingame.h"                 /* SendIngameGameOverPre     */
 #include "../../ingame/ingame_effect.h"          /* IgEffectEffectEndParticleReq */
 #include "sister.h"                              /* sis_wrk / ReqSisDead      */
+#include "sis_mdl.h"                             /* SisNeckRegisterTarget     */
 #include "../../system/pad/pad.h"                /* paddat / pushdat / pad[]  */
 #include "unit_ctl.h"                            /* RotLimitChk / GetTrgtRotY */
 #include "../../graphics/graph3d/gra3d.h"        /* gra3dGetCamera            */
 #include "../../system/os/system.h"              /* GetPALMode                */
 
+#include <float.h>
 #include <libvu0.h>
 #include <math.h>
 #include <stdio.h>
@@ -329,9 +327,9 @@ void ReqPlyrDead(int mode)                                              /* 621 *
 }
 
 /* Blink control.  `no` counts frames to the next blink.  The ROM's static has
- * a non-constant initialiser, so GCC 2.96 pairs it with a guard flag at
- * sbss 3f4ee8 -- these files compile as C++, so the same construct works
- * here and the guard is again the compiler's. */
+ * a non-constant initialiser, so GCC 2.96 pairs it with a guard flag,
+ * _$tmp_10.1143 at 3f3978 -- these files compile as C++, so the same
+ * construct works here and the guard is again the compiler's. */
 void PlyrMepachiCtrl(void)                                              /* 800 */
 {
     static int no = GetRandValI(200);           /* sbss 3f4ee4 */       /* 801 */
@@ -341,6 +339,62 @@ void PlyrMepachiCtrl(void)                                              /* 800 *
     {
         ReqPlayerMim(5, 0);                                             /* 805 */
         no = GetRandValI(200);                                          /* 806 */
+    }
+}
+
+/* Mayu keeps an eye on her sister.  Every frame Mio's head is offered to her
+ * neck control at one of three priorities by distance: past 5000 units she
+ * looks back for Mio, under 750 she watches her, and in between only now and
+ * then -- `rand_sec` counts a random 120-odd frames of looking down through 0,
+ * then 900 of not looking before it is re-rolled.  While she is turning
+ * (IsSisterTurn()) the head and eyes move faster.
+ *
+ * Ghosts and an event's gaze point outrank all three; items and placed
+ * objects outrank only the middle one.  So whenever an event poses the two
+ * girls side by side with nothing else to look at, this is what turns Mayu
+ * towards her sister. */
+static void PlyrAttractSisMain(void)                                    /* 813 */
+{
+    float         dist;
+    LOOK_AT_PARAM param;
+
+    dist = GetDist_Sister2Player();                                     /* 814 */
+
+    static int rand_sec = GetRandValI(4) * 30 + 120;  /* sbss 3f4ee8 */ /* 815 */
+
+    if (IsSisterTurn() != 0)                                            /* 819 */
+    {
+        /* 0.8, 0.2 and 0.1, each one ulp low as EE GCC truncates them. */
+        param.eye_spd   = 0.79999995f;                                  /* 820 */
+        param.head_spd  = 0.19999999f;                                  /* 821 */
+        param.chest_spd = 0.099999994f;                                 /* 822 */
+    }
+    else
+    {
+        param.eye_spd   = 0.12f;                                        /* 824 */
+        param.head_spd  = 0.06f;                                        /* 825 */
+        param.chest_spd = 0.03f;                                        /* 826 */
+    }
+
+    sceVu0CopyVector(param.pos, plyr_wrk.cmn_wrk.headpos);              /* 828 */
+
+    /* The ROM's limit is 0x7fffffff, the EE FPU's largest float -- a NaN on
+     * the host, so FLT_MAX, as SisNeckFrameInit() does. */
+    if (5000.0f < dist)                                                 /* 831 */
+    {
+        SisNeckRegisterTarget(&param, LTP_MAYU_MIO_FAR, FLT_MAX);       /* 832 */
+    }
+    else if (dist < 750.0)          /* a double compare in the ROM */   /* 835 */
+    {
+        SisNeckRegisterTarget(&param, LTP_MAYU_MIO_NEAR, FLT_MAX);      /* 836 */
+    }
+    else if (rand_sec-- >= 0)                                           /* 839 */
+    {
+        SisNeckRegisterTarget(&param, LTP_MAYU_MIO_MIDDLE, FLT_MAX);    /* 840 */
+    }
+    else if (rand_sec < -900)                                           /* 842 */
+    {
+        rand_sec = GetRandValI(4) * 30 + 120;                           /* 843 */
     }
 }
 
@@ -2440,16 +2494,6 @@ int PlyrDead(void)                                                      /* 630 *
     plyr_wrk.modedead++;
     return ret;
 }
-
-
-/* ==========================================================================
- *  AWAITING RECONSTRUCTION.  Real functions in player.o, stubbed here so the
- *  reconstructed spine links and runs.  Addresses are the ROM's.
- * ======================================================================== */
-
-/* static in the ROM.  Drives the sister's head towards Mio; waits on
- * sister.c's SisNeckRegisterTarget / GetDist_Sister2Player / IsSisterTurn. */
-static void PlyrAttractSisMain(void) { }                /* 0x00236530 */
 
 
 /* ==========================================================================

@@ -48,7 +48,19 @@ float4 main(PSInput input) : SV_Target0
     // GS order is texture function -> fogging -> alpha test, but fogging never
     // touches alpha, so sitting behind the test here changes nothing except
     // that killed fragments do not pay for it.
-    col.rgb = MikuPanApplyGsFog(col.rgb, input.fogW.x);
+    //
+    // A negative enable is a 2D primitive that supplied its own F per vertex
+    // (MapSky's dome), carried in uv.z and interpolated across the primitive
+    // as the GS did.  The blend is the same one MikuPanApplyGsFog() ends in.
+    if (uFogColor.w < 0.0)
+    {
+        col.rgb = lerp(uFogColor.rgb, col.rgb,
+                       MikuPanQuantizeGsFog(input.vDstUV.x));
+    }
+    else
+    {
+        col.rgb = MikuPanApplyGsFog(col.rgb, input.fogW.x);
+    }
 
     if (uParams1.y > 0.001)
     {

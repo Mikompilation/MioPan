@@ -25,11 +25,11 @@
 //   SCISSOR  clip box            -> SDL_SetGPUScissor
 //
 // TEX1 and CLAMP are not forwarded.  The renderer already picks its filtering
-// and address mode per draw from values the caller hands it, and those paths
-// carry decisions the register alone does not -- MapSky's dome clamps even
-// though CLAMP says REPEAT, because tiling its soft-edged page puts a seam at
-// every boundary.  TEXA is a texture-decode input (alpha expansion for the
-// 16- and 24-bit texel formats), so it belongs to the upload path, not here.
+// and address mode per draw from values the caller hands it -- a caller that
+// needs the register's own answer passes it in, as the sprite path does to
+// MioPan_RendererDrawTexturedQuadClamp().  TEXA is a texture-decode input
+// (alpha expansion for the 16- and 24-bit texel formats), so it belongs to the
+// upload path, not here.
 //
 // Reconstructed from the Feb 6 2004 prototype (SLES_523.84).
 

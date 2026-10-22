@@ -553,20 +553,21 @@ int SisNeckRegisterTarget(LOOK_AT_PARAM *param, LOOK_TARGET_PRIORITY_MAYU priori
         return 0;
     }
 
-    if (priority >= sis_neck_now_priority)  /* 593 */
+    /* Unsigned, as the ROM's sltu has it: that is what puts LTP_MAYU_LEAST
+     * (-1) after every real priority.  A signed test ranks -1 first, so no
+     * target could ever displace it and Mayu never looked at anything -- not
+     * an event's gaze point, a ghost, an item or the stairs.  Same priority
+     * as the target already held: only take over when this one is closer. */
+    if ((u_int)priority < (u_int)sis_neck_now_priority ||
+        (priority == sis_neck_now_priority && dist < sis_neck_now_dist)) /* 593 */
     {
-        /* Same priority as the target already held: only take over when we
-         * are the closer of the two. */
-        if (priority != sis_neck_now_priority || dist >= sis_neck_now_dist)
-        {
-            return 0;
-        }
+        sis_neck_now_priority = priority;                               /* 595 */
+        sis_neck_now_param    = *param;                                 /* 596 */
+        sis_neck_now_dist     = dist;                                   /* 597 */
+        return 1;                                                       /* 599 */
     }
 
-    sis_neck_now_priority = priority;                                   /* 595 */
-    sis_neck_now_param    = *param;                                     /* 596 */
-    sis_neck_now_dist     = dist;                                       /* 597 */
-    return 1;                                                           /* 599 */
+    return 0;                                                           /* 604 */
 }
 
 void SetSisNeckFlg(int flg)

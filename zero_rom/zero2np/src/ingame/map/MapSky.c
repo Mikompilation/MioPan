@@ -8,7 +8,8 @@
 //   2. MapSkyDrawTen()  - the "ten" (heaven) layer: a 23x23 grid of quads
 //                         transformed by MapSkyBlockPoly() through a
 //                         private perspective matrix, scrolling in U over
-//                         time so the cloud page drifts.
+//                         time so the cloud page drifts, and GS-fogged by
+//                         distance so it thins out towards the horizon.
 //   3. MapSkyDraw()     - the horizon strip, a row of sprites tiled across
 //                         the screen and scrolled by the camera's yaw delta.
 //
@@ -290,6 +291,18 @@ static int MapSkyCheckFace(const int *p0, const int *p1, const int *p2)
 }
 
 /* --------------------------------------------------------------------------
+ *  MapSkyGetFogF -- PC bridge, not in the ROM.
+ *
+ *  The fog value the GS takes out of one PACKED XYZF2: bits 4..11 of its
+ *  fourth word.  MapSkyBlockPoly() keeps that word in 0..4000, so this is
+ *  0..250 there.
+ * ------------------------------------------------------------------------ */
+static unsigned char MapSkyGetFogF(const int *ixyzf)
+{
+    return (unsigned char)((ixyzf[3] >> 4) & 0xff);
+}
+
+/* --------------------------------------------------------------------------
  *  MapSkySetSkyDrawEnv (525..533)
  *
  *  The horizon strip's draw env: ALPHA 0x44 (Cs*As + Cd*(1-As)), TEX1 0x161,
@@ -554,8 +567,9 @@ static Q_WORDDATA *MapSkySprite(Q_WORDDATA *pbuf, int x1, int y1, int x2, int y2
     render_uv[7] = render_uv[5];
 
     MioPan_RendererDrawSkyQuad((const sceGsTex0 *)&MapSkyTex0, render_xy,
-                               render_uv, (unsigned char)r, (unsigned char)g,
-                               (unsigned char)b, (unsigned char)a);
+                               render_uv, NULL, (unsigned char)r,
+                               (unsigned char)g, (unsigned char)b,
+                               (unsigned char)a);
 
     pbuf = MapSkySetQWord(pbuf,
                           SCE_GIF_SET_TAG(1, 1, 1,
@@ -832,6 +846,7 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
     int   iAddV;
     float render_xy[8];
     float render_uv[8];
+    unsigned char render_fog[4];
     uint64_t points_transformed = 0;
     uint64_t cells_tested = 0;
     uint64_t visible_cells = 0;
@@ -872,8 +887,8 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
             {
                 iout[iWj][2] = 0;                                       /* 776 */
                 /* XYZF2's fourth word carries F in bits 4..11: nearer
-                 * points fog less.  The host renderer has no GS fog, so
-                 * this only reaches the packet. */
+                 * points fog less.  4000 reads back as F = 250, and a point
+                 * 16000 units out reads 0, pure fog colour. */
                 iout[iWj][3] = 4000 - (iout[iWj][3] >> 6);              /* 777 */
 
                 if (iout[iWj][3] < 0)                                   /* 778 */
@@ -932,6 +947,7 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
                 render_uv[1] = (float)viUV[1] / 16.0f;
                 render_xy[0] = (float)(iout[id[0]][0] / 16 - MAPSKY_OFS_X);
                 render_xy[1] = (float)(iout[id[0]][1] / 16 - MAPSKY_OFS_Y);
+                render_fog[0] = MapSkyGetFogF(iout[id[0]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[0]][0], iout[id[0]][1],
                                      iout[id[0]][2], iout[id[0]][3]);
@@ -942,6 +958,7 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
                 render_uv[3] = render_uv[1];
                 render_xy[2] = (float)(iout[id[1]][0] / 16 - MAPSKY_OFS_X);
                 render_xy[3] = (float)(iout[id[1]][1] / 16 - MAPSKY_OFS_Y);
+                render_fog[1] = MapSkyGetFogF(iout[id[1]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[1]][0], iout[id[1]][1],
                                      iout[id[1]][2], iout[id[1]][3]);
@@ -952,6 +969,7 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
                 render_uv[7] = (float)viUV[1] / 16.0f;
                 render_xy[6] = (float)(iout[id[2]][0] / 16 - MAPSKY_OFS_X);
                 render_xy[7] = (float)(iout[id[2]][1] / 16 - MAPSKY_OFS_Y);
+                render_fog[3] = MapSkyGetFogF(iout[id[2]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[2]][0], iout[id[2]][1],
                                      iout[id[2]][2], iout[id[2]][3]);
@@ -962,6 +980,7 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
                 render_uv[5] = render_uv[7];
                 render_xy[4] = (float)(iout[id[3]][0] / 16 - MAPSKY_OFS_X);
                 render_xy[5] = (float)(iout[id[3]][1] / 16 - MAPSKY_OFS_Y);
+                render_fog[2] = MapSkyGetFogF(iout[id[3]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[3]][0], iout[id[3]][1],
                                      iout[id[3]][2], iout[id[3]][3]);
@@ -970,17 +989,18 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
 
                 /* PC bridge.  The fan is TL, TR, BR, BL; the host quad
                  * wants TL, TR, BL, BR, which is why the third corner was
-                 * written into slots 6/7 above and the fourth into 4/5.
+                 * written into slots 6/7 above and the fourth into 4/5 (and
+                 * its F into render_fog[3], the fourth's into [2]).
                  *
-                 * Clamped, not wrapped, even though the ROM's CLAMP register
-                 * says REPEAT.  The dome page is a single soft decal whose
-                 * alpha is 0 along all four edges, so it cannot tile without
-                 * a hard seam at every boundary; the U sweep of scale_min*255
-                 * texels only exceeds one page well past the visible band,
-                 * and clamping to a transparent border is what makes the
-                 * cloud fade out instead of repeating. */
+                 * Wrapped, as the CLAMP register says, and fogged, as PRIM's
+                 * FGE says.  V walks 3.5 copies of the page front to back,
+                 * so the plane's far edge lands part way into the fourth
+                 * copy; what hides that edge, and the copies before it, is
+                 * the fog, which has every corner past ~16000 units at pure
+                 * FOGCOL.  Drawn without it, the dome ended in a hard line
+                 * just above the horizon strip. */
                 MioPan_RendererDrawSkyQuad((const sceGsTex0 *)&MapSkyTex0,
-                                           render_xy, render_uv,
+                                           render_xy, render_uv, render_fog,
                                            (unsigned char)r, (unsigned char)g,
                                            (unsigned char)b, (unsigned char)a);
             }
