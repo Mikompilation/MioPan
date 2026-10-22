@@ -32,6 +32,22 @@
 #include <utility>
 #include <vector>
 
+/* Both debug views are defined in miopan_graph3d.cpp.  They are declared out
+ * here rather than with the other debug flags below because a declaration in
+ * the anonymous namespace has internal linkage: GCC ignores the extern "C" and
+ * the link fails looking for (anonymous namespace)::g_dbg_flatcolor.
+ *
+ * Flat colour swaps the model texture for the 1x1 white texture and forces
+ * alpha to 1, so a transparent or wrongly-bound texture cannot hide
+ * geometry that is otherwise being submitted correctly.  Vertex colour is
+ * replaced per block in miopan_graph3d.cpp so each part reads distinctly. */
+extern "C" bool g_dbg_flatcolor;
+/* Disable lighting submits the realtime path's vertices flat white instead of
+ * lighting them, which is what the port did before per-vertex lighting
+ * existed.  Tells "this model is unlit" apart from "this model is not reaching
+ * the renderer". */
+extern "C" bool g_dbg_nolighting;
+
 namespace
 {
 constexpr int kLogicalWidth = 640;
@@ -734,16 +750,7 @@ bool g_dbg_skip_billboard_legacy_packets;
 bool g_dbg_disable_sky_dome;
 bool g_dbg_disable_sky_horizon;
 
-/* Flat colour swaps the model texture for the 1x1 white texture and forces
- * alpha to 1, so a transparent or wrongly-bound texture cannot hide
- * geometry that is otherwise being submitted correctly.  Vertex colour is
- * replaced per block in miopan_graph3d.cpp so each part reads distinctly. */
-extern "C" bool g_dbg_flatcolor;   /* defined in miopan_graph3d.cpp */
-/* Disable lighting submits the realtime path's vertices flat white instead of
- * lighting them, which is what the port did before per-vertex lighting
- * existed.  Tells "this model is unlit" apart from "this model is not reaching
- * the renderer". */
-extern "C" bool g_dbg_nolighting;  /* defined in miopan_graph3d.cpp */
+/* g_dbg_flatcolor and g_dbg_nolighting are declared above the namespace. */
 /*
  * Indexed by [anisotropy][repeat][linear minification][linear magnification].
  * The PS2 keeps minification and magnification filtering separate in TEX1, so
