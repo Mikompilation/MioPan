@@ -1206,6 +1206,9 @@ void MioPan_RendererShadowBeginCaster(void);
 void MioPan_RendererShadowEndCaster(void);
 void MioPan_RendererShadowBeginReceiver(void);
 void MioPan_RendererShadowEndReceiver(void);
+/* Nonzero when a mesh queued now becomes a receiver draw.  That pipeline reads
+ * only positions and the model matrix, so the caller can skip the colours. */
+int MioPan_RendererShadowReceiverActive(void);
 void MioPan_RendererShadowSetStrength(float strength);
 /* The current shadow's receiver culling, as the projection microcode does it:
  * plane = s_matIP's z row (world; the projector z is below 0 between the

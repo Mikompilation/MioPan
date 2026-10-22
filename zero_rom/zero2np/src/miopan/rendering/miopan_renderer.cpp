@@ -1532,6 +1532,25 @@ float Clamp01(float value)
     return Clamp(value, 0.0f, 1.0f);
 }
 
+/* A mesh vertex colour as the shaders take it: RGB clamped to 0..2, alpha to
+ * 0..1, and 1 for anything not finite.  That is std::isfinite and Clamp(),
+ * spelled with operators to the same results -- v - v is 0 exactly when v is
+ * finite, and the conditionals are Clamp()'s std::min then std::max -- because
+ * it runs for every vertex of every mesh each frame, and a Debug build made
+ * each of those library calls a call of its own. */
+void ClampMeshColour(const float in[4], float out[4])
+{
+    for (int c = 0; c < 4; c++)
+    {
+        const float value = in[c];
+        const float high = c < 3 ? 2.0f : 1.0f;
+        const float capped = value < high ? value : high;
+        out[c] = !(value - value == 0.0f) ? 1.0f
+               : 0.0f < capped           ? capped
+                                         : 0.0f;
+    }
+}
+
 template <typename T>
 void ReserveGeometric(std::vector<T> &values, size_t required,
                       size_t minimum_capacity)
@@ -13991,6 +14010,15 @@ void MioPan_RendererShadowEndReceiver(void)
     }
 }
 
+/* TagShadowPass()'s own test.  A draw tagged as a caster as well is a caster:
+ * the scene pass skips it and the shadow map pass replays it. */
+int MioPan_RendererShadowReceiverActive(void)
+{
+    return g_shadow_current_episode >= 0 &&
+           g_shadow_current_episode < (int)g_shadow_episodes.size() &&
+           g_shadow_caster_depth <= 0 && g_shadow_receiver_depth > 0;
+}
+
 /*
  * The projector strength: _CalcColor()'s alpha, which is the light's diffuse
  * luminance at the shadow target divided by sqrt(3) and halved.  The ROM packs
@@ -15282,21 +15310,22 @@ static SpriteVertex StreamVertexFromInput(const MioPanMeshVertexInput &input,
         EncodeMeshNormal(vertex.uv, input.normal);
     }
 
-    const float r = input.rgb != nullptr ? input.rgb[0] : 1.0f;
-    const float g = input.rgb != nullptr ? input.rgb[1] : 1.0f;
-    const float b = input.rgb != nullptr ? input.rgb[2] : 1.0f;
-    vertex.colour[0] = std::isfinite(r) ? Clamp(r, 0.0f, 2.0f) : 1.0f;
-    vertex.colour[1] = std::isfinite(g) ? Clamp(g, 0.0f, 2.0f) : 1.0f;
-    vertex.colour[2] = std::isfinite(b) ? Clamp(b, 0.0f, 2.0f) : 1.0f;
-    vertex.colour[3] = std::isfinite(input.alpha)
-        ? Clamp01(input.alpha) : 1.0f;
+    const float in[4] = {
+        input.rgb != nullptr ? input.rgb[0] : 1.0f,
+        input.rgb != nullptr ? input.rgb[1] : 1.0f,
+        input.rgb != nullptr ? input.rgb[2] : 1.0f,
+        input.alpha,
+    };
+    ClampMeshColour(in, vertex.colour);
     return vertex;
 }
 
 static bool StreamPositionIsUsable(const float *position)
 {
-    return position != nullptr && std::isfinite(position[0]) &&
-           std::isfinite(position[1]) && std::isfinite(position[2]);
+    /* std::isfinite, spelled as in ClampMeshColour(). */
+    return position != nullptr && position[0] - position[0] == 0.0f &&
+           position[1] - position[1] == 0.0f &&
+           position[2] - position[2] == 0.0f;
 }
 
 void MioPan_RendererAppendMeshTriangle(
@@ -15359,23 +15388,36 @@ void MioPan_RendererAppendIndexedMesh(unsigned int stream,
     /* Every vertex is kept, usable or not, so the caller's indices still name
      * the right ones; a triangle with an unusable corner is then dropped here,
      * which is the triangle-list stream's rule applied per corner instead of
-     * per copy. */
+     * per copy.
+     *
+     * Both streams are sized once and written in place: a push_back per
+     * element took the iterator-debugging lock in a Debug build. */
     static thread_local std::vector<unsigned char> usable;
-    usable.assign((size_t)vertex_count, 0);
-    for (int i = 0; i < vertex_count; i++)
+    if (usable.size() < (size_t)vertex_count)
+    {
+        usable.resize((size_t)vertex_count);
+    }
+    g_vertices.resize(base + (size_t)vertex_count);
+    SpriteVertex *vertex_out = g_vertices.data() + base;
+    for (int i = 0; i < vertex_count; i++, vertex_out++)
     {
         if (StreamPositionIsUsable(vertices[i].position))
         {
             usable[(size_t)i] = 1;
-            g_vertices.push_back(StreamVertexFromInput(
-                vertices[i], g_mesh_stream.command.fragment_lighting));
+            *vertex_out = StreamVertexFromInput(
+                vertices[i], g_mesh_stream.command.fragment_lighting);
         }
         else
         {
-            g_vertices.push_back(SpriteVertex{});
+            usable[(size_t)i] = 0;
+            *vertex_out = SpriteVertex{};
         }
     }
 
+    const size_t first_index = g_stream_indices.size();
+    g_stream_indices.resize(first_index + (size_t)index_count);
+    Uint32 *index_out = g_stream_indices.data() + first_index;
+    size_t written = 0;
     for (int i = 0; i < index_count; i += 3)
     {
         const unsigned int a = indices[i + 0];
@@ -15389,10 +15431,11 @@ void MioPan_RendererAppendIndexedMesh(unsigned int stream,
             g_mesh_stream.clipped_triangles++;
             continue;
         }
-        g_stream_indices.push_back((Uint32)(base + a));
-        g_stream_indices.push_back((Uint32)(base + b));
-        g_stream_indices.push_back((Uint32)(base + c));
+        index_out[written++] = (Uint32)(base + a);
+        index_out[written++] = (Uint32)(base + b);
+        index_out[written++] = (Uint32)(base + c);
     }
+    g_stream_indices.resize(first_index + written);
 }
 
 /* Indexed stream twin of ResidentDrawContinues(): `next` carries straight on
@@ -15792,16 +15835,14 @@ int MioPan_RendererDrawResidentMesh(unsigned int mesh_id,
     command.index_count = index_count;
     command.first_mesh_colour = (Uint32)g_mesh_colours.size();
 
-    /* The streamed path's own clamps (MioPan_RendererAppendMeshTriangle). */
-    for (unsigned int i = 0; i < vertex_count; i++)
+    /* The streamed path's own clamps (MioPan_RendererAppendMeshTriangle),
+     * written in place: a push_back per vertex took the iterator-debugging
+     * lock in a Debug build. */
+    g_mesh_colours.resize(g_mesh_colours.size() + (size_t)vertex_count);
+    MeshColour *out = g_mesh_colours.data() + command.first_mesh_colour;
+    for (unsigned int i = 0; i < vertex_count; i++, out++)
     {
-        const float *in = rgba + (size_t)i * 4u;
-        MeshColour colour;
-        colour.rgba[0] = std::isfinite(in[0]) ? Clamp(in[0], 0.0f, 2.0f) : 1.0f;
-        colour.rgba[1] = std::isfinite(in[1]) ? Clamp(in[1], 0.0f, 2.0f) : 1.0f;
-        colour.rgba[2] = std::isfinite(in[2]) ? Clamp(in[2], 0.0f, 2.0f) : 1.0f;
-        colour.rgba[3] = std::isfinite(in[3]) ? Clamp01(in[3]) : 1.0f;
-        g_mesh_colours.push_back(colour);
+        ClampMeshColour(rgba + (size_t)i * 4u, out->rgba);
     }
     g_mesh_triangles_submitted += triangles;
     g_resident_units++;

@@ -22,6 +22,7 @@
 #include <limits>
 #include <cstdlib>
 #include <deque>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -314,12 +315,19 @@ const sceGsTex0 *FindRuntimeMeshTex0(SGDPROCUNITHEADER *mesh,
  */
 float Ps2ColorFloat(float value)
 {
-    if (!std::isfinite(value))
+    /* std::isfinite, std::min and std::max, spelled with operators to the
+     * same results (signed zero included): this runs for every component of
+     * every vertex of every unit each frame, and a Debug build makes each of
+     * those a call of its own.  value - value is 0 exactly when value is
+     * finite. */
+    if (!(value - value == 0.0f))
     {
         return 1.0f;
     }
 
-    return std::max(0.0f, std::min(2.0f, value / 128.0f));
+    const float scaled = value / 128.0f;
+    const float capped = scaled < 2.0f ? scaled : 2.0f;
+    return 0.0f < capped ? capped : 0.0f;
 }
 
 /*
@@ -332,12 +340,15 @@ float Ps2ColorFloat(float value)
  */
 float Ps2AlphaFloat(float value)
 {
-    if (!std::isfinite(value))
+    /* Operators rather than library calls, as in Ps2ColorFloat(). */
+    if (!(value - value == 0.0f))
     {
         return 1.0f;
     }
 
-    return std::max(0.0f, std::min(1.0f, value / 128.0f));
+    const float scaled = value / 128.0f;
+    const float capped = scaled < 1.0f ? scaled : 1.0f;
+    return 0.0f < capped ? capped : 0.0f;
 }
 
 struct MeshDecodeScratch
@@ -394,51 +405,6 @@ public:
 private:
     unsigned int token_;
 };
-
-void PushPresetColor(std::vector<float> &rgba,
-                     const float *color,
-                     int index)
-{
-    if (g_dbg_flatcolor)
-    {
-        /* one distinct opaque colour per block, so each body part is
-         * identifiable and nothing can be hidden by texture alpha */
-        static const float pal[8][3] = {
-            {1.0f, 0.2f, 0.2f}, {0.2f, 1.0f, 0.2f}, {0.3f, 0.5f, 1.0f},
-            {1.0f, 1.0f, 0.2f}, {1.0f, 0.3f, 1.0f}, {0.2f, 1.0f, 1.0f},
-            {1.0f, 0.6f, 0.1f}, {1.0f, 1.0f, 1.0f},
-        };
-        int b = g_dbgBlockId < 0 ? 7 : (g_dbgBlockId % 8);
-
-        rgba.push_back(pal[b][0]);
-        rgba.push_back(pal[b][1]);
-        rgba.push_back(pal[b][2]);
-        rgba.push_back(1.0f);
-        return;
-    }
-
-    const float *preset_color = color;
-    if (preset_color != nullptr)
-    {
-        const int offset = index * 4;
-        rgba.push_back(preset_color[offset + 0]);
-        rgba.push_back(preset_color[offset + 1]);
-        rgba.push_back(preset_color[offset + 2]);
-        /* The material alpha BuildPresetVertexColors() took from the VU1
-         * material packet.  A preset mesh is lit by the same directional
-         * block a runtime one is, so it carries alpha the same way -- which
-         * is what lets the placed effect models ManmdlSetAlpha() drives fade
-         * as well as the characters. */
-        rgba.push_back(preset_color[offset + 3]);
-    }
-    else
-    {
-        rgba.push_back(1.0f);
-        rgba.push_back(1.0f);
-        rgba.push_back(1.0f);
-        rgba.push_back(1.0f);
-    }
-}
 
 void AppendTriangleStripIndices(std::vector<unsigned int> &indices,
                                 unsigned int first_vertex,
@@ -563,11 +529,12 @@ void AppendPresetStripToStream(unsigned int stream,
     }
 }
 
+/* `rgba` holds four floats for each of the vertices `positions` does. */
 void DrawIndexedFallback(const sceGsTex0 *tex0,
                          const std::vector<float> &positions,
                          const std::vector<float> &normals,
                          const std::vector<float> &uv,
-                         const std::vector<float> &rgba,
+                         const float *rgba,
                          const std::vector<unsigned int> &indices,
                          const float *local_world,
                          const MioPanLightState *fragment_lights,
@@ -576,7 +543,7 @@ void DrawIndexedFallback(const sceGsTex0 *tex0,
     const size_t vertex_count = positions.size() / 3;
     if (positions.size() != vertex_count * 3 ||
         normals.size() < vertex_count * 3 ||
-        uv.size() < vertex_count * 2 || rgba.size() < vertex_count * 4 ||
+        uv.size() < vertex_count * 2 || rgba == nullptr ||
         indices.empty() || (indices.size() % 3) != 0 ||
         indices.size() > (size_t)std::numeric_limits<int>::max())
     {
@@ -1137,8 +1104,8 @@ void BuildRuntimeVertexColors(RUNTIME_VERTEX_COLORS &colors,
 }
 
 /*
- * Colours for one preset sub-mesh: the baked vertex colour, plus the live
- * lighting the PS2 added on top of it.
+ * Colours for one preset unit: the baked vertex colour, plus the live lighting
+ * the PS2 added on top of it.
  *
  * A preset mesh is "pre-lit", but that is not the whole story on hardware.  The
  * preset walker re-selects lights per bounding box (SelectLight), uploads a
@@ -1152,56 +1119,65 @@ void BuildRuntimeVertexColors(RUNTIME_VERTEX_COLORS &colors,
  * The composition is the engine's own -- gra3dCalcVertexColor() with the baked
  * colour as the source, which is exactly how SetPreRenderMeshData() folds one
  * light batch onto the previous one during prelighting.
+ *
+ * Everything that does not vary inside a unit is decided once, in
+ * BeginPresetColorPass(): which of the paths below applies, the alpha, and the
+ * VU1 light snapshot.  Nothing between two strips of one unit touches the light
+ * image, the material or the world transform, so they hold for the whole unit.
+ * The strips are then written straight into the caller's buffer -- per vertex
+ * this is the hottest code in a room, and in a Debug build every container
+ * operation in it took the iterator-debugging lock.
  */
-void BuildPresetVertexColors(RUNTIME_VERTEX_COLORS &colors,
-                             SGDVUVNDATA_PRESET *vuvn_data,
-                             const SGDVUVNDESC *vuvn_desc,
-                             int mesh_type,
-                             int strip_index,
-                             int vertex_offset,
-                             int vertex_count,
-                             const VECTOR3 *baked,
-                             const float *local_world,
-                             const MioPanLightState *fragment_lights)
+enum PresetColorMode
+{
+    PRESET_COLOR_PALETTE,  /* F3: one opaque colour per block                  */
+    PRESET_COLOR_BAKED,    /* the baked colour alone, alpha 1                    */
+    PRESET_COLOR_SEED,     /* fragment-all: the shader lights from this seed     */
+    PRESET_COLOR_KERNEL,   /* the VU1 kernels, evaluated here                    */
+    PRESET_COLOR_UNUSED,   /* a shadow receiver: its pipeline reads no colour    */
+};
+
+struct PresetColorPass
+{
+    PresetColorMode mode = PRESET_COLOR_BAKED;
+    bool monotone = false;
+    float alpha = 1.0f;
+    GRA3DVU1LIGHTSNAPSHOT vu{};
+};
+
+/* When the result is PRESET_COLOR_KERNEL, the caller installs `local_world` as
+ * GRA3DTS_WORLD around the unit's strips: that is the only mode that lights
+ * through it. */
+void BeginPresetColorPass(PresetColorPass *pass, const float *local_world,
+                          const MioPanLightState *fragment_lights,
+                          bool shadow_receiver)
 {
     MioPanProfileScope profile(MIOPAN_PROFILE_MESH_LIGHTING);
-    const float *c = (const float *)baked;
 
-    colors.clear();
-
-    if (vertex_count <= 0)
+    if (shadow_receiver)
     {
+        /* shadow_receiver.vert/.frag read the position and the model matrix
+         * and nothing else -- the receiver pass only darkens what the room
+         * pass already drew.  Lighting a receiver's vertices was a second full
+         * colour pass over every receiver block, every frame, for nothing. */
+        pass->mode = PRESET_COLOR_UNUSED;
         return;
     }
     if (g_dbg_flatcolor)
     {
-        /* PushPresetColor emits the per-block palette directly. */
+        pass->mode = PRESET_COLOR_PALETTE;
         return;
     }
-
-    /* The baked colour is three components; alpha stays at the resize default
-     * until the lighting pass below reads the material's own out of the VU1
-     * material packet. */
-    colors.resize((size_t)vertex_count * 4, 1.0f);
-
-    for (int i = 0; i < vertex_count; i++)
+    if (g_dbg_nolighting || local_world == nullptr)
     {
-        colors[(size_t)i * 4 + 0] = c != nullptr ? Ps2ColorFloat(c[i * 3 + 0]) : 1.0f;
-        colors[(size_t)i * 4 + 1] = c != nullptr ? Ps2ColorFloat(c[i * 3 + 1]) : 1.0f;
-        colors[(size_t)i * 4 + 2] = c != nullptr ? Ps2ColorFloat(c[i * 3 + 2]) : 1.0f;
-    }
-
-    if (g_dbg_nolighting || local_world == nullptr ||
-        vuvn_data == nullptr || vuvn_desc == nullptr)
-    {
-        return;                                  /* baked colour only */
+        pass->mode = PRESET_COLOR_BAKED;
+        return;
     }
 
     /* MIOPAN_LIGHTING_FRAGMENT_ALL: the shader seeds from this colour and runs
      * every kernel itself, so all that is left here is to hand over the seed --
      * no world transform, no snapshot, no per-vertex kernel.  Deleting that
-     * loop is the point of the mode; it is the whole MESH_LIGHTING profile
-     * zone.
+     * loop is the point of the mode.
      *
      * Two things still have to happen on this side.  The monotone collapse is
      * applied to the SOURCE rather than to the result (see the PORT DEVIATION
@@ -1211,35 +1187,11 @@ void BuildPresetVertexColors(RUNTIME_VERTEX_COLORS &colors,
     if (fragment_lights != nullptr &&
         (fragment_lights->config[2] & MIOPAN_VU1_TERM_DIRECTIONAL) != 0)
     {
-        const float alpha =
-            Ps2AlphaFloat(fragment_lights->directional_diffuse[0][3]);
-        const bool monotone = gra3dIsMonotoneDrawEnable() != 0;
-
-        for (int i = 0; i < vertex_count; i++)
-        {
-            /* A NULL colour record seeds from black, which is what a runtime
-             * VUVN packet carries -- not from the white the unlit fallback
-             * above writes. */
-            float vSeed[3] = {
-                c != nullptr ? c[i * 3 + 0] : 0.0f,
-                c != nullptr ? c[i * 3 + 1] : 0.0f,
-                c != nullptr ? c[i * 3 + 2] : 0.0f,
-            };
-            if (monotone)
-            {
-                const float fAverage = (vSeed[0] + vSeed[1] + vSeed[2]) / 3.0f;
-                vSeed[0] = vSeed[1] = vSeed[2] = fAverage;
-            }
-
-            colors[(size_t)i * 4 + 0] = Ps2ColorFloat(vSeed[0]);
-            colors[(size_t)i * 4 + 1] = Ps2ColorFloat(vSeed[1]);
-            colors[(size_t)i * 4 + 2] = Ps2ColorFloat(vSeed[2]);
-            colors[(size_t)i * 4 + 3] = alpha;
-        }
+        pass->mode = PRESET_COLOR_SEED;
+        pass->alpha = Ps2AlphaFloat(fragment_lights->directional_diffuse[0][3]);
+        pass->monotone = gra3dIsMonotoneDrawEnable() != 0;
         return;
     }
-
-    HostWorldTransform world(local_world);
 
     /* A preset draw is still a VU1 draw, and it runs the SAME three kernels:
      * RotTransPersInner (the TYPE0 vertex kernel) carries the directional
@@ -1247,17 +1199,97 @@ void BuildPresetVertexColors(RUNTIME_VERTEX_COLORS &colors,
      * same vi13 dispatch TYPE2 uses.  CalcIntens and CalcPoint are byte-
      * identical across ff2_00/01/02.  Only the prelight bake runs on the EE
      * with the other law. */
-    GRA3DVU1LIGHTSNAPSHOT vu{};
-    gra3dSnapshotVu1Lighting(&vu);
-    MaskCpuLightTerms(&vu, fragment_lights != nullptr
-                               ? fragment_lights->config[2] : 0);
+    pass->mode = PRESET_COLOR_KERNEL;
+    gra3dSnapshotVu1Lighting(&pass->vu);
+    MaskCpuLightTerms(&pass->vu, fragment_lights != nullptr
+                                     ? fragment_lights->config[2] : 0);
+}
 
+/* One strip's colours, `vertex_count` of them from `vertex_offset`, into `out`
+ * (four floats a vertex) -- RGB on the 0..2 overbright scale and alpha 0..1,
+ * which is what the renderer takes. */
+void WritePresetStripColors(const PresetColorPass &pass, float *out,
+                            SGDVUVNDATA_PRESET *vuvn_data,
+                            const SGDVUVNDESC *vuvn_desc, int mesh_type,
+                            int strip_index, int vertex_offset,
+                            int vertex_count, const VECTOR3 *baked)
+{
+    const float *c = (const float *)baked;
 
-    for (int i = 0; i < vertex_count; i++)
+    switch (pass.mode)
+    {
+    case PRESET_COLOR_PALETTE:
+    {
+        /* one distinct opaque colour per block, so each body part is
+         * identifiable and nothing can be hidden by texture alpha */
+        static const float pal[8][3] = {
+            {1.0f, 0.2f, 0.2f}, {0.2f, 1.0f, 0.2f}, {0.3f, 0.5f, 1.0f},
+            {1.0f, 1.0f, 0.2f}, {1.0f, 0.3f, 1.0f}, {0.2f, 1.0f, 1.0f},
+            {1.0f, 0.6f, 0.1f}, {1.0f, 1.0f, 1.0f},
+        };
+        const int b = g_dbgBlockId < 0 ? 7 : (g_dbgBlockId % 8);
+        for (int i = 0; i < vertex_count; i++, out += 4)
+        {
+            out[0] = pal[b][0];
+            out[1] = pal[b][1];
+            out[2] = pal[b][2];
+            out[3] = 1.0f;
+        }
+        return;
+    }
+    case PRESET_COLOR_UNUSED:
+    {
+        for (int i = 0; i < vertex_count; i++, out += 4)
+        {
+            out[0] = out[1] = out[2] = out[3] = 1.0f;
+        }
+        return;
+    }
+    case PRESET_COLOR_BAKED:
+    {
+        for (int i = 0; i < vertex_count; i++, out += 4)
+        {
+            out[0] = c != nullptr ? Ps2ColorFloat(c[i * 3 + 0]) : 1.0f;
+            out[1] = c != nullptr ? Ps2ColorFloat(c[i * 3 + 1]) : 1.0f;
+            out[2] = c != nullptr ? Ps2ColorFloat(c[i * 3 + 2]) : 1.0f;
+            out[3] = 1.0f;
+        }
+        return;
+    }
+    case PRESET_COLOR_SEED:
+    {
+        for (int i = 0; i < vertex_count; i++, out += 4)
+        {
+            /* A NULL colour record seeds from black, which is what a runtime
+             * VUVN packet carries -- not from the white the unlit path
+             * writes. */
+            float seed[3] = {
+                c != nullptr ? c[i * 3 + 0] : 0.0f,
+                c != nullptr ? c[i * 3 + 1] : 0.0f,
+                c != nullptr ? c[i * 3 + 2] : 0.0f,
+            };
+            if (pass.monotone)
+            {
+                const float average = (seed[0] + seed[1] + seed[2]) / 3.0f;
+                seed[0] = seed[1] = seed[2] = average;
+            }
+            out[0] = Ps2ColorFloat(seed[0]);
+            out[1] = Ps2ColorFloat(seed[1]);
+            out[2] = Ps2ColorFloat(seed[2]);
+            out[3] = pass.alpha;
+        }
+        return;
+    }
+    case PRESET_COLOR_KERNEL:
+        break;
+    }
+
+    MioPanProfileScope profile(MIOPAN_PROFILE_MESH_LIGHTING);
+    for (int i = 0; i < vertex_count; i++, out += 4)
     {
         const VECTOR3 *position;
         const VECTOR3 *normal;
-        int            abs_index = vertex_offset + i;
+        const int      abs_index = vertex_offset + i;
         float          vVertex[4];
         float          vNormal[4];
         float          vSource[4];
@@ -1291,12 +1323,12 @@ void BuildPresetVertexColors(RUNTIME_VERTEX_COLORS &colors,
         vSource[2] = c != nullptr ? c[i * 3 + 2] : 0.0f;
         vSource[3] = 0.0f;
 
-        gra3dCalcVu1VertexColor(vColor, &vu, vVertex, vNormal, vSource);
+        gra3dCalcVu1VertexColor(vColor, &pass.vu, vVertex, vNormal, vSource);
 
-        colors[(size_t)i * 4 + 0] = Ps2ColorFloat(vColor[0]);
-        colors[(size_t)i * 4 + 1] = Ps2ColorFloat(vColor[1]);
-        colors[(size_t)i * 4 + 2] = Ps2ColorFloat(vColor[2]);
-        colors[(size_t)i * 4 + 3] = Ps2AlphaFloat(vColor[3]);
+        out[0] = Ps2ColorFloat(vColor[0]);
+        out[1] = Ps2ColorFloat(vColor[1]);
+        out[2] = Ps2ColorFloat(vColor[2]);
+        out[3] = Ps2AlphaFloat(vColor[3]);
     }
 }
 
@@ -2792,7 +2824,6 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
     std::vector<float>   &uv = s_mesh_decode_scratch.uv;
     std::vector<float>   &rgba = s_mesh_decode_scratch.rgba;
     std::vector<unsigned int> &indices = s_mesh_decode_scratch.indices;
-    RUNTIME_VERTEX_COLORS &lit = s_mesh_decode_scratch.lighting;
     int                   mesh_type;
     int                   num_mesh;
     int                   vertex_offset;
@@ -2810,9 +2841,7 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
     positions.clear();
     normals.clear();
     uv.clear();
-    rgba.clear();
     indices.clear();
-    lit.clear();
 
     mesh_type = mesh->VUMeshDesc.ucMeshType;
     if (mesh_type != iMT_0 && mesh_type != iMT_2 && mesh_type != iMT_2F)
@@ -2859,7 +2888,11 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
         }
     }
 
-    fragment_terms = BuildFragmentLightState(&fragment_lights, local_world);
+    /* A shadow receiver's pipeline takes neither the colours nor the lights,
+     * so neither is built for one. */
+    const bool receiver = MioPan_RendererShadowReceiverActive() != 0;
+    fragment_terms =
+        receiver ? 0 : BuildFragmentLightState(&fragment_lights, local_world);
     fragment_lighting = fragment_terms != 0;
 
     /* The model's resolved texture for this TEX0, when its uploads have
@@ -2884,9 +2917,29 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
     {
         return;
     }
-    rgba.reserve((size_t)vuvn_desc->sNumVertex * 4);
+
+    /* Sized for the whole unit once and written in place, strip by strip;
+     * the walk below stops before a strip that would run past sNumVertex. */
+    const size_t rgba_floats =
+        (size_t)(vuvn_desc->sNumVertex > 0 ? vuvn_desc->sNumVertex : 0) * 4;
+    if (rgba.size() < rgba_floats)
+    {
+        rgba.resize(rgba_floats);
+    }
+
+    PresetColorPass color_pass;
+    BeginPresetColorPass(&color_pass, local_world,
+                         fragment_lighting ? &fragment_lights : nullptr,
+                         receiver);
 
     {
+        /* For the colour walk only, as the kernel lights through it. */
+        std::optional<HostWorldTransform> world;
+        if (color_pass.mode == PRESET_COLOR_KERNEL)
+        {
+            world.emplace(local_world);
+        }
+
         vertex_offset = 0;
         for (int i = 0; i < num_mesh; i++)
         {
@@ -2910,16 +2963,10 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
             colors = unpack_color->avColor;
             FixColors(colors, vertex_count);
 
-            BuildPresetVertexColors(lit, vuvn_data, vuvn_desc, mesh_type, i,
-                                    vertex_offset, vertex_count, colors,
-                                    local_world,
-                                    fragment_lighting ? &fragment_lights
-                                                      : nullptr);
-
-            for (int j = 0; j < vertex_count; j++)
-            {
-                PushPresetColor(rgba, lit.data(), j);
-            }
+            WritePresetStripColors(color_pass,
+                                   rgba.data() + (size_t)vertex_offset * 4,
+                                   vuvn_data, vuvn_desc, mesh_type, i,
+                                   vertex_offset, vertex_count, colors);
 
             vertex_offset += vertex_count;
             color_data =
@@ -2938,7 +2985,6 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
         }
         if (vertex_offset > 0 &&
             (unsigned int)vertex_offset == resident.vertex_count &&
-            rgba.size() / 4 == (size_t)vertex_offset &&
             MioPan_RendererDrawResidentMesh(
                 resident_mesh, resident.first_vertex, resident.vertex_count,
                 resident.first_index, resident.index_count, rgba.data(), tex0,
@@ -2958,8 +3004,7 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
         }
     }
 
-    if (vertex_offset <= 0 || rgba.size() / 4 != (size_t)vertex_offset ||
-        static_vertex_count != vertex_offset ||
+    if (vertex_offset <= 0 || static_vertex_count != vertex_offset ||
         positions.size() / 3 != (size_t)vertex_offset ||
         normals.size() / 3 != (size_t)vertex_offset ||
         uv.size() / 2 != (size_t)vertex_offset || indices.empty())
@@ -2967,7 +3012,7 @@ extern "C" void MioPan_Graph3dDrawPresetMesh(SGDFILEHEADER *owner,
         return;
     }
 
-    DrawIndexedFallback(tex0, positions, normals, uv, rgba, indices,
+    DrawIndexedFallback(tex0, positions, normals, uv, rgba.data(), indices,
                         local_world,
                         fragment_lighting ? &fragment_lights : nullptr,
                         bound_texture);
