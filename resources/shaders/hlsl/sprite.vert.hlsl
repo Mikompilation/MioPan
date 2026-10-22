@@ -29,7 +29,10 @@ struct VSOutput
 VSOutput main(VSInput input)
 {
     VSOutput output;
-    output.position = MikuPanFixClipZ(input.aPos);
+    // A draw the CPU placed through the tick's camera, presented under an
+    // in-between one, is carried across by mvp -- see uClipZ.
+    float4 position = uClipZ.y != 0.0 ? mul(mvp, input.aPos) : input.aPos;
+    output.position = MikuPanFixClipZ(position);
     output.vUV = input.aUV.xy;
     output.vDstUV = input.aUV.zw;
     output.uColor = input.inColor;

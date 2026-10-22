@@ -537,6 +537,11 @@ void MapSkySetTim2Vram(uintptr_t *top_addr)
  *
  *  One textured GS sprite: {RGBAQ, UV, XYZF2, UV, XYZF2}.  Six qwords.
  * ------------------------------------------------------------------------ */
+/* PORT-ONLY: MapSkyX's fraction, which the ROM's (int)MapSkyX drops on the
+ * way to the strip's GS positions; MapSkyDraw() sets it for the host bridge in
+ * MapSkySprite(). */
+static float MapSkyHostScrollFrac;
+
 static Q_WORDDATA *MapSkySprite(Q_WORDDATA *pbuf, int x1, int y1, int x2, int y2,
                                 int u1, int v1, int u2, int v2,
                                 int r, int g, int b, int a)
@@ -547,13 +552,19 @@ static Q_WORDDATA *MapSkySprite(Q_WORDDATA *pbuf, int x1, int y1, int x2, int y2
     /* PC bridge: the same sprite in screen pixels.  Each one covers exactly
      * one whole page (UV 0..0x1000 = 0..256 texels), so the panorama wraps by
      * laying sprites side by side rather than by the sampler -- clamp and
-     * repeat are indistinguishable here. */
-    render_xy[0] = (float)(x1 / 16 - MAPSKY_OFS_X);
-    render_xy[1] = (float)(y1 / 16 - MAPSKY_OFS_Y);
-    render_xy[2] = (float)(x2 / 16 - MAPSKY_OFS_X);
+     * repeat are indistinguishable here.
+     *
+     * In float, keeping the 12.4 fraction the GS kept, plus the part of the
+     * scroll MapSkyDraw()'s (int)MapSkyX drops (MapSkyHostScrollFrac).
+     * Whole pixels of the 640x448 frame are several on a modern window, and
+     * the strip stepped by them every tick; frame smoothing then has nothing
+     * steady to follow. */
+    render_xy[0] = (float)x1 / 16.0f - MAPSKY_OFS_X + MapSkyHostScrollFrac;
+    render_xy[1] = (float)y1 / 16.0f - MAPSKY_OFS_Y;
+    render_xy[2] = (float)x2 / 16.0f - MAPSKY_OFS_X + MapSkyHostScrollFrac;
     render_xy[3] = render_xy[1];
     render_xy[4] = render_xy[0];
-    render_xy[5] = (float)(y2 / 16 - MAPSKY_OFS_Y);
+    render_xy[5] = (float)y2 / 16.0f - MAPSKY_OFS_Y;
     render_xy[6] = render_xy[2];
     render_xy[7] = render_xy[5];
 
@@ -645,10 +656,18 @@ static int MapSkySetBg(int ey, int eh, float *rot, int clip)
     render_xy[2] = view_x1;
     render_xy[3] = view_y0;
     render_xy[4] = view_x0;
-    render_xy[5] = (float)(bg_y / 16 - MAPSKY_OFS_Y);
+    render_xy[5] = (float)bg_y / 16.0f - MAPSKY_OFS_Y;
     render_xy[6] = view_x1;
     render_xy[7] = render_xy[5];
+    /* Its bottom edge rides on the horizon strip under frame smoothing.  Not
+     * when it has been pushed to cover the whole screen: then it has no edge
+     * to see. */
+    if ((clip & 0xc) == 0)
+    {
+        MioPan_RendererBeginSkyLayer(MIOPAN_SKY_BAND, view_y0, render_xy[5]);
+    }
     MioPan_RendererDrawSolidQuad(render_xy, render_rgba);
+    MioPan_RendererEndSkyLayer();
 
     pbuf = GetPK2Dbuf();                                                /* 595 */
 
@@ -723,6 +742,52 @@ static void MapSkyGetHorizon(int *ivec, const float *rot)
     ivec[1] += dp->offset_y2 * 16;                                      /* 684 */
 }
 
+/* --------------------------------------------------------------------------
+ *  MapSkyHostFollow -- PORT-ONLY, no ROM counterpart.
+ *
+ *  Hands the renderer this tick's sky camera, so frame smoothing can turn
+ *  the sky with an in-between camera instead of leaving it where the tick
+ *  put it (MioPan_RendererSetSkyCamera()).  The dome's rotation exactly as
+ *  MapSkyDrawTen() builds it, the horizon point MapSkyGetHorizon() projects
+ *  but in float and before its squash, and how the strip moves against the
+ *  dome: MapSkyAdvanceHorizon() scrolls it p_scale * speed pixels per radian
+ *  of yaw, where the dome moves its focal length, MapSkyPers[0][0].
+ * ------------------------------------------------------------------------ */
+static void MapSkyHostFollow(const float *rot)
+{
+    float rotm[4][4];
+    float hmat[4][4];
+    float vec[4];
+    float hpos[4];
+    float horizon[2];
+
+    sceVu0UnitMatrix(rotm);
+    sceVu0RotMatrixY(rotm, rotm, -rot[1]);
+    sceVu0RotMatrixX(rotm, rotm, -rot[0]);
+
+    vec[0] = 0.0f;
+    vec[1] = 0.0f;
+    vec[2] = MapSkyDp->len;
+    vec[3] = 1.0f;
+    sceVu0UnitMatrix(hmat);
+    sceVu0RotMatrixX(hmat, hmat, -rot[0]);
+    sceVu0MulMatrix(hmat, MapSkyPers, hmat);
+    sceVu0ApplyMatrix(hpos, hmat, vec);
+    if (!(hpos[3] > 0.0f) || MapSkyPers[0][0] == 0.0f)
+    {
+        return;
+    }
+    horizon[0] = hpos[0] / hpos[3];
+    horizon[1] = hpos[1] / hpos[3];
+
+    MioPan_RendererSetSkyCamera(&rotm[0][0], &MapSkyPers[0][0],
+                                (float)MAPSKY_OFS_X, (float)MAPSKY_OFS_Y,
+                                horizon,
+                                MapSkyDp->scale * 255.0f * MapSkyDp->speed /
+                                    MapSkyPers[0][0],
+                                (float)MapSkyDp->move_y / 256.0f);
+}
+
 /* ==========================================================================
  *  Horizon strip
  * ======================================================================== */
@@ -794,6 +859,11 @@ void MapSkyDraw(int (&ivec)[4], float ry, MAP_SKY_DB *ep)
 
     MapSkyGetDrawColor(fc, &ep->fog_r);
 
+    /* PORT: followed by frame smoothing (MioPan_RendererSetSkyCamera()), and
+     * drawn at the scroll the ROM truncates to whole pixels in x1. */
+    MapSkyHostScrollFrac = MapSkyX - (float)(int)MapSkyX;
+    MioPan_RendererBeginSkyLayer(MIOPAN_SKY_STRIP, 0.0f, 0.0f);
+
     while (x1 < MAPSKY_CLIP_MAX)                                        /* 727 */
     {
         pbuf = MapSkySprite(pbuf, (int)x1, (int)y1, (int)x2, (int)y2,
@@ -804,6 +874,8 @@ void MapSkyDraw(int (&ivec)[4], float ry, MAP_SKY_DB *ep)
         x1 = x2;                                                        /* 731 */
         x2 = x1 + iPscale;                                              /* 732 */
     }
+
+    MioPan_RendererEndSkyLayer();
 
     MioPan_ProfilerAddCounter(MIOPAN_PROFILER_COUNTER_SKY_HORIZON_QUADS,
                               horizon_quads);
@@ -945,8 +1017,8 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
 
                 render_uv[0] = (float)viUV[0] / 16.0f;
                 render_uv[1] = (float)viUV[1] / 16.0f;
-                render_xy[0] = (float)(iout[id[0]][0] / 16 - MAPSKY_OFS_X);
-                render_xy[1] = (float)(iout[id[0]][1] / 16 - MAPSKY_OFS_Y);
+                render_xy[0] = (float)iout[id[0]][0] / 16.0f - MAPSKY_OFS_X;
+                render_xy[1] = (float)iout[id[0]][1] / 16.0f - MAPSKY_OFS_Y;
                 render_fog[0] = MapSkyGetFogF(iout[id[0]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[0]][0], iout[id[0]][1],
@@ -956,8 +1028,8 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
 
                 render_uv[2] = (float)viUV[0] / 16.0f;
                 render_uv[3] = render_uv[1];
-                render_xy[2] = (float)(iout[id[1]][0] / 16 - MAPSKY_OFS_X);
-                render_xy[3] = (float)(iout[id[1]][1] / 16 - MAPSKY_OFS_Y);
+                render_xy[2] = (float)iout[id[1]][0] / 16.0f - MAPSKY_OFS_X;
+                render_xy[3] = (float)iout[id[1]][1] / 16.0f - MAPSKY_OFS_Y;
                 render_fog[1] = MapSkyGetFogF(iout[id[1]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[1]][0], iout[id[1]][1],
@@ -967,8 +1039,8 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
 
                 render_uv[6] = render_uv[2];
                 render_uv[7] = (float)viUV[1] / 16.0f;
-                render_xy[6] = (float)(iout[id[2]][0] / 16 - MAPSKY_OFS_X);
-                render_xy[7] = (float)(iout[id[2]][1] / 16 - MAPSKY_OFS_Y);
+                render_xy[6] = (float)iout[id[2]][0] / 16.0f - MAPSKY_OFS_X;
+                render_xy[7] = (float)iout[id[2]][1] / 16.0f - MAPSKY_OFS_Y;
                 render_fog[3] = MapSkyGetFogF(iout[id[2]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[2]][0], iout[id[2]][1],
@@ -978,8 +1050,8 @@ static Q_WORDDATA *MapSkyBlockPoly(Q_WORDDATA *pbuf, float (*mat)[4],
 
                 render_uv[4] = render_uv[0];
                 render_uv[5] = render_uv[7];
-                render_xy[4] = (float)(iout[id[3]][0] / 16 - MAPSKY_OFS_X);
-                render_xy[5] = (float)(iout[id[3]][1] / 16 - MAPSKY_OFS_Y);
+                render_xy[4] = (float)iout[id[3]][0] / 16.0f - MAPSKY_OFS_X;
+                render_xy[5] = (float)iout[id[3]][1] / 16.0f - MAPSKY_OFS_Y;
                 render_fog[2] = MapSkyGetFogF(iout[id[3]]);
                 pbuf = MapSkySetIVec(pbuf, viUV[0], viUV[1], viUV[2], viUV[3]);
                 pbuf = MapSkySetIVec(pbuf, iout[id[3]][0], iout[id[3]][1],
@@ -1103,9 +1175,12 @@ static void MapSkyDrawTen(MAP_SKY_ST *skp, float *rot)
 
     MapSkyGetDrawColor(fc, &skp->fr);
 
+    /* PORT: followed by frame smoothing (MioPan_RendererSetSkyCamera()). */
+    MioPan_RendererBeginSkyLayer(MIOPAN_SKY_DOME, 0.0f, 0.0f);
     pbuf = MapSkyBlockPoly(pbuf, mat, tes, tu, tv,
                            MAPSKY_GRID_W, MAPSKY_GRID_H, move, 0,
                            fc[0], fc[1], fc[2], skp->fa);               /* 892 */
+    MioPan_RendererEndSkyLayer();
 
     EndPK2Dbuf(pbuf);                                                   /* 893 */
 }
@@ -1183,6 +1258,7 @@ void MapSkyProc(void)
 
     MapSkyGetHorizon(ivec, c_rot);
     clip = MapSkyGetClip(ivec);
+    MapSkyHostFollow(c_rot);                                    /* PORT */
 
     MapSkySetBg(ivec[1], (int)(MapSkyDp->scale * 255.0f), c_rot, clip); /* 952 */
 

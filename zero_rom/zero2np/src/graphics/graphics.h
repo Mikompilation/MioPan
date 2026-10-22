@@ -115,6 +115,13 @@ void RendererPacket3DUV(float (*positions)[4], int count, const float *uv,
 void RendererGouraudTriangles3D(float (*positions)[4], const u_char *rgba,
                                 int vertex_count);
 
+/* PORT-ONLY, no ROM counterpart.  Ties the screen-space draws that follow, up
+ * to MioPan_RendererEndAnchor(), to the world point `world` (w ignored), so
+ * frame smoothing moves them with the camera -- for an effect that lays a
+ * sprite out in 2D around a projected position rather than queuing it in 3D.
+ * See MioPan_RendererBeginAnchor(). */
+void RendererBeginWorldAnchor(const float *world);
+
 /* PORT-ONLY, no ROM counterpart.  One world-space line, gouraud from p1's
  * colour to p2's; components are raw PS2 0..128.  Same reason as above: the
  * GS line packet the ROM emits alongside is never executed here. */

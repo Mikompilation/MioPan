@@ -87,8 +87,11 @@ cbuffer MikuPanUniforms : register(b0, MIKUPAN_UNIFORM_SPACE)
     // MikuPanFixClipZ() converts.  x = 1: already the host's reversed z,
     // passed through untouched -- the world-space billboard bridges rebuild
     // their depth that way so it is not lost to the conversion (see
-    // MikuPanFixClipZ()).  yzw spare.  Appended for the same reason as
-    // uAlphaTest.
+    // MikuPanFixClipZ()).  y = 1: mvp carries the vertices from the camera
+    // the CPU projected them with to this present's -- a billboard or an
+    // anchored effect sprite under frame smoothing's in-between camera
+    // (DrawCommand::follow); 0 leaves them as queued.  zw spare.  Appended
+    // for the same reason as uAlphaTest.
     float4 uClipZ;
 
     // Projected-shadow receiver culling, per cast shadow -- what the ROM's
