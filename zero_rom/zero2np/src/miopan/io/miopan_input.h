@@ -220,7 +220,8 @@ int MioPan_InputSourceFromString(const char *text, MioPan_InputSource *out);
 union SDL_Event;
 struct SDL_Window;
 
-// Feed every polled event through.  Only mouse and focus events are looked at.
+// Feed every polled event through.  Only mouse, gamepad-sensor and focus events
+// are looked at.
 void MioPan_InputProcessEvent(const union SDL_Event *event);
 
 // Settle whether the cursor should be captured.  Call after each batch of
@@ -268,6 +269,82 @@ void  MioPan_InputSetMouseInvertY(int invert);
 // 1 if the mouse settings are all at their defaults.
 int MioPan_InputMouseSettingsAreDefault(void);
 void MioPan_InputResetMouseSettings(void);
+
+// ---------------------------------------------------------------------------
+//  Gyro.
+//
+//  While the viewfinder is up, a gamepad with a gyroscope aims it by being
+//  turned, the same way the mouse does: the game asks for look input with
+//  MioPan_InputRequestMouseLook() and the motion goes straight onto its yaw and
+//  pitch, not through the stick.  Nothing else uses the gyro -- walking around
+//  with the finder down ignores it entirely.
+//
+//  Every sample SDL reports is integrated over its own sensor timestamp, so the
+//  turn is an angle, not a rate: tilting the pad 10 degrees turns the camera
+//  10 degrees times the sensitivity however the samples fell between ticks.
+//
+//  A gyro reads a little above zero when still, and that bias walks with
+//  temperature.  It is learned continuously whenever the pad lies still with
+//  the finder down -- never while aiming, where a slow, steady turn would look
+//  the same -- and MioPan_InputGyroRecalibrate() starts it over.  What bias is
+//  left is damped by easing rotation slower than a couple of degrees a second
+//  toward zero, which is what stops the view creeping.
+// ---------------------------------------------------------------------------
+
+// Mouse and gyro together, for the finder: this tick's turn in radians, with
+// the same signs and return as MioPan_InputMouseLook().
+int MioPan_InputAimLook(float *yaw, float *pitch);
+
+// The gyro's share alone.
+int MioPan_InputGyroLook(float *yaw, float *pitch);
+
+// Settings, persisted in [input].  Sensitivity multiplies the controller's own
+// rotation: 1.0 turns the camera as far as the pad turned.
+#define MIOPAN_GYRO_SENSITIVITY_DEFAULT 1.5f
+#define MIOPAN_GYRO_SENSITIVITY_MIN     0.1f
+#define MIOPAN_GYRO_SENSITIVITY_MAX     8.0f
+
+// Which rotation turns the camera left and right.  Pitch -- tipping the pad's
+// far edge up or down -- always looks up and down.
+#define MIOPAN_GYRO_TURN_YAW  0   // point the pad left and right, like a torch
+#define MIOPAN_GYRO_TURN_ROLL 1   // tip it sideways, like a steering wheel
+
+int   MioPan_InputGetGyroLook(void);
+void  MioPan_InputSetGyroLook(int enabled);
+float MioPan_InputGetGyroSensitivity(void);
+void  MioPan_InputSetGyroSensitivity(float sensitivity);
+int   MioPan_InputGetGyroInvertX(void);
+void  MioPan_InputSetGyroInvertX(int invert);
+int   MioPan_InputGetGyroInvertY(void);
+void  MioPan_InputSetGyroInvertY(int invert);
+int   MioPan_InputGetGyroTurnAxis(void);
+void  MioPan_InputSetGyroTurnAxis(int axis);
+
+int  MioPan_InputGyroSettingsAreDefault(void);
+void MioPan_InputResetGyroSettings(void);
+
+// Forget the learned bias; it is learned again the next time the pad lies
+// still with the finder down.
+void MioPan_InputGyroRecalibrate(void);
+
+// What the Controls window shows.  `rate_*` is the pad's motion now, bias
+// removed, in degrees a second and in the camera's own signs (yaw positive to
+// the right, pitch up), before sensitivity -- so it reads the same whatever the
+// setting.  `calibration` runs 0..1 while the first bias is being learned.
+typedef struct MioPan_InputGyroStatus
+{
+    int   has_gamepad;
+    int   has_gyro;     // the open pad reports one
+    int   active;       // reporting now: enabled in settings and on the pad
+    int   aiming;       // the game is asking for look input
+    float rate_hz;      // the pad's own sample rate, 0 if it does not say
+    float calibration;
+    float bias_deg[3];  // pitch, yaw, roll, degrees a second
+    float rate_yaw_deg;
+    float rate_pitch_deg;
+} MioPan_InputGyroStatus;
+
+void MioPan_InputGetGyroStatus(MioPan_InputGyroStatus *out);
 
 #ifdef __cplusplus
 }

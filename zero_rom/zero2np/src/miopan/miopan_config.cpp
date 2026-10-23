@@ -295,6 +295,12 @@ const EnumName kTitleChanges[] = {
     {nullptr, 0},
 };
 
+const EnumName kGyroTurnAxes[] = {
+    {"yaw", MIOPAN_GYRO_TURN_YAW},
+    {"roll", MIOPAN_GYRO_TURN_ROLL},
+    {nullptr, 0},
+};
+
 const char *EnumToName(const EnumName *table, int value)
 {
     for (const EnumName *e = table; e->label != nullptr; e++)
@@ -794,6 +800,30 @@ void LoadInputBindings()
     invert = MioPan_InputGetMouseInvertY();
     ReadInt("input", "mouse_invert_y", &invert);
     MioPan_InputSetMouseInvertY(invert);
+
+    /* Finder gyro look, on the same terms. */
+    look = MioPan_InputGetGyroLook();
+    ReadInt("input", "gyro_look", &look);
+    MioPan_InputSetGyroLook(look);
+
+    sensitivity = 0.0f;
+    ReadFloat("input", "gyro_sensitivity", &sensitivity);
+    if (sensitivity > 0.0f)
+    {
+        MioPan_InputSetGyroSensitivity(sensitivity);
+    }
+
+    invert = MioPan_InputGetGyroInvertX();
+    ReadInt("input", "gyro_invert_x", &invert);
+    MioPan_InputSetGyroInvertX(invert);
+
+    invert = MioPan_InputGetGyroInvertY();
+    ReadInt("input", "gyro_invert_y", &invert);
+    MioPan_InputSetGyroInvertY(invert);
+
+    int axis = MioPan_InputGetGyroTurnAxis();
+    ReadEnum("input", "gyro_turn", kGyroTurnAxes, &axis);
+    MioPan_InputSetGyroTurnAxis(axis);
 }
 
 /* One source as text, or "none" for an empty slot. */
@@ -957,6 +987,30 @@ std::string BuildInputSection()
                      (double)MioPan_InputGetMouseSensitivity(),
                      MioPan_InputGetMouseInvertX(),
                      MioPan_InputGetMouseInvertY());
+        out += line;
+
+        out +=
+            "\n"
+            "; Gyro look.  While the Camera Obscura is raised, a gamepad with a\n"
+            ";   gyroscope aims it by being turned; the stick still works\n"
+            ";   alongside it.  gyro_sensitivity multiplies the pad's own\n"
+            ";   rotation: 1.0 turns the camera as far as the pad turned, from\n"
+            ";   0.1 to 8.  gyro_turn picks what turns it left and right: yaw\n"
+            ";   (point the pad, like a torch) or roll (tip it, like a steering\n"
+            ";   wheel).  The gyro's drift is learned whenever the pad lies\n"
+            ";   still with the camera down, and is not stored here.\n";
+
+        SDL_snprintf(line, sizeof(line),
+                     "gyro_look = %d\n"
+                     "gyro_sensitivity = %.3f\n"
+                     "gyro_invert_x = %d\n"
+                     "gyro_invert_y = %d\n"
+                     "gyro_turn = %s\n",
+                     MioPan_InputGetGyroLook(),
+                     (double)MioPan_InputGetGyroSensitivity(),
+                     MioPan_InputGetGyroInvertX(),
+                     MioPan_InputGetGyroInvertY(),
+                     EnumToName(kGyroTurnAxes, MioPan_InputGetGyroTurnAxis()));
         out += line;
     }
 

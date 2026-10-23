@@ -1766,6 +1766,139 @@ void DrawMouseSettings()
     ImGui::PopStyleColor();
 }
 
+/* Finder gyro look, on the mouse's terms: miopan_input owns the values and
+ * each control arms the save itself.  The status lines are what make it
+ * checkable from here -- whether the pad has a gyro at all, whether it is
+ * reporting, which way a turn reads, and whether the drift has been learned. */
+void DrawGyroSettings()
+{
+    MioPan_InputGyroStatus status;
+    MioPan_InputGetGyroStatus(&status);
+
+    ImGui::PushID("gyro");
+
+    bool look = MioPan_InputGetGyroLook() != 0;
+    if (ImGui::Checkbox("Aim the viewfinder with the gyro", &look))
+    {
+        MioPan_InputSetGyroLook(look ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    ImGui::SameLine();
+    if (status.has_gamepad == 0)
+    {
+        ImGui::TextDisabled("no gamepad connected");
+    }
+    else if (status.has_gyro == 0)
+    {
+        ImGui::TextDisabled("this gamepad reports no gyro");
+    }
+    else if (status.active == 0)
+    {
+        ImGui::TextDisabled("gyro off");
+    }
+    else if (status.rate_hz > 0.0f)
+    {
+        ImGui::TextDisabled("gyro reporting at %.0f Hz", (double)status.rate_hz);
+    }
+    else
+    {
+        ImGui::TextDisabled("gyro reporting");
+    }
+
+    ImGui::BeginDisabled(!look);
+    float sensitivity = MioPan_InputGetGyroSensitivity();
+    ImGui::SetNextItemWidth(Px(220.0f));
+    if (ImGui::SliderFloat("Sensitivity", &sensitivity,
+                           MIOPAN_GYRO_SENSITIVITY_MIN,
+                           MIOPAN_GYRO_SENSITIVITY_MAX, "%.2fx",
+                           ImGuiSliderFlags_Logarithmic))
+    {
+        MioPan_InputSetGyroSensitivity(sensitivity);
+        MarkSettingsDirty();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("1.00x turns the camera as far as the pad turns");
+
+    static const char *const kTurnAxes[] = {
+        "Yaw -- point the pad left and right",
+        "Roll -- tip the pad sideways",
+    };
+    int axis = MioPan_InputGetGyroTurnAxis();
+    ImGui::SetNextItemWidth(Px(220.0f));
+    if (ImGui::Combo("Turn with", &axis, kTurnAxes,
+                     (int)(sizeof(kTurnAxes) / sizeof(kTurnAxes[0]))))
+    {
+        MioPan_InputSetGyroTurnAxis(axis);
+        MarkSettingsDirty();
+    }
+
+    bool invert_x = MioPan_InputGetGyroInvertX() != 0;
+    if (ImGui::Checkbox("Invert X", &invert_x))
+    {
+        MioPan_InputSetGyroInvertX(invert_x ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    ImGui::SameLine();
+    bool invert_y = MioPan_InputGetGyroInvertY() != 0;
+    if (ImGui::Checkbox("Invert Y", &invert_y))
+    {
+        MioPan_InputSetGyroInvertY(invert_y ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(MioPan_InputGyroSettingsAreDefault() != 0);
+    if (ImGui::Button("Reset gyro"))
+    {
+        MioPan_InputResetGyroSettings();
+        MarkSettingsDirty();
+    }
+    ImGui::EndDisabled();
+
+    /* Live, before sensitivity, so it reads the same whatever the slider says:
+     * turning the pad right should read positive yaw, lifting its far edge
+     * positive pitch. */
+    if (status.active != 0)
+    {
+        ImGui::Text("Now  yaw %+7.1f  pitch %+7.1f  deg/s%s",
+                    (double)status.rate_yaw_deg,
+                    (double)status.rate_pitch_deg,
+                    status.aiming != 0 ? "   aiming" : "");
+
+        if (status.calibration < 1.0f)
+        {
+            ImGui::TextColored(ImVec4(0.94f, 0.58f, 0.36f, 1.0f),
+                               "Learning drift: set the pad down and keep it "
+                               "still (%.0f%%)",
+                               (double)(status.calibration * 100.0f));
+        }
+        else
+        {
+            ImGui::TextDisabled("Drift learned: %+.2f / %+.2f / %+.2f deg/s "
+                                "(pitch / yaw / roll)",
+                                (double)status.bias_deg[0],
+                                (double)status.bias_deg[1],
+                                (double)status.bias_deg[2]);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Recalibrate"))
+        {
+            MioPan_InputGyroRecalibrate();
+        }
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped(
+        "Aims while the Camera Obscura is raised, alongside the stick. The "
+        "pad's drift is learned whenever it lies still with the camera down, "
+        "never while aiming.");
+    ImGui::PopStyleColor();
+
+    ImGui::PopID();
+}
+
 void DrawControlsWindow()
 {
     if (!g_show_controls)
@@ -1890,6 +2023,8 @@ void DrawControlsWindow()
 
         ImGui::Separator();
         DrawMouseSettings();
+        ImGui::Separator();
+        DrawGyroSettings();
         ImGui::Separator();
 
         constexpr ImGuiTableFlags kTableFlags = ImGuiTableFlags_BordersInnerV |
@@ -2468,6 +2603,13 @@ void DrawControlsSettingsMenu()
                         &mouse_look))
     {
         MioPan_InputSetMouseLook(mouse_look ? 1 : 0);
+        MarkSettingsDirty();
+    }
+    bool gyro_look = MioPan_InputGetGyroLook() != 0;
+    if (ImGui::MenuItem("Aim the viewfinder with the gyro", nullptr,
+                        &gyro_look))
+    {
+        MioPan_InputSetGyroLook(gyro_look ? 1 : 0);
         MarkSettingsDirty();
     }
     ImGui::Separator();

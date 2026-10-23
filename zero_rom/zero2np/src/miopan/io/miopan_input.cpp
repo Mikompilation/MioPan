@@ -157,6 +157,268 @@ static int   s_wheel_active[4];
 // want: the cursor stays out of sight until the mouse is actually moved.
 static Uint64 s_last_mouse_activity;
 
+// ---------------------------------------------------------------------------
+//  Gyro state.  See the header for the shape of it.
+// ---------------------------------------------------------------------------
+
+#define MIOPAN_DEG_TO_RAD(d) ((d) * (SDL_PI_F / 180.0f))
+
+// Rotation slower than this is eased toward zero (out = rate * rate / this):
+// the fraction of a degree a second a gyro reads after calibration cannot
+// creep the view, and a deliberate turn passes untouched.
+#define MIOPAN_GYRO_TIGHTEN_RAD     MIOPAN_DEG_TO_RAD(2.0f)
+
+// "Still", for calibration: every axis within NOISE of its own short average,
+// and that average under CAP -- no gyro's bias is anywhere near ten degrees a
+// second, so anything faster is the pad moving, however smoothly.  There is
+// deliberately no test against the current bias estimate: a wrong estimate
+// would then refuse the very samples that correct it.
+#define MIOPAN_GYRO_STILL_NOISE_RAD MIOPAN_DEG_TO_RAD(2.0f)
+#define MIOPAN_GYRO_STILL_CAP_RAD   MIOPAN_DEG_TO_RAD(10.0f)
+#define MIOPAN_GYRO_FAST_TAU_S      0.2f   // the short average
+#define MIOPAN_GYRO_SETTLE_S        0.5f   // still this long before learning
+#define MIOPAN_GYRO_FIRST_TAU_S     0.25f  // learning rate until calibrated...
+#define MIOPAN_GYRO_BIAS_TAU_S      1.0f   // ...and after
+#define MIOPAN_GYRO_CALIBRATED_S    1.0f   // learning this long counts as done
+
+// A gap longer than this between two samples is a pad waking up or the window
+// coming back, not a turn; the sample is weighted at the nominal rate instead.
+#define MIOPAN_GYRO_MAX_DT_S        0.05f
+#define MIOPAN_GYRO_FALLBACK_HZ     250.0f
+
+// Settings.  Defaults are mirrored in MioPan_InputResetGyroSettings().
+static int   s_gyro_look = 1;
+static float s_gyro_sensitivity = MIOPAN_GYRO_SENSITIVITY_DEFAULT;
+static int   s_gyro_invert_x;
+static int   s_gyro_invert_y;
+static int   s_gyro_turn_axis = MIOPAN_GYRO_TURN_YAW;
+
+// The open pad: whether it has a gyro, whether it is reporting, its rate.
+static int   s_gyro_has;
+static int   s_gyro_active;
+static float s_gyro_rate_hz;
+static int   s_gyro_enable_failure_logged;
+
+// Sensor timestamp of the last sample, 0 for none since the pad (re)started.
+static Uint64 s_gyro_last_ns;
+
+// Calibration, all in radians a second, SDL's axes (pitch, yaw, roll).
+static float s_gyro_fast[3];
+static int   s_gyro_fast_valid;
+static float s_gyro_bias[3];
+static float s_gyro_still_s;
+static float s_gyro_calibrated_s;
+
+// The last sample, bias removed, in the camera's signs -- for the readout.
+static float s_gyro_rate_yaw;
+static float s_gyro_rate_pitch;
+
+// Turn gathered since the last update, and the last update's share of it, in
+// radians in the camera's signs (yaw right, pitch up), before sensitivity.
+static float s_gyro_motion_yaw;
+static float s_gyro_motion_pitch;
+static float s_gyro_look_yaw;
+static float s_gyro_look_pitch;
+
+static int GyroAiming(void)
+{
+    return (s_look_request != 0 || s_look_request_prev != 0) ? 1 : 0;
+}
+
+// Drop motion in flight and the sample clock, keeping the calibration.  For
+// anything that breaks the run of samples: focus lost, the gyro switched.
+static void ClearGyroMotion(void)
+{
+    s_gyro_last_ns = 0;
+    s_gyro_motion_yaw = 0.0f;
+    s_gyro_motion_pitch = 0.0f;
+    s_gyro_look_yaw = 0.0f;
+    s_gyro_look_pitch = 0.0f;
+    s_gyro_rate_yaw = 0.0f;
+    s_gyro_rate_pitch = 0.0f;
+    s_gyro_still_s = 0.0f;
+    s_gyro_fast_valid = 0;
+}
+
+// Forget the bias as well.  A different pad has a different one.
+static void ResetGyroCalibration(void)
+{
+    ClearGyroMotion();
+    memset(s_gyro_bias, 0, sizeof(s_gyro_bias));
+    s_gyro_calibrated_s = 0.0f;
+}
+
+// Bring the open pad's gyro in line with the setting: on when there is a pad,
+// it has a gyro and gyro aiming is on, off otherwise.  Called when a pad opens
+// and when the setting changes; harmless to call again.
+static void SyncGyroSensor(void)
+{
+    int want;
+
+    if (s_gamepad == 0)
+    {
+        s_gyro_has = 0;
+        s_gyro_active = 0;
+        s_gyro_rate_hz = 0.0f;
+        ClearGyroMotion();
+        return;
+    }
+
+    s_gyro_has = SDL_GamepadHasSensor(s_gamepad, SDL_SENSOR_GYRO) ? 1 : 0;
+    want = s_gyro_has != 0 && s_gyro_look != 0;
+
+    if (s_gyro_has != 0 &&
+        !SDL_SetGamepadSensorEnabled(s_gamepad, SDL_SENSOR_GYRO, want != 0))
+    {
+        if (s_gyro_enable_failure_logged == 0)
+        {
+            s_gyro_enable_failure_logged = 1;
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "MioPan: could not %s the gyro on \"%s\": %s",
+                        want != 0 ? "enable" : "disable",
+                        SDL_GetGamepadName(s_gamepad), SDL_GetError());
+        }
+        want = 0;
+    }
+
+    if (want != s_gyro_active)
+    {
+        ClearGyroMotion();
+    }
+    s_gyro_active = want;
+    s_gyro_rate_hz = s_gyro_has != 0
+                         ? SDL_GetGamepadSensorDataRate(s_gamepad, SDL_SENSOR_GYRO)
+                         : 0.0f;
+}
+
+// One gyro sample: learn the bias when the pad is still and nobody is aiming,
+// and while the game is aiming add the turn to this update's motion.
+static void GyroSample(const float *w, Uint64 sample_ns)
+{
+    float dt = 0.0f;
+    float r[3];
+    float turn;
+    float yaw;
+    float pitch;
+    float speed;
+    int   still;
+    int   i;
+
+    if (s_gyro_active == 0)
+    {
+        return;
+    }
+
+    if (s_gyro_last_ns != 0 && sample_ns > s_gyro_last_ns)
+    {
+        dt = (float)((double)(sample_ns - s_gyro_last_ns) * 1.0e-9);
+    }
+    s_gyro_last_ns = sample_ns;
+    if (!(dt > 0.0f) || dt > MIOPAN_GYRO_MAX_DT_S)
+    {
+        dt = 1.0f / (s_gyro_rate_hz > 0.0f ? s_gyro_rate_hz
+                                           : MIOPAN_GYRO_FALLBACK_HZ);
+    }
+
+    // Calibration.
+    if (s_gyro_fast_valid == 0)
+    {
+        memcpy(s_gyro_fast, w, sizeof(s_gyro_fast));
+        s_gyro_fast_valid = 1;
+    }
+    else
+    {
+        const float k = dt / (MIOPAN_GYRO_FAST_TAU_S + dt);
+        for (i = 0; i < 3; i++)
+        {
+            s_gyro_fast[i] += (w[i] - s_gyro_fast[i]) * k;
+        }
+    }
+
+    still = 1;
+    for (i = 0; i < 3; i++)
+    {
+        if (SDL_fabsf(w[i] - s_gyro_fast[i]) > MIOPAN_GYRO_STILL_NOISE_RAD ||
+            SDL_fabsf(s_gyro_fast[i]) > MIOPAN_GYRO_STILL_CAP_RAD)
+        {
+            still = 0;
+        }
+    }
+
+    // Never while aiming: a slow, steady turn through the finder is exactly
+    // what a still pad with a bias looks like.
+    if (still != 0 && GyroAiming() == 0)
+    {
+        s_gyro_still_s += dt;
+        if (s_gyro_still_s >= MIOPAN_GYRO_SETTLE_S)
+        {
+            const float tau = s_gyro_calibrated_s < MIOPAN_GYRO_CALIBRATED_S
+                                  ? MIOPAN_GYRO_FIRST_TAU_S
+                                  : MIOPAN_GYRO_BIAS_TAU_S;
+            const float k = dt / (tau + dt);
+            for (i = 0; i < 3; i++)
+            {
+                s_gyro_bias[i] += (s_gyro_fast[i] - s_gyro_bias[i]) * k;
+            }
+            if (s_gyro_calibrated_s < MIOPAN_GYRO_CALIBRATED_S)
+            {
+                s_gyro_calibrated_s += dt;
+            }
+        }
+    }
+    else
+    {
+        s_gyro_still_s = 0.0f;
+    }
+
+    for (i = 0; i < 3; i++)
+    {
+        r[i] = w[i] - s_gyro_bias[i];
+    }
+
+    // SDL's rotations are counter-clockwise positive seen from the axis's own
+    // end: positive yaw points the pad left, positive roll leans its top left,
+    // positive pitch lifts its far edge.  The camera turns right on positive
+    // yaw and looks up on positive pitch, so the turn axis is negated.
+    turn = s_gyro_turn_axis == MIOPAN_GYRO_TURN_ROLL ? r[2] : r[1];
+    yaw = -turn;
+    pitch = r[0];
+    s_gyro_rate_yaw = yaw;
+    s_gyro_rate_pitch = pitch;
+
+    speed = SDL_sqrtf(yaw * yaw + pitch * pitch);
+    if (speed < MIOPAN_GYRO_TIGHTEN_RAD)
+    {
+        const float k = speed / MIOPAN_GYRO_TIGHTEN_RAD;
+        yaw *= k;
+        pitch *= k;
+    }
+
+    if (GyroAiming() != 0 && s_suppressed == 0)
+    {
+        s_gyro_motion_yaw += yaw * dt;
+        s_gyro_motion_pitch += pitch * dt;
+    }
+}
+
+// Once per pad update, after AdvanceMouse() has rolled the request window:
+// hand over the turn gathered while the previous update was aiming.
+static void AdvanceGyro(void)
+{
+    if (s_look_request_prev != 0)
+    {
+        s_gyro_look_yaw = s_gyro_motion_yaw;
+        s_gyro_look_pitch = s_gyro_motion_pitch;
+    }
+    else
+    {
+        s_gyro_look_yaw = 0.0f;
+        s_gyro_look_pitch = 0.0f;
+    }
+    s_gyro_motion_yaw = 0.0f;
+    s_gyro_motion_pitch = 0.0f;
+}
+
 static void EnsureBindings(void)
 {
     if (s_bindings_ready == 0)
@@ -289,6 +551,7 @@ static void CloseGamepad(void)
         SDL_CloseGamepad(s_gamepad);
         s_gamepad = 0;
     }
+    SyncGyroSensor();
 }
 
 static void LoadGamepadMappings(void)
@@ -429,6 +692,19 @@ static int SelectGamepad(void)
     if (s_gamepad != 0)
     {
         SDL_Log("MioPan: using gamepad \"%s\"", SDL_GetGamepadName(s_gamepad));
+
+        ResetGyroCalibration();
+        SyncGyroSensor();
+        if (s_gyro_has != 0)
+        {
+            SDL_Log("MioPan: it has a gyro (%.0f Hz); gyro aiming is %s",
+                    (double)s_gyro_rate_hz,
+                    s_gyro_active != 0 ? "on" : "off");
+        }
+        else
+        {
+            SDL_Log("MioPan: it reports no gyro");
+        }
     }
 
     return s_gamepad != 0 ? 1 : 0;
@@ -644,6 +920,7 @@ void MioPan_InputUpdate(void)
      * mouse messages. */
     SelectGamepad();
     AdvanceMouse();
+    AdvanceGyro();
     AdvanceStickRamps();
 }
 
@@ -1234,8 +1511,24 @@ void MioPan_InputProcessEvent(const SDL_Event *event)
         }
         break;
 
+    case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+        if (event->gsensor.sensor == SDL_SENSOR_GYRO && s_gamepad != 0 &&
+            event->gsensor.which == SDL_GetGamepadID(s_gamepad))
+        {
+            // The pad's own clock when it has one; SDL's arrival time is
+            // jittered by USB and by how events were batched.
+            GyroSample(event->gsensor.data,
+                       event->gsensor.sensor_timestamp != 0
+                           ? event->gsensor.sensor_timestamp
+                           : event->gsensor.timestamp);
+        }
+        break;
+
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         ClearMouseButtons();
+        // SDL stops delivering pad events to a window in the background, so
+        // the next sample after it comes back is no continuation of this one.
+        ClearGyroMotion();
         break;
 
     default:
@@ -1430,6 +1723,181 @@ void MioPan_InputResetMouseSettings(void)
     s_mouse_sensitivity = 1.0f;
     s_mouse_invert_x = 0;
     s_mouse_invert_y = 0;
+}
+
+// ---------------------------------------------------------------------------
+//  Gyro
+// ---------------------------------------------------------------------------
+
+int MioPan_InputGyroLook(float *yaw, float *pitch)
+{
+    float x = 0.0f;
+    float y = 0.0f;
+
+    if (s_gyro_active != 0 && s_suppressed == 0)
+    {
+        x = s_gyro_look_yaw * s_gyro_sensitivity;
+        y = s_gyro_look_pitch * s_gyro_sensitivity;
+
+        if (s_gyro_invert_x != 0)
+        {
+            x = -x;
+        }
+        if (s_gyro_invert_y != 0)
+        {
+            y = -y;
+        }
+    }
+
+    if (yaw != 0)
+    {
+        *yaw = x;
+    }
+    if (pitch != 0)
+    {
+        *pitch = y;
+    }
+    return (x != 0.0f || y != 0.0f) ? 1 : 0;
+}
+
+int MioPan_InputAimLook(float *yaw, float *pitch)
+{
+    float mouse_yaw;
+    float mouse_pitch;
+    float gyro_yaw;
+    float gyro_pitch;
+    int   any;
+
+    any = MioPan_InputMouseLook(&mouse_yaw, &mouse_pitch);
+    any |= MioPan_InputGyroLook(&gyro_yaw, &gyro_pitch);
+
+    if (yaw != 0)
+    {
+        *yaw = mouse_yaw + gyro_yaw;
+    }
+    if (pitch != 0)
+    {
+        *pitch = mouse_pitch + gyro_pitch;
+    }
+    return any;
+}
+
+int MioPan_InputGetGyroLook(void)
+{
+    return s_gyro_look;
+}
+
+void MioPan_InputSetGyroLook(int enabled)
+{
+    enabled = enabled != 0 ? 1 : 0;
+    if (enabled == s_gyro_look)
+    {
+        return;
+    }
+    s_gyro_look = enabled;
+
+    // Switch the pad's sensor with it, so a pad whose gyro is not wanted is
+    // not streaming 250 reports a second for nothing.
+    SyncGyroSensor();
+}
+
+float MioPan_InputGetGyroSensitivity(void)
+{
+    return s_gyro_sensitivity;
+}
+
+void MioPan_InputSetGyroSensitivity(float sensitivity)
+{
+    // Written so a NaN from a hand-edited file lands on the floor too.
+    if (!(sensitivity >= MIOPAN_GYRO_SENSITIVITY_MIN))
+    {
+        sensitivity = MIOPAN_GYRO_SENSITIVITY_MIN;
+    }
+    else if (sensitivity > MIOPAN_GYRO_SENSITIVITY_MAX)
+    {
+        sensitivity = MIOPAN_GYRO_SENSITIVITY_MAX;
+    }
+    s_gyro_sensitivity = sensitivity;
+}
+
+int MioPan_InputGetGyroInvertX(void)
+{
+    return s_gyro_invert_x;
+}
+
+void MioPan_InputSetGyroInvertX(int invert)
+{
+    s_gyro_invert_x = invert != 0 ? 1 : 0;
+}
+
+int MioPan_InputGetGyroInvertY(void)
+{
+    return s_gyro_invert_y;
+}
+
+void MioPan_InputSetGyroInvertY(int invert)
+{
+    s_gyro_invert_y = invert != 0 ? 1 : 0;
+}
+
+int MioPan_InputGetGyroTurnAxis(void)
+{
+    return s_gyro_turn_axis;
+}
+
+void MioPan_InputSetGyroTurnAxis(int axis)
+{
+    s_gyro_turn_axis = axis == MIOPAN_GYRO_TURN_ROLL ? MIOPAN_GYRO_TURN_ROLL
+                                                     : MIOPAN_GYRO_TURN_YAW;
+}
+
+int MioPan_InputGyroSettingsAreDefault(void)
+{
+    return s_gyro_look == 1 &&
+           s_gyro_sensitivity == MIOPAN_GYRO_SENSITIVITY_DEFAULT &&
+           s_gyro_invert_x == 0 && s_gyro_invert_y == 0 &&
+           s_gyro_turn_axis == MIOPAN_GYRO_TURN_YAW;
+}
+
+void MioPan_InputResetGyroSettings(void)
+{
+    s_gyro_sensitivity = MIOPAN_GYRO_SENSITIVITY_DEFAULT;
+    s_gyro_invert_x = 0;
+    s_gyro_invert_y = 0;
+    s_gyro_turn_axis = MIOPAN_GYRO_TURN_YAW;
+    MioPan_InputSetGyroLook(1);
+}
+
+void MioPan_InputGyroRecalibrate(void)
+{
+    ResetGyroCalibration();
+    SDL_Log("MioPan: gyro calibration restarted");
+}
+
+void MioPan_InputGetGyroStatus(MioPan_InputGyroStatus *out)
+{
+    const float to_deg = 180.0f / SDL_PI_F;
+    int         i;
+
+    if (out == 0)
+    {
+        return;
+    }
+
+    out->has_gamepad = s_gamepad != 0 ? 1 : 0;
+    out->has_gyro = s_gyro_has;
+    out->active = s_gyro_active;
+    out->aiming = GyroAiming();
+    out->rate_hz = s_gyro_rate_hz;
+    out->calibration = s_gyro_calibrated_s >= MIOPAN_GYRO_CALIBRATED_S
+                           ? 1.0f
+                           : s_gyro_calibrated_s / MIOPAN_GYRO_CALIBRATED_S;
+    for (i = 0; i < 3; i++)
+    {
+        out->bias_deg[i] = s_gyro_bias[i] * to_deg;
+    }
+    out->rate_yaw_deg = s_gyro_rate_yaw * to_deg;
+    out->rate_pitch_deg = s_gyro_rate_pitch * to_deg;
 }
 
 }

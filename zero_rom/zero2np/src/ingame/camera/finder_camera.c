@@ -20,9 +20,9 @@
 //   * the player, through SetFinderRot() -- d-pad or stick yaw and pitch, plus
 //     the reticle (plyr_wrk.fp) which the stick pushes around within a small
 //     box and which springs back to screen centre when the stick is released.
-//     On the PC the mouse turns the same two angles there as well; that and
-//     the capture request in FinderModeCameraCtrl() are the file's two PORT
-//     DEVIATIONs.
+//     On the PC the mouse and a gamepad's gyro turn the same two angles there
+//     as well; that and the look request in FinderModeCameraCtrl() are the
+//     file's two PORT DEVIATIONs.
 //
 // Angles are written as <degrees> * PI / 180.0f throughout.  Every one of the
 // five constants reproduces the ROM's stored bits exactly under EE GCC's
@@ -42,7 +42,7 @@
 #include "../../common/utility.h"               /* RotFvector / GetDist        */
 #include "../../common/variable.h"              /* plyr_wrk / opt_wrk / pad     */
 #include "../../graphics/graph3d/gra3d.h"       /* gra3dcam*                   */
-#include "../../miopan/io/miopan_input.h"       /* PORT: mouse look            */
+#include "../../miopan/io/miopan_input.h"       /* PORT: mouse and gyro look   */
 #include "../../system/os/system.h"             /* GetPALMode                  */
 #include "../../system/pad/pad.h"               /* paddat                      */
 #include "../photo/freq_camera.h"               /* FreqCamera                  */
@@ -117,12 +117,12 @@ void FinderModeCameraCtrl(void)
     }
 
     /* PORT DEVIATION -- no ROM counterpart.  The finder is up and the player
-     * holds it, so the PC port captures the mouse for aiming.  Asked every
-     * frame rather than toggled: the capture lapses by itself on the first
-     * frame this line is not reached, however the finder came down.  Asked
-     * here and not in SetFinderRot() so that a scripted swing or the paralysis
-     * wobble, which take the aim away for a few frames, do not let the cursor
-     * go and grab it back. */
+     * holds it, so the PC port captures the mouse for aiming and lets a
+     * gamepad's gyro aim too.  Asked every frame rather than toggled: the
+     * capture lapses by itself on the first frame this line is not reached,
+     * however the finder came down.  Asked here and not in SetFinderRot() so
+     * that a scripted swing or the paralysis wobble, which take the aim away
+     * for a few frames, do not let the cursor go and grab it back. */
     MioPan_InputRequestMouseLook();
 
     /* The eye, as an offset in the player's own frame.  -709 on Y is up: the
@@ -353,27 +353,28 @@ static void SetFinderRot(PLYR_WRK *pPlyrWrk, MOVE_BOX *pMoveBox)
 
     RotLimitChk(&pPlyrWrk->frot_x);                                     /* 282 */
 
-    /* PORT DEVIATION -- no ROM counterpart.  Mouse look.
+    /* PORT DEVIATION -- no ROM counterpart.  Mouse and gyro look.
      *
      * Not routed through pad[0].analog, because the stick path above cannot
      * carry it: FinderModePadChk() reduces each axis to on/off at +/-40, and
-     * the turn is then one of three fixed rates.  A mouse fed through that
-     * would only ever pick a speed.  Instead this frame's mouse motion, which
-     * the input layer has already scaled to radians, goes straight onto the
-     * same two angles the stick turns -- yaw wrapped, pitch held to the same
-     * +/-60 degrees -- after the ROM's own controls, so the pad and the d-pad
-     * keep working alongside it.
+     * the turn is then one of three fixed rates.  A mouse or a gyro fed
+     * through that would only ever pick a speed.  Instead this frame's mouse
+     * motion and gyro turn, which the input layer has already summed and
+     * scaled to radians, go straight onto the same two angles the stick turns
+     * -- yaw wrapped, pitch held to the same +/-60 degrees -- after the ROM's
+     * own controls, so the pad and the d-pad keep working alongside them.
      *
      * Scaled by the lens's FOV rate so that a zoomed view turns proportionally
      * slower and the world moves the same distance under the hand.  Not by
      * GetPALMode(): the stick's 1.2 makes up for 50 frames a second turning
-     * less per second, and a mouse turns by distance, not per frame. */
+     * less per second, and a mouse or a gyro turns by distance, not per
+     * frame. */
     {
         float yaw;
         float pitch;
         float zoom;
 
-        if (MioPan_InputMouseLook(&yaw, &pitch) != 0)
+        if (MioPan_InputAimLook(&yaw, &pitch) != 0)
         {
             zoom = m_plyr_camera.GetFOVRate();
             if (zoom > 1.0f)
