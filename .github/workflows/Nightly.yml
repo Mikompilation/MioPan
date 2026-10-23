@@ -84,7 +84,13 @@ jobs:
       matrix:
         sys:
           - { os: windows-latest, shell: pwsh, name: windows }
-          - { os: ubuntu-latest,  shell: bash, name: linux   }
+          # Linux builds inside Valve's Steam Runtime 3 "sniper" SDK (Debian 11,
+          # glibc 2.31), not on the runner: a binary needs at least the glibc it
+          # was linked against, and ubuntu-latest's is newer than SteamOS's.
+          - { os: ubuntu-latest,  shell: bash, name: linux,
+              container: 'registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest' }
+    # Empty for Windows, which runs on the host.
+    container: ${{ matrix.sys.container }}
     defaults:
       run:
         shell: ${{ matrix.sys.shell }}
@@ -114,17 +120,6 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
 
-      - name: Install Dependencies (Linux)
-        if: ${{ matrix.sys.os == 'ubuntu-latest' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zip build-essential git make pkg-config cmake ninja-build \
-            libasound2-dev libpulse-dev libaudio-dev libfribidi-dev libjack-dev libsndio-dev \
-            libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libxfixes-dev \
-            libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-            libdrm-dev libgbm-dev libgl1-mesa-dev libglu1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
-            libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libusb-1.0-0-dev
-
       - name: Build (Windows / MinGW)
         if: ${{ matrix.sys.os == 'windows-latest' }}
         shell: msys2 {0}
@@ -133,11 +128,37 @@ jobs:
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DMIKUPAN_COMPILE_SHADERS=OFF
           cmake --build build --target MioPan
 
-      - name: Build (Linux)
+      # The SDK already carries CMake, Ninja and every SDL development package.
+      # Its default gcc is 10; gcc-14 is the newer one it ships.
+      - name: Build (Linux / Steam Runtime)
         if: ${{ matrix.sys.os == 'ubuntu-latest' }}
+        env:
+          CC: gcc-14
+          CXX: g++-14
         run: |
+          git config --global --add safe.directory '*'
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DMIKUPAN_COMPILE_SHADERS=OFF
           cmake --build build --target MioPan
+
+      # Guards the point of the container.  SteamOS 3.8 ships glibc 2.41 and the
+      # Steam Runtime 3 floor is 2.31.  A newer GLIBC_ symbol, or libstdc++ linked
+      # dynamically again, means the build has outgrown that floor and may not
+      # start on an older SteamOS or distro.
+      - name: Check glibc floor (Linux)
+        if: ${{ matrix.sys.os == 'ubuntu-latest' }}
+        run: |
+          bin=build/MioPan/MioPan
+          objdump -p "$bin" | grep NEEDED
+          newest=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -uV | tail -n1)
+          echo "Newest glibc symbol version: $newest"
+          if [ "$(printf '%s\n' "$newest" GLIBC_2.31 | sort -V | tail -n1)" != GLIBC_2.31 ]; then
+            echo "::error::$bin needs $newest; the Steam Runtime 3 floor is GLIBC_2.31"
+            exit 1
+          fi
+          if objdump -p "$bin" | grep -qE 'NEEDED +lib(stdc\+\+|gcc_s)'; then
+            echo "::error::$bin links libstdc++ or libgcc_s dynamically; they should be static"
+            exit 1
+          fi
 
       - name: Zip Windows App
         if: ${{ matrix.sys.os == 'windows-latest' }}

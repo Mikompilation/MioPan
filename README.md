@@ -51,8 +51,32 @@ no error message, MinGW's `bin` folder is missing from `PATH`.
 
 ## Linux
 `GCC`, `CMake` and `Ninja` are required, plus SDL3's system development packages
-(X11/Wayland, ALSA/PulseAudio and so on). See the
-[nightly workflow](.github/workflows/Nightly.yml) for the full `apt` list.
+(X11/Wayland, ALSA/PulseAudio and so on). On Debian or Ubuntu:
+
+```sh
+sudo apt-get install build-essential git pkg-config cmake ninja-build \
+  libasound2-dev libpulse-dev libaudio-dev libfribidi-dev libjack-dev libsndio-dev \
+  libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libxfixes-dev \
+  libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+  libdrm-dev libgbm-dev libgl1-mesa-dev libglu1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+  libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libusb-1.0-0-dev
+```
+
+A build only runs on systems whose glibc is at least as new as the one it was
+built on, so a build from a current distro may not start on a Steam Deck. To
+build one that does, use Valve's Steam Runtime 3 SDK (glibc 2.31), as the
+nightly builds do:
+
+```sh
+docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" \
+  registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest \
+  sh -c 'CC=gcc-14 CXX=g++-14 cmake -B build-steamrt -G Ninja -DCMAKE_BUILD_TYPE=Release \
+           -DMIKUPAN_COMPILE_SHADERS=OFF &&
+         cmake --build build-steamrt --target MioPan'
+```
+
+`-DMIKUPAN_COMPILE_SHADERS=OFF` reuses the shader bytecode checked into
+`resources/shaders` instead of building SDL_shadercross inside the container.
 
 # Game files
 MioPan does not include any game data. You must provide `IMG_BD.BIN` from your own

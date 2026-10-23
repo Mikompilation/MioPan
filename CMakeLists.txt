@@ -29,6 +29,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(WIN32 AND NOT MSVC)
     set(CMAKE_EXE_LINKER_FLAGS "-static")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The nightly is built in the Steam Runtime 3 SDK for its old glibc, but
+    # with its gcc-14, whose libstdc++ is newer than the one sniper and older
+    # distros carry.  Link the C++ runtime in.  glibc itself has to stay
+    # dynamic: SDL dlopens the GPU drivers and windowing libraries through it.
+    string(APPEND CMAKE_EXE_LINKER_FLAGS " -static-libstdc++ -static-libgcc")
 endif()
 
 if(WIN32)
