@@ -176,6 +176,11 @@ void MioPan_InputResetBindings(void);
 void MioPan_InputSetSuppressed(int suppressed);
 int  MioPan_InputIsSuppressed(void);
 
+// The same hold, raised by the RmlUi menus while one is open and until the
+// press that closed it has been let go.  Kept apart from the rebinding UI's so
+// neither can lift the other's; the game is suppressed while either is up.
+void MioPan_InputSetMenuSuppressed(int suppressed);
+
 // 1 if every binding still matches the built-in defaults.  The settings file
 // writes the section either way — it is meant to be read and hand-edited, so
 // showing the defaults is the point — and this exists for the rebinding UI,

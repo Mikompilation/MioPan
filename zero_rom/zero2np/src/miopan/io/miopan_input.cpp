@@ -90,7 +90,10 @@ static int                       s_bindings_ready;
 // read straight from SDL each time.
 static float s_stick_ramp[MIOPAN_PAD_STICK_COUNT];
 
-// Raised by the rebinding UI while it waits for a key.  See the header.
+// Raised by the rebinding UI while it waits for a key, and by the RmlUi menus
+// while one holds the controls; s_suppressed is either.  See the header.
+static int s_rebind_suppressed;
+static int s_menu_suppressed;
 static int s_suppressed;
 
 // Which device the player asked for, by GUID; empty means "first available".
@@ -1139,9 +1142,9 @@ int MioPan_InputSetStickBinding(int stick, const MioPan_InputStickBinding *in)
     return 1;
 }
 
-void MioPan_InputSetSuppressed(int suppressed)
+static void ApplySuppression(void)
 {
-    s_suppressed = suppressed != 0 ? 1 : 0;
+    s_suppressed = (s_rebind_suppressed != 0 || s_menu_suppressed != 0) ? 1 : 0;
 
     // Drop whatever deflection the digital keys had built up, so releasing
     // suppression does not hand the game a stick that is still pushed over.
@@ -1151,6 +1154,18 @@ void MioPan_InputSetSuppressed(int suppressed)
         memset(s_stick_ramp, 0, sizeof(s_stick_ramp));
         ClearMouseButtons();
     }
+}
+
+void MioPan_InputSetSuppressed(int suppressed)
+{
+    s_rebind_suppressed = suppressed != 0 ? 1 : 0;
+    ApplySuppression();
+}
+
+void MioPan_InputSetMenuSuppressed(int suppressed)
+{
+    s_menu_suppressed = suppressed != 0 ? 1 : 0;
+    ApplySuppression();
 }
 
 int MioPan_InputIsSuppressed(void)

@@ -50,6 +50,7 @@ include(spdlog)
 include(cglm)
 include(imgui)
 include(implot)
+include(rmlui)
 include(shadercross)
 include(ffmpeg)
 
@@ -106,6 +107,7 @@ target_link_libraries(MioPan PRIVATE
     cglm
     imgui::imgui
     implot::implot
+    RmlUi::RmlUi
 )
 #
 # The MPEG-2 decoder behind sceMpegGetPicture(); see cmake/ffmpeg.cmake.  When
@@ -129,6 +131,15 @@ add_custom_command(TARGET MioPan POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_SOURCE_DIR}/resources"
             "$<TARGET_FILE_DIR:MioPan>/resources"
+)
+
+# The UI's typeface, from the RmlUi checkout; see cmake/rmlui.cmake.
+add_custom_command(TARGET MioPan POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:MioPan>/resources/fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${MIOPAN_RMLUI_FONT_FILES}
+            "$<TARGET_FILE_DIR:MioPan>/resources/fonts"
 )
 
 # ---- build stamp for the log banner -------------------------------------

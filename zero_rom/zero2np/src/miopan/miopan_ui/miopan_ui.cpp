@@ -1,4 +1,6 @@
 #include "miopan_ui.h"
+#include "miopan_rml_hello.h"
+#include "miopan_rmlui.h"
 #include "miopan_ui_assists.h"
 #include "miopan_ui_events.h"
 #include "miopan_ui_title.h"
@@ -1394,11 +1396,13 @@ void UpdateUiMouse()
     }
 
     /* A menu dropped from the bar, or a window that is nothing but settings to
-     * click.  The profiler's windows are left out: they are read rather than
-     * used, and leaving the graphs up must not cost finder aiming. */
+     * click -- or an RmlUi menu, which wants the cursor just the same.  The
+     * profiler's windows are left out: they are read rather than used, and
+     * leaving the graphs up must not cost finder aiming. */
     g_ui_mouse_busy =
         g_show_controls || g_show_data_folder || io.WantTextInput ||
-        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) ||
+        MioPanRml::WantsInput();
 
     /* Hover means nothing while captured -- BeginFrame() has the overlay
      * ignoring the mouse then -- so this only ever describes a free cursor. */
@@ -3011,6 +3015,18 @@ void DrawDebugMenu()
     ImGui::TextDisabled("Developer");
     MioPanUi::DrawEventsMenuItem();
     MioPanUi::DrawDeveloperItems();
+    if (ImGui::MenuItem("RmlUi hello world", nullptr,
+                        MioPanRmlHello::IsVisible()))
+    {
+        if (MioPanRmlHello::IsVisible())
+        {
+            MioPanRmlHello::Hide();
+        }
+        else
+        {
+            MioPanRmlHello::Show();
+        }
+    }
 
     ImGui::EndMenu();
 }

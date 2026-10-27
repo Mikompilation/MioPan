@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Hello, world</title>
+    <link type="text/rcss" href="hello_world.rcss"/>
+</head>
+<body>
+    <div id="panel">
+        <h1>Hello, world</h1>
+        <p>RmlUi is running inside MioPan.</p>
+        <button id="ok" autofocus>OK</button>
+    </div>
+</body>
+</rml>

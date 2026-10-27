@@ -33,9 +33,9 @@ What this means in practice:
 
 # Build
 The build fetches its dependencies automatically (SDL3, SDL_shadercross, spdlog,
-cglm, Dear ImGui, ImPlot). FFmpeg, used for the game's movies, is built from
-source on Linux. Windows uses the prebuilt tree in `extern/ffmpeg`; without
-that tree, Windows builds play movie audio over a black screen.
+cglm, Dear ImGui, ImPlot, RmlUi, FreeType). FFmpeg, used for the game's movies,
+is built from source on Linux. Windows uses the prebuilt tree in `extern/ffmpeg`;
+without that tree, Windows builds play movie audio over a black screen.
 
 ```sh
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo

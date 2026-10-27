@@ -7,6 +7,7 @@
 #include "../miopan_config.h"
 #include "../miopan_profiler.h"
 #include "../os/miopan_pacing.h"
+#include "../miopan_ui/miopan_rmlui.h"
 #include "../miopan_ui/miopan_ui.h"
 #include "miopan_video.h"
 #include "iop_voice.h"
@@ -1235,6 +1236,8 @@ bool g_display_mode_active;
 /* The overlay a presenter thread draws: its packet's snapshot.  Null on the
  * game thread, which draws ImGui's own draw data. */
 thread_local const MioPanUi::DrawSnapshot *g_frame_ui;
+/* The same for the RmlUi menus. */
+thread_local const MioPanRml::DrawSnapshot *g_frame_rml;
 /* What the stats line and the stutter note report of the frame in display
  * mode, where the game thread's own copy of it has gone to the presenter by
  * the time they are written. */
@@ -4319,6 +4322,9 @@ void ProcessEvent(const SDL_Event &event)
     if (!g_holding_in_background || event.type != SDL_EVENT_MOUSE_MOTION)
     {
         MioPanUi::ProcessEvent(&event);
+        /* Ahead of the input layer: a menu that closes on this event lifts
+         * its hold on the controls only once they are all let go. */
+        MioPanRml::ProcessEvent(&event);
     }
 
     /* Mouse buttons, the wheel and finder mouse look.  Every event, not just
@@ -9486,9 +9492,19 @@ bool EnsureRenderer()
     {
         return false;
     }
-    /* atexit is LIFO: shut ImGui down first, then release cache resources. */
+    /* The same target as ImGui's, for the same reason.  Not fatal: without
+     * its shaders the game runs on with no RmlUi menus.  The two shaders sit
+     * outside the material table for the reason the present pass's do, and
+     * are handed over -- MioPanRml releases them. */
+    MioPanRml::Init(
+        g_window, g_device, g_output_format,
+        LoadShader("rmlui.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, 1),
+        LoadShader("rmlui.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 0));
+    /* atexit is LIFO: shut the UIs down first, then release cache
+     * resources. */
     std::atexit(ShutdownMeshCache);
     std::atexit(MioPanUi::Shutdown);
+    std::atexit(MioPanRml::Shutdown);
 
     g_vertices.reserve(kInitialVertexBufferSize / sizeof(SpriteVertex));
     g_mesh_colours.reserve(kInitialMeshColourBufferSize /
@@ -11678,11 +11694,13 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
      * resample rather than through it, so the debug overlay stays legible over
      * a 640x448 picture.  One ImGui frame feeds every present of it, so a
      * repeated present carries the overlay instead of flickering it at the
-     * logical rate. */
+     * logical rate.  The RmlUi menus go first in the same pass, so the debug
+     * overlay stays on top of them. */
+    const bool rml_ready = MioPanRml::PrepareDrawData(g_frame_rml, cmd);
     const bool ui_ready = g_frame_ui != nullptr
                               ? MioPanUi::PrepareDrawDataFrom(g_frame_ui, cmd)
                               : MioPanUi::PrepareDrawData(cmd);
-    if (ui_ready)
+    if (rml_ready || ui_ready)
     {
         SDL_GPUColorTargetInfo ui_target{};
         ui_target.texture = output_texture;
@@ -11695,11 +11713,16 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
             SDL_BeginGPURenderPass(cmd, &ui_target, 1, nullptr);
         if (ui_pass != nullptr)
         {
-            if (g_frame_ui != nullptr)
+            if (rml_ready)
+            {
+                MioPanRml::RenderDrawData(g_frame_rml, cmd, ui_pass,
+                                          swapchain_width, swapchain_height);
+            }
+            if (ui_ready && g_frame_ui != nullptr)
             {
                 MioPanUi::RenderDrawDataFrom(g_frame_ui, cmd, ui_pass);
             }
-            else
+            else if (ui_ready)
             {
                 MioPanUi::RenderDrawData(cmd, ui_pass);
             }
@@ -12320,6 +12343,7 @@ struct FramePacket
     DepthProbe depth_probes[MIOPAN_DEPTH_PROBE_SLOTS];
     SkyFollow sky_follow[SKY_FOLLOW_LAYERS];
     MioPanUi::DrawSnapshot *ui = nullptr;
+    MioPanRml::DrawSnapshot *rml = nullptr;
 
     /* Decided once per tick on the game thread, as the field loop does. */
     bool interpolate = false;
@@ -12818,6 +12842,7 @@ bool HandOffFrame()
     packet->interpolate = interpolate;
     packet->blend_geometry = blend_geometry;
     MioPanUi::CaptureDrawData(&packet->ui);
+    MioPanRml::CaptureDrawData(&packet->rml);
     StampPacketTiming(*packet, MioPan_ProfilerNow());
 
     SDL_LockMutex(g_packet_lock);
@@ -12925,6 +12950,7 @@ void AdoptPacket(uint64_t slot)
     SDL_UnlockMutex(g_packet_lock);
 
     g_frame_ui = best->ui;
+    g_frame_rml = best->rml;
     g_frame_active = true;
     g_shadow_valid = false;
     g_packet_first_present_done = false;
@@ -12970,6 +12996,7 @@ void ReturnCurrentPacket()
     }
     SDL_UnlockMutex(g_packet_lock);
     g_frame_ui = nullptr;
+    g_frame_rml = nullptr;
     g_frame_active = false;
 }
 
@@ -13283,6 +13310,8 @@ void ReleasePacketSlots()
         packet.animated_mesh_buffer_size = 0;
         MioPanUi::FreeDrawData(packet.ui);
         packet.ui = nullptr;
+        MioPanRml::FreeDrawData(packet.rml);
+        packet.rml = nullptr;
         packet.status = PACKET_FREE;
         packet.seq = 0;
     }
@@ -14306,6 +14335,7 @@ void MioPan_RendererEndFrame(void)
     SealSkyFollow();
     MioPanUi::Draw();
     MioPanUi::EndFrame();
+    MioPanRml::Frame();
     presented = false;
     present_due = g_frame_active && ShouldPresentFrame();
     if (g_frame_active && !present_due &&
