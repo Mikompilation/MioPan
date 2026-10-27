@@ -63,6 +63,9 @@ void MioPan_VideoEnd(void);
 int  MioPan_VideoIsLive(void);
 int  MioPan_VideoGsAddr(void);
 
+/* Changes when a new movie arms the direct path, even at the same GS address. */
+unsigned int MioPan_VideoGeneration(void);
+
 
 /* The publisher's two calls.  BeginFrame hands back a `width` x `height` RGBA
  * staging buffer to decode into -- tightly packed, `width` * 4 bytes per row --

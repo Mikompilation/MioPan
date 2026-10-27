@@ -42,6 +42,7 @@ bool g_has_frame   = false;
  * is the movie's once for every textured draw in the game, so this is on the
  * hot path of a frame that has nothing to do with movies. */
 std::atomic<int> g_gs_addr{-1};
+std::atomic<unsigned int> g_generation{0};
 }
 
 extern "C" {
@@ -53,9 +54,8 @@ void MioPan_VideoBegin(int gs_addr)
         return;
     }
 
-    /* A second movie starting at the same address keeps whatever picture is
-     * published; a different one drops it, because the frame that is waiting
-     * belongs to the film that has just ended. */
+    /* Repeated setup for the active movie keeps its published picture.
+     * A new movie follows VideoEnd(), even when it uses the same address. */
     if (g_gs_addr.load(std::memory_order_relaxed) == gs_addr)
     {
         return;
@@ -66,6 +66,7 @@ void MioPan_VideoBegin(int gs_addr)
         g_has_frame = false;
     }
 
+    ++g_generation;
     g_gs_addr.store(gs_addr, std::memory_order_release);
 }
 
@@ -80,6 +81,11 @@ void MioPan_VideoEnd(void)
 int MioPan_VideoIsLive(void)
 {
     return g_gs_addr.load(std::memory_order_acquire) >= 0 ? 1 : 0;
+}
+
+unsigned int MioPan_VideoGeneration(void)
+{
+    return g_generation.load(std::memory_order_acquire);
 }
 
 int MioPan_VideoGsAddr(void)

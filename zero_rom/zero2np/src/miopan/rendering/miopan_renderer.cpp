@@ -6093,7 +6093,8 @@ TextureEntry *GetVideoTexture(const sceGsTex0 *tex0)
         entry = g_texture_cache.end();
     }
 
-    if (entry == g_texture_cache.end())
+    const bool fresh_texture = entry == g_texture_cache.end();
+    if (fresh_texture)
     {
         SDL_GPUTexture *texture = CreateTextureResource(want_w, want_h);
         if (texture == nullptr)
@@ -6105,20 +6106,6 @@ TextureEntry *GetVideoTexture(const sceGsTex0 *tex0)
         try
         {
             entry = g_texture_cache.emplace(kVideoTextureHash, fresh).first;
-
-            /* Blacken it before anything samples it.  A film is drawn for a
-             * frame or two before its first picture decodes -- playpss.c only
-             * arms this path once it knows the geometry -- and a freshly
-             * created GPU texture holds undefined memory.  sceMpegGetPicture()
-             * blanks the ROM's picture buffer once per movie for exactly the
-             * same reason. */
-            PendingTextureUpload blank{};
-            blank.hash = kVideoTextureHash;
-            blank.texture = texture;
-            blank.width = (Uint32)want_w;
-            blank.height = (Uint32)want_h;
-            blank.rgba.assign((size_t)want_w * (size_t)want_h * 4u, 0);
-            g_pending_texture_uploads.push_back(std::move(blank));
         }
         catch (const std::bad_alloc &)
         {
@@ -6127,6 +6114,28 @@ TextureEntry *GetVideoTexture(const sceGsTex0 *tex0)
                 g_texture_cache.erase(entry);
             }
             SDL_ReleaseGPUTexture(g_device, texture);
+            return nullptr;
+        }
+    }
+
+    static unsigned int uploaded_generation = 0;
+    const unsigned int generation = MioPan_VideoGeneration();
+    if (fresh_texture || uploaded_generation != generation)
+    {
+        try
+        {
+            // A reused texture still contains the previous movie's last frame.
+            PendingTextureUpload blank{};
+            blank.hash = kVideoTextureHash;
+            blank.texture = entry->second.texture;
+            blank.width = (Uint32)want_w;
+            blank.height = (Uint32)want_h;
+            blank.rgba.assign((size_t)want_w * (size_t)want_h * 4u, 0);
+            g_pending_texture_uploads.push_back(std::move(blank));
+            uploaded_generation = generation;
+        }
+        catch (const std::bad_alloc &)
+        {
             return nullptr;
         }
     }
