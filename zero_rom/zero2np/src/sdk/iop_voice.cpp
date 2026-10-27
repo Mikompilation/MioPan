@@ -491,7 +491,9 @@ static s32 DecodeVolume(u_short val)
     if (val & 0x8000)
         return 0;
 
-    return (s32)(val & 0x7fff);
+    // Fixed levels are signed 15-bit values; the mixer uses Q15.
+    const int level = val & 0x7fff;
+    return (level < 0x4000 ? level : level - 0x8000) * 2;
 }
 
 static s32 ApplyEnvelope(s32 volume, s32 envelope)
@@ -856,10 +858,8 @@ static void MixReverb(void)
  * The master volume is applied per core at the end, where the hardware applies
  * it -- to the dry mix and the wet return together.  The core-1-feeds-core-2
  * chain (SD_P_AVOLL/AVOLR, and MMIX's SIN bits) is deliberately NOT modelled:
- * both cores' output is simply summed.  On hardware core 0 would pass through
- * core 1's master volume as well and end up 6 dB below core 1's own voices;
- * reproducing that would rebalance every sound in the game, which is a separate
- * question from whether reverb exists.
+ * both cores' output is simply summed. The extra core-1 master gain can affect
+ * their balance; modelling that routing is separate from volume decoding.
  *
  * Called from the mixer thread with the voice lock held. */
 static void MixBlock(void)
