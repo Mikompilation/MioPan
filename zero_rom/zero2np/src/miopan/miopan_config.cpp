@@ -27,6 +27,7 @@ MioPan_Config miopan_config = {
         /* .render_mode       = */ MIOPAN_RENDER_RES_MATCH_WINDOW,
         /* .render_scale      = */ 1.0f,
         /* .upscale_filter    = */ MIOPAN_RENDER_FILTER_LINEAR,
+        /* .smooth_2d         = */ 1,
         /* Both off by default, and for the same reason HDR is: they are
          * additions rather than reconstructions, and each has a cost the port
          * should not spend on a player's behalf.  MSAA in particular is not
@@ -1448,6 +1449,7 @@ static void ConfigLoadOnce(void)
     ReadEnum("render", "mode", kRenderModes, &r->render_mode);
     ReadFloat("render", "scale", &r->render_scale);
     ReadEnum("render", "upscale_filter", kFilters, &r->upscale_filter);
+    ReadInt("render", "smooth_2d", &r->smooth_2d);
     ReadInt("render", "msaa", &r->msaa_samples);
     ReadInt("render", "anisotropy", &r->anisotropy);
     ReadFloat("render", "aspect_ratio", &r->aspect_ratio);
@@ -1627,6 +1629,8 @@ int MioPan_ConfigSave(void)
         "scale = %.4f\n"
         "; nearest = sharp but uneven at non-integer scale; linear = soft\n"
         "upscale_filter = %s\n"
+        "; Bilinear text and sprites; 0 preserves the game's texture filtering.\n"
+        "smooth_2d = %d\n"
         "; Multisample anti-aliasing on the finished frame: 1 (off), 2, 4, 8.\n"
         ";   Only the image the game is rasterised into is multisampled; it is\n"
         ";   resolved before anything reads it back, so the effects, the\n"
@@ -1812,6 +1816,7 @@ int MioPan_ConfigSave(void)
         EnumToName(kRenderModes, r->render_mode),
         (double)r->render_scale,
         EnumToName(kFilters, r->upscale_filter),
+        r->smooth_2d,
         r->msaa_samples,
         r->anisotropy,
         EnumToName(kAspectModes, r->aspect_mode),
@@ -1991,6 +1996,7 @@ void MioPan_ConfigApply(void)
     MioPan_RendererSetAspectMode(r->aspect_mode, r->aspect_ratio);
     MioPan_RendererSetRenderResolution(r->render_mode, r->render_scale);
     MioPan_RendererSetUpscaleFilter(r->upscale_filter);
+    MioPan_RendererSetSmooth2d(r->smooth_2d);
     MioPan_RendererSetMsaaSamples(r->msaa_samples);
     MioPan_RendererSetAnisotropy(r->anisotropy);
     MioPan_RendererSetLightingMode(r->lighting_mode);
@@ -2047,6 +2053,7 @@ void MioPan_ConfigCapture(void)
     MioPan_RendererGetAspectMode(&r->aspect_mode, &r->aspect_ratio);
     MioPan_RendererGetRenderResolution(&r->render_mode, &r->render_scale);
     r->upscale_filter = MioPan_RendererGetUpscaleFilter();
+    r->smooth_2d = MioPan_RendererGetSmooth2d();
     /* The requested levels, not the granted ones: a device that cannot do 8x
      * today must not rewrite the player's choice into the file. */
     r->msaa_samples = MioPan_RendererGetMsaaSamples();

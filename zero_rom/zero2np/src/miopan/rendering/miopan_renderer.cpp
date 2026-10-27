@@ -2709,6 +2709,7 @@ thread_local float g_view_extend_y = 1.0f;
 int g_render_res_mode = MIOPAN_RENDER_RES_MATCH_WINDOW;
 float g_render_res_scale = 1.0f;
 int g_upscale_filter = MIOPAN_RENDER_FILTER_LINEAR;
+bool g_smooth_2d = true;
 int g_window_mode = MIOPAN_WINDOW_MODE_WINDOWED;
 int g_aspect_mode = MIOPAN_ASPECT_AUTO;
 float g_aspect_custom = 16.0f / 9.0f;
@@ -9985,6 +9986,10 @@ void QueueQuad(SDL_GPUTexture *texture, int texture_width, int texture_height,
     command.vertex_fog = vertex_fog;
     command.min_linear = min_linear;
     command.mag_linear = mag_linear;
+    if (source == DRAW_SOURCE_GENERIC && g_smooth_2d)
+    {
+        command.min_linear = command.mag_linear = true;
+    }
     command.preserve_original_aspect = preserve_original_aspect;
     command.clip_z_reversed = clip_z_reversed;
     ApplyGsDrawEnv(command);
@@ -13892,6 +13897,16 @@ void MioPan_RendererSetUpscaleFilter(int filter)
 int MioPan_RendererGetUpscaleFilter(void)
 {
     return g_upscale_filter;
+}
+
+void MioPan_RendererSetSmooth2d(int enabled)
+{
+    g_smooth_2d = enabled != 0;
+}
+
+int MioPan_RendererGetSmooth2d(void)
+{
+    return g_smooth_2d;
 }
 
 void MioPan_RendererSetMsaaSamples(int samples)

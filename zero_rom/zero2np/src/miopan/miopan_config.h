@@ -32,6 +32,7 @@ typedef struct MioPan_ConfigRenderer
     int   render_mode;       /* MIOPAN_RENDER_RES_*    */
     float render_scale;
     int   upscale_filter;    /* MIOPAN_RENDER_FILTER_* */
+    int   smooth_2d;         /* bilinear text and sprite textures */
     int   msaa_samples;      /* 1 (off), 2, 4 or 8     */
     int   anisotropy;        /* 1 (off), 2, 4, 8 or 16 */
     int   aspect_mode;       /* MIOPAN_ASPECT_*        */

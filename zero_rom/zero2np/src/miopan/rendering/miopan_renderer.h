@@ -71,6 +71,10 @@ enum
 void MioPan_RendererSetUpscaleFilter(int filter);
 int  MioPan_RendererGetUpscaleFilter(void);
 
+/* Texture filtering for text and sprites, independent of screen upscaling. */
+void MioPan_RendererSetSmooth2d(int enabled);
+int  MioPan_RendererGetSmooth2d(void);
+
 /* Multisample anti-aliasing, on the final image and nothing else.
  *
  * 1, 2, 4 or 8 samples; 1 is off and is the default.  The frame the game is

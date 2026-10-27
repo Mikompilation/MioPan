@@ -11,10 +11,13 @@ end = source.index('\nstruct TextureUploadSlice', start)
 with tempfile.TemporaryDirectory(prefix='miopan-video-') as folder:
     folder = Path(folder)
     (folder / 'video-texture.inc').write_text(source[start:end])
-    for name in ['movie-reset']:
+    start = source.index('void QueueQuad(')
+    end = source.index('\n/* `preserve_original_aspect`', start)
+    (folder / 'sprite-quad.inc').write_text(source[start:end])
+    for name in ['movie-reset', 'sprite-filter']:
         binary = folder / name
         subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-pthread', '-I', str(root),
                         '-I', str(folder), str(root / f'tests/video/{name}.cpp'),
                         str(renderer.with_name('miopan_video.cpp')), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
-print('Movie texture reset checks passed.')
+print('Movie reset and optional sprite filtering checks passed.')
