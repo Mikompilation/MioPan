@@ -13,7 +13,7 @@
  *      to about 42 ms every 2 ms.
  *    - The resampler is ours: a 12-bit fractional counter stepped by the voice's
  *      SD_VP_PITCH (0x1000 == 48000 Hz), with 4-point interpolation.
- *    - ADSR runs per OUTPUT sample, in Q16 over the SPU2's 0..0x7fff level.
+ *    - ADSR runs per OUTPUT sample with register-derived counters and 15-bit levels.
  *
  *  It used to be one SDL_AudioStream per voice, with SDL summing them and
  *  SDL_SetAudioStreamFrequencyRatio() doing the resampling.  That could not
@@ -97,9 +97,6 @@ typedef int32_t s32;
 
 #define ADSR_LEVEL_BITS         15
 #define ADSR_LEVEL_MAX          ((1 << ADSR_LEVEL_BITS) - 1)
-#define ADSR_FP_SHIFT           16
-#define ADSR_LEVEL_MAX_FP       ((s32)((long long)ADSR_LEVEL_MAX << ADSR_FP_SHIFT))
-#define ADSR_MIN_STEP_FP        (1 << 8)
 
 /* Pitch is 12.12: 0x1000 is one source sample per output sample. */
 #define PITCH_ONE               0x1000
@@ -136,7 +133,8 @@ typedef struct
     u_short  pitch;
     u_short  adsr1, adsr2;
 
-    s32      adsr_level;            /* Q16 over 0..0x7fff */
+    s32      adsr_level;            /* 0..0x7fff */
+    u_int    adsr_counter;
     VOICE_ADSR_PHASE adsr_phase;
 
     /* Index of the other channel of a multi-channel stream, or -1.  Armed by
@@ -298,185 +296,90 @@ static void FillAdpcmHeader(IopVoice *v)
 }
 
 /* --------------------------------------------------------------------------
- *  ADSR
- *
- *  SPU2 steps its envelope off hardware counters; this approximates the
- *  register bit layout and the curve shapes at the host sample rate.
+ *  ADSR: register-derived steps, clocked at the output sample rate.
  * ------------------------------------------------------------------------ */
-
-static int  AdsrConfigured(const IopVoice *v)   { return v->adsr1 != 0 || v->adsr2 != 0; }
-static int  AdsrAttackRate(const IopVoice *v)   { return (v->adsr1 >> 8) & 0x7f; }
-static int  AdsrAttackExp(const IopVoice *v)    { return (v->adsr1 & 0x8000) != 0; }
-static int  AdsrDecayRate(const IopVoice *v)    { return (v->adsr1 >> 4) & 0x0f; }
-static int  AdsrReleaseRate(const IopVoice *v)  { return v->adsr2 & 0x1f; }
-static int  AdsrReleaseExp(const IopVoice *v)   { return (v->adsr2 & 0x20) != 0; }
-static int  AdsrSustainRate(const IopVoice *v)  { return (v->adsr2 >> 6) & 0x7f; }
-static int  AdsrSustainDecrease(const IopVoice *v) { return (v->adsr2 & 0x2000) != 0; }
-static int  AdsrSustainMode(const IopVoice *v)  { return (v->adsr2 >> 14) & 0x03; }
 
 static void BeginVoiceEnd(IopVoice *v);
 
-static s32 AdsrSustainLevel(const IopVoice *v)
-{
-    const int level = v->adsr1 & 0x0f;
-    return (s32)(((long long)(level + 1) * ADSR_LEVEL_MAX_FP) / 16);
-}
-
-static s32 ClampAdsrLevel(long long level)
-{
-    if (level <= 0)                  return 0;
-    if (level >= ADSR_LEVEL_MAX_FP)  return ADSR_LEVEL_MAX_FP;
-    return (s32)level;
-}
-
-static s32 AdsrRateStep(int rate, int max_rate, int fastest_samples)
-{
-    const int fastness = max_rate - rate + 1;
-
-    long long step = ((long long)fastness * fastness * ADSR_LEVEL_MAX_FP)
-                   / ((long long)(max_rate + 1) * (max_rate + 1) * fastest_samples);
-
-    if (step < ADSR_MIN_STEP_FP)
-        step = ADSR_MIN_STEP_FP;
-
-    return (s32)step;
-}
-
-static s32 AdsrCurvedStep(s32 base_step, s32 level, int increasing)
-{
-    const s32 curve = increasing ? ADSR_LEVEL_MAX_FP - level : level;
-    long long step  = ((long long)base_step * curve) / ADSR_LEVEL_MAX_FP;
-
-    if (step < ADSR_MIN_STEP_FP)
-        step = ADSR_MIN_STEP_FP;
-
-    return (s32)step;
-}
-
 static void AdvanceVoiceAdsr(IopVoice *v)
 {
-    s32       step;
-    const s32 sustain_level = AdsrSustainLevel(v);
-
-    if (!AdsrConfigured(v))
-    {
-        v->adsr_level = ADSR_LEVEL_MAX_FP;
-        v->adsr_phase = VOICE_ADSR_SUSTAIN;
-        return;
-    }
-
+    int shift = 0;
+    int step = 0;
+    int target = 0;
+    bool decreasing = false;
+    bool exponential = false;
     switch (v->adsr_phase)
     {
     case VOICE_ADSR_ATTACK:
-        step = AdsrRateStep(AdsrAttackRate(v), 0x7f, 32);
-        if (AdsrAttackExp(v))
-            step = AdsrCurvedStep(step, v->adsr_level, 1);
-
-        v->adsr_level = ClampAdsrLevel((long long)v->adsr_level + step);
-        if (v->adsr_level >= ADSR_LEVEL_MAX_FP)
-        {
-            v->adsr_level = ADSR_LEVEL_MAX_FP;
-            v->adsr_phase = VOICE_ADSR_DECAY;
-        }
+        shift = (v->adsr1 >> 10) & 31;
+        step = 7 - ((v->adsr1 >> 8) & 3);
+        target = ADSR_LEVEL_MAX;
+        exponential = (v->adsr1 & 0x8000) != 0;
         break;
-
     case VOICE_ADSR_DECAY:
-        if (v->adsr_level <= sustain_level)
-        {
-            v->adsr_level = sustain_level;
-            v->adsr_phase = VOICE_ADSR_SUSTAIN;
-            break;
-        }
-
-        step = AdsrRateStep(AdsrDecayRate(v), 0x0f, 64);
-        step = AdsrCurvedStep(step, v->adsr_level, 0);
-        if (v->adsr_level - sustain_level <= step)
-        {
-            v->adsr_level = sustain_level;
-            v->adsr_phase = VOICE_ADSR_SUSTAIN;
-        }
-        else
-        {
-            v->adsr_level -= step;
-        }
+        shift = (v->adsr1 >> 4) & 15;
+        step = -8;
+        target = ((v->adsr1 & 15) + 1) * 2048;
+        decreasing = exponential = true;
         break;
-
     case VOICE_ADSR_SUSTAIN:
-        if (AdsrSustainMode(v) == 0)
-            break;
-
-        step = AdsrRateStep(AdsrSustainRate(v), 0x7f, 64);
-        if (AdsrSustainDecrease(v))
-        {
-            if (AdsrSustainMode(v) >= 2)
-                step = AdsrCurvedStep(step, v->adsr_level, 0);
-            v->adsr_level = ClampAdsrLevel((long long)v->adsr_level - step);
-        }
-        else
-        {
-            if (AdsrSustainMode(v) >= 2)
-                step = AdsrCurvedStep(step, v->adsr_level, 1);
-            v->adsr_level = ClampAdsrLevel((long long)v->adsr_level + step);
-        }
-
-        if (v->adsr_level == 0)
-        {
-            v->adsr_phase = VOICE_ADSR_OFF;
-            BeginVoiceEnd(v);
-        }
+        shift = (v->adsr2 >> 8) & 31;
+        decreasing = (v->adsr2 & 0x4000) != 0;
+        step = 7 - ((v->adsr2 >> 6) & 3);
+        if (decreasing) step = -step - 1;
+        exponential = (v->adsr2 & 0x8000) != 0;
         break;
-
     case VOICE_ADSR_RELEASE:
-        step = AdsrRateStep(AdsrReleaseRate(v), 0x1f, 64);
-        if (AdsrReleaseExp(v))
-            step = AdsrCurvedStep(step, v->adsr_level, 0);
-
-        if (v->adsr_level <= step)
-        {
-            v->adsr_level = 0;
-            v->adsr_phase = VOICE_ADSR_OFF;
-            BeginVoiceEnd(v);
-        }
-        else
-        {
-            v->adsr_level -= step;
-        }
+        shift = v->adsr2 & 31;
+        step = -8;
+        decreasing = true;
+        exponential = (v->adsr2 & 0x20) != 0;
         break;
-
     case VOICE_ADSR_OFF:
     default:
         v->adsr_level = 0;
-        break;
+        return;
     }
+
+    u_int increment = 0x8000u >> (shift > 11 ? shift - 11 : 0);
+    step *= 1 << (shift < 11 ? 11 - shift : 0);
+    if (exponential && decreasing)
+        step = (step * v->adsr_level) >> 15;
+    else if (exponential && v->adsr_level > 0x6000)
+        increment >>= 2;
+
+    // Even the slowest rate must eventually advance the hardware counter.
+    v->adsr_counter += increment == 0 ? 1 : increment;
+    if (v->adsr_counter >= 0x8000)
+    {
+        v->adsr_counter = 0;
+        const int level = v->adsr_level + step;
+        v->adsr_level = level < 0 ? 0 : (level > ADSR_LEVEL_MAX ? ADSR_LEVEL_MAX : level);
+    }
+
+    if (v->adsr_phase == VOICE_ADSR_SUSTAIN)
+    {
+        if (v->adsr_level > 0) return;
+    }
+    else if (decreasing ? v->adsr_level > target : v->adsr_level < target)
+    {
+        return;
+    }
+    else if (v->adsr_phase != VOICE_ADSR_RELEASE)
+    {
+        v->adsr_phase = (VOICE_ADSR_PHASE)(v->adsr_phase + 1);
+        return;
+    }
+
+    v->adsr_phase = VOICE_ADSR_OFF;
+    BeginVoiceEnd(v);
 }
 
-/* Reads the level for this sample, then steps the envelope.  Called once per
- * OUTPUT sample, which is where the hardware runs it -- stepping it per source
- * sample, as the per-voice-stream design did, made a pitched-up voice run its
- * envelope fast. */
+/* Envelopes follow output samples, regardless of a voice's playback pitch. */
 static s32 GetVoiceAdsrLevel(IopVoice *v)
 {
-    if (!AdsrConfigured(v))
-    {
-        v->adsr_level = ADSR_LEVEL_MAX_FP;
-        v->adsr_phase = VOICE_ADSR_SUSTAIN;
-        return ADSR_LEVEL_MAX;
-    }
-
-    if (v->adsr_phase == VOICE_ADSR_OFF)
-    {
-        v->adsr_level = 0;
-        return 0;
-    }
-
-    v->adsr_level = ClampAdsrLevel(v->adsr_level);
-
-    const s32 level = v->adsr_level >> ADSR_FP_SHIFT;
-
     AdvanceVoiceAdsr(v);
-    v->adsr_level = ClampAdsrLevel(v->adsr_level);
-
-    return level;
+    return v->adsr_level;
 }
 
 /* --------------------------------------------------------------------------
@@ -498,7 +401,7 @@ static s32 DecodeVolume(u_short val)
 
 static s32 ApplyEnvelope(s32 volume, s32 envelope)
 {
-    return (s32)(((long long)volume * envelope) / ADSR_LEVEL_MAX);
+    return (s32)(((long long)volume * envelope) >> 15);
 }
 
 static s32 ApplyVolume(s32 sample, s32 vol)
@@ -963,6 +866,7 @@ static void KeyOnUnlocked(IopVoice *v)
     v->nax       = v->ssa;
     v->block_pos = ADPCM_BLOCK_SAMPLES;
     v->adsr_level = 0;
+    v->adsr_counter = 0;
     v->adsr_phase = VOICE_ADSR_ATTACK;
 
     /* Four source samples are pulled in before the first output sample, to
@@ -976,12 +880,9 @@ static void KeyOnUnlocked(IopVoice *v)
 
 static void KeyOffUnlocked(IopVoice *v)
 {
-    /* Without an envelope there is nothing to release into, so the voice just
-     * stops -- which is what the ROM expects from a raw REQ_VOICE_STOP.  Unlike
-     * the per-voice-stream design this cannot also un-queue what was already
-     * mixed, so up to the device's ~42 ms of lead is still heard.  That is the
-     * more faithful of the two: hardware cannot retract a sample either. */
-    if (!v->playing || !AdsrConfigured(v))
+    /* Queued output cannot be retracted; release continues from the current
+     * envelope level instead of restarting it at full volume. */
+    if (!v->playing)
     {
         StopVoicePlayback(v);
         v->adsr_level = 0;
@@ -989,9 +890,7 @@ static void KeyOffUnlocked(IopVoice *v)
         return;
     }
 
-    if (v->adsr_level <= 0 || v->adsr_level > ADSR_LEVEL_MAX_FP)
-        v->adsr_level = ADSR_LEVEL_MAX_FP;
-
+    v->adsr_counter = 0;
     v->adsr_phase = VOICE_ADSR_RELEASE;
 }
 

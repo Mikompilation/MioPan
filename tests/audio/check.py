@@ -11,7 +11,7 @@ build = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / 'build'
 entries = json.loads((build / 'compile_commands.json').read_text())
 entry = next(e for e in entries if e['file'].endswith('/iop_voice.cpp'))
 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-sources = sys.argv[2:] or ['silent-voice.cpp', 'volume.cpp']
+sources = sys.argv[2:] or ['silent-voice.cpp', 'volume.cpp', 'envelope.cpp']
 for source in sources:
     with tempfile.TemporaryDirectory(prefix='miopan-audio-') as folder:
         args = list(entry.get('arguments') or shlex.split(entry['command']))
