@@ -41,7 +41,9 @@ bool g_frame_started;
 bool g_frame_rendered;
 bool g_previous_rb;
 bool g_windowing_chord_latched;
-bool g_show_main_menu_bar = true;
+bool g_menu_bar_chord_latched;
+/* Hidden until F1 or L3+R1 on a pad asks for it. */
+bool g_show_main_menu_bar;
 bool g_show_performance_summary;
 /* Summary trimmed to its first line.  The frame rate is the figure worth
  * leaving on screen; the rest of the block is for when something is wrong. */
@@ -49,7 +51,7 @@ bool g_summary_fps_only;
 bool g_show_performance_graphs;
 bool g_show_controls;
 bool g_show_data_folder;
-/* Who has the mouse.  The bar is up by default, so it being visible cannot be
+/* Who has the mouse.  The bar can be left up, so it being visible cannot be
  * what takes the mouse away from finder aiming -- F1 pressed *while aiming* is:
  * it claims the cursor for the overlay (showing the bar if it was hidden) and
  * a second F1 hands it back.  The claim lapses when the finder comes down, so
@@ -1406,13 +1408,77 @@ void UpdateUiMouse()
     ReportUiMouse();
 
     /* A cursor left sitting over the game is hidden until the mouse moves.
+     * Fullscreen with the bar down, it is hidden moving too: there is no other
+     * window to point at, and the bar coming up is what brings it back.
      * Through ImGui rather than SDL_HideCursor(), because the SDL backend
      * re-shows the cursor every frame for whatever shape ImGui asks for. */
+    const bool fullscreen_play =
+        MioPan_RendererGetWindowMode() == MIOPAN_WINDOW_MODE_BORDERLESS &&
+        !g_show_main_menu_bar;
     if (!g_mouse_claimed && !g_ui_mouse_busy && !g_pointer_over_ui &&
-        MioPan_InputCursorIdle())
+        (fullscreen_play || MioPan_InputCursorIdle()))
     {
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     }
+}
+
+/* F1, or L3+R1 on a pad. */
+void ToggleMainMenuBar()
+{
+    if (g_mouse_claimed)
+    {
+        /* Back to aiming, and the bar back to how it was. */
+        g_mouse_claimed = false;
+        if (g_bar_shown_for_claim)
+        {
+            g_show_main_menu_bar = false;
+        }
+        g_bar_shown_for_claim = false;
+    }
+    else if (MioPan_InputMouseCaptured())
+    {
+        /* Aiming: give the overlay the cursor rather than hiding the
+         * bar, which is what a plain toggle would do from here. */
+        g_mouse_claimed = true;
+        g_bar_shown_for_claim = !g_show_main_menu_bar;
+        g_show_main_menu_bar = true;
+    }
+    else
+    {
+        g_show_main_menu_bar = !g_show_main_menu_bar;
+    }
+
+    /* Now rather than at the next Draw(), so the pump this event came
+     * in on already releases or recaptures the cursor. */
+    ReportUiMouse();
+}
+
+/* L3+R1 going down together on one pad, in either order.  Read from the pad's
+ * state rather than the event, which names only one of the two; the latch is
+ * what stops both downs of one press, landing in the same pump, from toggling
+ * the bar twice.  Fixed buttons, not the game's bindings, the same as F1 is a
+ * fixed key -- and they still reach the game. */
+bool MenuBarChordPressed(const SDL_Event *event)
+{
+    if (event->type != SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+        event->type != SDL_EVENT_GAMEPAD_BUTTON_UP)
+    {
+        return false;
+    }
+    if (event->gbutton.button != SDL_GAMEPAD_BUTTON_LEFT_STICK &&
+        event->gbutton.button != SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)
+    {
+        return false;
+    }
+
+    SDL_Gamepad *gamepad = SDL_GetGamepadFromID(event->gbutton.which);
+    const bool held =
+        event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && gamepad != nullptr &&
+        SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+        SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+    const bool pressed = held && !g_menu_bar_chord_latched;
+    g_menu_bar_chord_latched = held;
+    return pressed;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1701,6 +1767,79 @@ void DrawCaptureCell(const char *id, const MioPan_InputSource &src, bool waiting
                               kControlButtonLabels[conflict_with]);
         }
     }
+
+    ImGui::PopID();
+}
+
+/* Which way the stick and the d-pad steer Mio, and which stick aims the
+ * viewfinder.  Each overrides one of the game's own Options settings for one
+ * control, so each first row says what that setting is now -- the player may
+ * have changed it there.  miopan_input owns the values, as with the mouse. */
+void DrawMovementSettings()
+{
+    ImGui::PushID("movement");
+
+    const bool game_vehicle = MioPanUi::GameMoveOperate() == 1;
+    const bool game_right_aims = MioPanUi::GameAnaReplace() == 1;
+
+    /* Item order is MIOPAN_MOVE_SCHEME_* / MIOPAN_FINDER_AIM_*. */
+    char stick_game[48];
+    SDL_snprintf(stick_game, sizeof(stick_game), "Game setting (%s)",
+                 game_vehicle ? "tank" : "camera-relative");
+    const char *const stick_items[] = {stick_game, "Camera-relative", "Tank"};
+    int stick = MioPan_InputGetStickMoveScheme();
+    ImGui::SetNextItemWidth(Px(260.0f));
+    if (ImGui::Combo("Stick steering", &stick, stick_items, 3))
+    {
+        MioPan_InputSetStickMoveScheme(stick);
+        MarkSettingsDirty();
+    }
+
+    char dpad_game[48];
+    SDL_snprintf(dpad_game, sizeof(dpad_game), "Game setting (%s)",
+                 game_vehicle ? "tank" : "does not walk");
+    const char *const dpad_items[] = {dpad_game, "Camera-relative", "Tank"};
+    int dpad = MioPan_InputGetDpadMoveScheme();
+    ImGui::SetNextItemWidth(Px(260.0f));
+    if (ImGui::Combo("D-pad steering", &dpad, dpad_items, 3))
+    {
+        MioPan_InputSetDpadMoveScheme(dpad);
+        MarkSettingsDirty();
+    }
+
+    char aim_game[48];
+    SDL_snprintf(aim_game, sizeof(aim_game), "Game setting (%s stick aims)",
+                 game_right_aims ? "right" : "left");
+    const char *const aim_items[] = {aim_game,
+                                     "Left stick aims, right sidesteps",
+                                     "Right stick aims, left sidesteps"};
+    int aim = MioPan_InputGetFinderAimStick();
+    ImGui::SetNextItemWidth(Px(260.0f));
+    if (ImGui::Combo("Viewfinder sticks", &aim, aim_items, 3))
+    {
+        MioPan_InputSetFinderAimStick(aim);
+        MarkSettingsDirty();
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(MioPan_InputMoveSettingsAreDefault() != 0);
+    if (ImGui::Button("Reset movement"))
+    {
+        MioPan_InputResetMoveSettings();
+        MarkSettingsDirty();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped(
+        "Camera-relative: Mio heads where the control points, as the camera "
+        "sees it. Tank: left and right turn her, up walks, down turns her "
+        "about. The game's Options screen sets one type for both; these "
+        "override it per control, and whichever one is pushing steers. On the "
+        "default keys WASD is the stick, the arrow keys the d-pad and IJKL the "
+        "right stick.");
+    ImGui::PopStyleColor();
 
     ImGui::PopID();
 }
@@ -2021,6 +2160,8 @@ void DrawControlsWindow()
             }
         }
 
+        ImGui::Separator();
+        DrawMovementSettings();
         ImGui::Separator();
         DrawMouseSettings();
         ImGui::Separator();
@@ -3578,7 +3719,8 @@ void Shutdown()
     g_frame_rendered = false;
     g_previous_rb = false;
     g_windowing_chord_latched = false;
-    g_show_main_menu_bar = true;
+    g_menu_bar_chord_latched = false;
+    g_show_main_menu_bar = false;
     g_show_performance_summary = false;
     g_summary_fps_only = false;
     g_show_performance_graphs = false;
@@ -3611,35 +3753,11 @@ void ProcessEvent(const SDL_Event *event)
         }
 
         ImGui_ImplSDL3_ProcessEvent(event);
-        if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat &&
-            event->key.scancode == SDL_SCANCODE_F1)
+        if ((event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat &&
+             event->key.scancode == SDL_SCANCODE_F1) ||
+            MenuBarChordPressed(event))
         {
-            if (g_mouse_claimed)
-            {
-                /* Back to aiming, and the bar back to how it was. */
-                g_mouse_claimed = false;
-                if (g_bar_shown_for_claim)
-                {
-                    g_show_main_menu_bar = false;
-                }
-                g_bar_shown_for_claim = false;
-            }
-            else if (MioPan_InputMouseCaptured())
-            {
-                /* Aiming: give the overlay the cursor rather than hiding the
-                 * bar, which is what a plain toggle would do from here. */
-                g_mouse_claimed = true;
-                g_bar_shown_for_claim = !g_show_main_menu_bar;
-                g_show_main_menu_bar = true;
-            }
-            else
-            {
-                g_show_main_menu_bar = !g_show_main_menu_bar;
-            }
-
-            /* Now rather than at the next Draw(), so the pump this event came
-             * in on already releases or recaptures the cursor. */
-            ReportUiMouse();
+            ToggleMainMenuBar();
         }
     }
 }

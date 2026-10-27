@@ -346,6 +346,41 @@ typedef struct MioPan_InputGyroStatus
 
 void MioPan_InputGetGyroStatus(MioPan_InputGyroStatus *out);
 
+// ---------------------------------------------------------------------------
+//  Movement schemes.
+//
+//  The game's own Options screen has two settings that decide how the pad
+//  steers Mio: the control type (opt_wrk.move_operate -- normal, where only the
+//  stick walks and she heads where it points as seen from the camera, or
+//  "vehicle", where the d-pad and the stick both turn her and drive her
+//  forward) and which stick aims the Camera Obscura (opt_wrk.ana_replace).
+//  Each setting below overrides one of those for one part of the pad, so the
+//  d-pad can steer one way and the stick the other.  GAME, the default, leaves
+//  the game's own setting in charge, which is the ROM's behaviour exactly.
+//  player.c and finder_camera.c read them.  Persisted in [input].
+// ---------------------------------------------------------------------------
+
+#define MIOPAN_MOVE_SCHEME_GAME   0   // the game's control type
+#define MIOPAN_MOVE_SCHEME_CAMERA 1   // head where it points, seen from the camera
+#define MIOPAN_MOVE_SCHEME_TANK   2   // left/right turn, up walks, down about-faces
+
+int  MioPan_InputGetStickMoveScheme(void);
+void MioPan_InputSetStickMoveScheme(int scheme);
+int  MioPan_InputGetDpadMoveScheme(void);
+void MioPan_InputSetDpadMoveScheme(int scheme);
+
+// Which stick aims the viewfinder; the other one sidesteps.  The d-pad aims
+// whatever this says.
+#define MIOPAN_FINDER_AIM_GAME  0   // the game's own setting
+#define MIOPAN_FINDER_AIM_LEFT  1   // left aims, right sidesteps (the game's default)
+#define MIOPAN_FINDER_AIM_RIGHT 2   // right aims, left sidesteps
+
+int  MioPan_InputGetFinderAimStick(void);
+void MioPan_InputSetFinderAimStick(int stick);
+
+int  MioPan_InputMoveSettingsAreDefault(void);
+void MioPan_InputResetMoveSettings(void);
+
 #ifdef __cplusplus
 }
 #endif

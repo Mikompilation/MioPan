@@ -451,8 +451,8 @@ static int FinderModePadChk(char *pad_x, char *pad_y, float *ax, float *ay,
         if (*ax == 0.0f && *ay == 0.0f)                                 /* 326 */
         {
             /* analog[0..1] is the right stick, [2..3] the left; ana_replace
-             * swaps which one aims. */
-            if (opt_wrk.ana_replace == 1)                               /* 327 */
+             * swaps which one aims.  PORT: as the Controls window leaves it. */
+            if (PlyrFinderAnaReplace() == 1)                            /* 327 */
             {
                 *ax = (float)pad[0].analog[0] - 128.0f;                 /* 333 */
                 *ay = (float)pad[0].analog[1] - 128.0f;                 /* 335 */

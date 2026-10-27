@@ -507,4 +507,14 @@ void DrawDeveloperItems()
             "SELECT closes it.");
 }
 
+int GameMoveOperate()
+{
+    return opt_wrk.move_operate;
+}
+
+int GameAnaReplace()
+{
+    return opt_wrk.ana_replace;
+}
+
 } // namespace MioPanUi

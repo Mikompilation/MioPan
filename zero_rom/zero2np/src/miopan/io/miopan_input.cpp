@@ -120,6 +120,11 @@ static float s_mouse_sensitivity = 1.0f;
 static int   s_mouse_invert_x;
 static int   s_mouse_invert_y;
 
+// Movement schemes; all default to the game's own Options settings.
+static int s_stick_move_scheme = MIOPAN_MOVE_SCHEME_GAME;
+static int s_dpad_move_scheme = MIOPAN_MOVE_SCHEME_GAME;
+static int s_finder_aim_stick = MIOPAN_FINDER_AIM_GAME;
+
 // The game's requests, for the update now running and the one before.  Both
 // count, so the capture neither drops in the gap between an update starting
 // and the game asking again, nor outlives the finder by more than an update.
@@ -1898,6 +1903,63 @@ void MioPan_InputGetGyroStatus(MioPan_InputGyroStatus *out)
     }
     out->rate_yaw_deg = s_gyro_rate_yaw * to_deg;
     out->rate_pitch_deg = s_gyro_rate_pitch * to_deg;
+}
+
+// Anything unknown -- a hand-edited file, say -- falls back on the game's own
+// setting rather than on a scheme the player did not ask for.
+static int ClampMoveScheme(int scheme)
+{
+    return (scheme == MIOPAN_MOVE_SCHEME_CAMERA ||
+            scheme == MIOPAN_MOVE_SCHEME_TANK)
+               ? scheme
+               : MIOPAN_MOVE_SCHEME_GAME;
+}
+
+int MioPan_InputGetStickMoveScheme(void)
+{
+    return s_stick_move_scheme;
+}
+
+void MioPan_InputSetStickMoveScheme(int scheme)
+{
+    s_stick_move_scheme = ClampMoveScheme(scheme);
+}
+
+int MioPan_InputGetDpadMoveScheme(void)
+{
+    return s_dpad_move_scheme;
+}
+
+void MioPan_InputSetDpadMoveScheme(int scheme)
+{
+    s_dpad_move_scheme = ClampMoveScheme(scheme);
+}
+
+int MioPan_InputGetFinderAimStick(void)
+{
+    return s_finder_aim_stick;
+}
+
+void MioPan_InputSetFinderAimStick(int stick)
+{
+    s_finder_aim_stick = (stick == MIOPAN_FINDER_AIM_LEFT ||
+                          stick == MIOPAN_FINDER_AIM_RIGHT)
+                             ? stick
+                             : MIOPAN_FINDER_AIM_GAME;
+}
+
+int MioPan_InputMoveSettingsAreDefault(void)
+{
+    return s_stick_move_scheme == MIOPAN_MOVE_SCHEME_GAME &&
+           s_dpad_move_scheme == MIOPAN_MOVE_SCHEME_GAME &&
+           s_finder_aim_stick == MIOPAN_FINDER_AIM_GAME;
+}
+
+void MioPan_InputResetMoveSettings(void)
+{
+    s_stick_move_scheme = MIOPAN_MOVE_SCHEME_GAME;
+    s_dpad_move_scheme = MIOPAN_MOVE_SCHEME_GAME;
+    s_finder_aim_stick = MIOPAN_FINDER_AIM_GAME;
 }
 
 }

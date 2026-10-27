@@ -238,6 +238,10 @@ void  PlyrMoveChkV(MOVE_BOX *mb, float *tv, float mrot);
 void  PlyrMovePadFind(MOVE_BOX *mb, float *tv);
 /* Stick heading in radians; 10.0 means centred. */
 float GetMovePad(u_char id);
+/* PORT: opt_wrk.ana_replace as the Controls window leaves it -- 0 the left
+ * stick aims the finder, 1 the right.  GetMovePad() and finder_camera.c read
+ * this where the ROM reads the option itself. */
+u_char PlyrFinderAnaReplace(void);
 u_char PlyrMoveStaChk(float pad_chk);
 u_int PlyrLeverInputChk(void);
 void  GetMoveSpeed(float *tv);

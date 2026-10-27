@@ -302,6 +302,20 @@ const EnumName kGyroTurnAxes[] = {
     {nullptr, 0},
 };
 
+const EnumName kMoveSchemes[] = {
+    {"game", MIOPAN_MOVE_SCHEME_GAME},
+    {"camera", MIOPAN_MOVE_SCHEME_CAMERA},
+    {"tank", MIOPAN_MOVE_SCHEME_TANK},
+    {nullptr, 0},
+};
+
+const EnumName kFinderAimSticks[] = {
+    {"game", MIOPAN_FINDER_AIM_GAME},
+    {"left", MIOPAN_FINDER_AIM_LEFT},
+    {"right", MIOPAN_FINDER_AIM_RIGHT},
+    {nullptr, 0},
+};
+
 const char *EnumToName(const EnumName *table, int value)
 {
     for (const EnumName *e = table; e->label != nullptr; e++)
@@ -825,6 +839,19 @@ void LoadInputBindings()
     int axis = MioPan_InputGetGyroTurnAxis();
     ReadEnum("input", "gyro_turn", kGyroTurnAxes, &axis);
     MioPan_InputSetGyroTurnAxis(axis);
+
+    /* Movement schemes, on the same terms. */
+    int scheme = MioPan_InputGetStickMoveScheme();
+    ReadEnum("input", "stick_steering", kMoveSchemes, &scheme);
+    MioPan_InputSetStickMoveScheme(scheme);
+
+    scheme = MioPan_InputGetDpadMoveScheme();
+    ReadEnum("input", "dpad_steering", kMoveSchemes, &scheme);
+    MioPan_InputSetDpadMoveScheme(scheme);
+
+    int stick = MioPan_InputGetFinderAimStick();
+    ReadEnum("input", "finder_aim_stick", kFinderAimSticks, &stick);
+    MioPan_InputSetFinderAimStick(stick);
 }
 
 /* One source as text, or "none" for an empty slot. */
@@ -1012,6 +1039,27 @@ std::string BuildInputSection()
                      MioPan_InputGetGyroInvertX(),
                      MioPan_InputGetGyroInvertY(),
                      EnumToName(kGyroTurnAxes, MioPan_InputGetGyroTurnAxis()));
+        out += line;
+
+        out +=
+            "\n"
+            "; Movement.  The game's Options screen has one control type for\n"
+            ";   the whole pad: normal, where only the stick walks and Mio\n"
+            ";   heads where it points as the camera sees it, or vehicle, where\n"
+            ";   the stick and the d-pad both turn her and drive her forward.\n"
+            ";   stick_steering and dpad_steering override it per control:\n"
+            ";   game (its setting), camera or tank.  finder_aim_stick picks\n"
+            ";   the stick that aims the Camera Obscura -- game, left or right\n"
+            ";   -- and the other one sidesteps.\n";
+
+        SDL_snprintf(line, sizeof(line),
+                     "stick_steering = %s\n"
+                     "dpad_steering = %s\n"
+                     "finder_aim_stick = %s\n",
+                     EnumToName(kMoveSchemes, MioPan_InputGetStickMoveScheme()),
+                     EnumToName(kMoveSchemes, MioPan_InputGetDpadMoveScheme()),
+                     EnumToName(kFinderAimSticks,
+                                MioPan_InputGetFinderAimStick()));
         out += line;
     }
 

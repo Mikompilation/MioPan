@@ -91,6 +91,7 @@
 #include "../../ingame/camera/map_camera.h"      /* ReqFinderInOverRap        */
 #include "../../ingame/camera/finder_camera.h"   /* ReqFinderCamera           */
 #include "../../ingame/photo/m_plyr_camera.h"    /* m_plyr_camera             */
+#include "../../miopan/io/miopan_input.h"        /* PORT: movement schemes    */
 #include "../../ingame/photo/finder.h"           /* ReqFinderFadeIn / Out     */
 #include "../../ingame/ingame.h"                 /* SendIngameGameOverPre     */
 #include "../../ingame/ingame_effect.h"          /* IgEffectEffectEndParticleReq */
@@ -4447,6 +4448,64 @@ void PlyrNormalCtrl(void)                                               /* 546 *
  *    0x0400 turning in place            0x0800 / 0x1000 rapid turn (walk/run)
  * ======================================================================== */
 
+/* PORT: a control type per control.
+ *
+ * The ROM has one control type for the whole pad, opt_wrk.move_operate, and
+ * reads it twice a frame: GetMovePad() reads the d-pad only under "vehicle"
+ * (1), and PlyrNModeCtrl() steers both controls by it.  The Controls window
+ * can give the stick and the d-pad one each (miopan_input.h), so GetMovePad()
+ * notes which type the control that gave the heading uses, and
+ * PlyrNModeCtrl() steers by that.  Left on the game's setting, both answer
+ * opt_wrk.move_operate and this is the ROM's path exactly. */
+
+/* The stick's control type, in opt_wrk.move_operate's terms. */
+static u_char PlyrStickMoveOperate(void)
+{
+    switch (MioPan_InputGetStickMoveScheme())
+    {
+    case MIOPAN_MOVE_SCHEME_CAMERA:
+        return 0;
+    case MIOPAN_MOVE_SCHEME_TANK:
+        return 1;
+    default:
+        return opt_wrk.move_operate;
+    }
+}
+
+/* The d-pad's, the same way -- with 0xff for "does not walk", which is what
+ * the normal type has always meant for it. */
+static u_char PlyrDpadMoveOperate(void)
+{
+    switch (MioPan_InputGetDpadMoveScheme())
+    {
+    case MIOPAN_MOVE_SCHEME_CAMERA:
+        return 0;
+    case MIOPAN_MOVE_SCHEME_TANK:
+        return 1;
+    default:
+        return (opt_wrk.move_operate == 1) ? 1 : 0xff;
+    }
+}
+
+/* This frame's control type, written by GetMovePad(0).  With nothing held it
+ * is the stick's when the two controls agree -- so the game's setting alone
+ * always settles it -- and otherwise whatever the last control used left, so
+ * letting go part-way through a turn finishes it the way it started. */
+static u_char plyr_move_operate_now;
+
+u_char PlyrFinderAnaReplace(void)
+{
+    switch (MioPan_InputGetFinderAimStick())
+    {
+    case MIOPAN_FINDER_AIM_LEFT:
+        return 0;
+    case MIOPAN_FINDER_AIM_RIGHT:
+        return 1;
+    default:
+        return opt_wrk.ana_replace;
+    }
+}
+
 /* Free-look ground movement.  Runs the camera-relative stick vector through
  * the turn logic, then hands the result to PlyrPosSet(). */
 void PlyrNModeCtrl(void)                                                /* 1829 */
@@ -4461,14 +4520,23 @@ void PlyrNModeCtrl(void)                                                /* 1829 
 
     PlyrDWalkTmCtrl(&plyr_wrk.cmn_wrk);                                 /* 1835 */
 
-    /* opt_wrk.move_operate: 0 = normal, 1 = "vehicle" (tank) controls. */
-    if (opt_wrk.move_operate == 1)                                      /* 1840 */
+    /* opt_wrk.move_operate: 0 = normal, 1 = "vehicle" (tank) controls.
+     *
+     * PORT: the ROM tests the option and then reads the pad.  The heading is
+     * read first here, because which control gave it decides the type
+     * (plyr_move_operate_now above); PlyrMovePad() only reads, so the order
+     * changes nothing on the ROM's path. */
     {
-        PlyrMoveChkV(&plyr_wrk.cmn_wrk.mbox, tv, PlyrMovePad());        /* 1843 */
-    }
-    else
-    {
-        PlyrMoveChk(&plyr_wrk.cmn_wrk.mbox, tv, PlyrMovePad());         /* 1847 */
+        const float rot = PlyrMovePad();
+
+        if (plyr_move_operate_now == 1)                                 /* 1840 */
+        {
+            PlyrMoveChkV(&plyr_wrk.cmn_wrk.mbox, tv, rot);              /* 1843 */
+        }
+        else
+        {
+            PlyrMoveChk(&plyr_wrk.cmn_wrk.mbox, tv, rot);               /* 1847 */
+        }
     }
 
     PlyrPosSet(&plyr_wrk.cmn_wrk.mbox, tv);                             /* 1851 */
@@ -4812,13 +4880,24 @@ float GetMovePad(u_char id)                                             /* 2232 
 
     if (id == 0)                                                        /* 2236 */
     {
-        if (opt_wrk.move_operate == 1)                                  /* 2238 */
+        /* PORT: each control under its own type; see PlyrStickMoveOperate().
+         * The ROM tests opt_wrk.move_operate == 1 where dpad_op is tested. */
+        const u_char stick_op = PlyrStickMoveOperate();
+        const u_char dpad_op = PlyrDpadMoveOperate();
+
+        if (dpad_op != 0xff)                                            /* 2238 */
         {
             /* Vehicle scheme reads the d-pad as eight octants. */
             u_int dir = 0xff;
 
+            /* Down counts on its first frame only under vehicle, where it is
+             * the about-face.  PORT: the camera-relative d-pad, which the ROM
+             * does not have, walks towards the camera while it is held. */
             if (*paddat[9] != 0)        { dir = 4; }                    /* 2242 */
-            else if (*paddat[8] == 1)   { dir = 0; }
+            else if ((dpad_op == 1) ? (*paddat[8] == 1) : (*paddat[8] != 0))
+            {
+                dir = 0;
+            }
 
             if (*paddat[11] != 0)                                       /* 2250 */
             {
@@ -4840,22 +4919,33 @@ float GetMovePad(u_char id)                                             /* 2232 
             if (dir != 0xff)                                            /* 2270 */
             {
                 rot = (float)dir * 0.78539813f - 3.1415925f;
+                plyr_move_operate_now = dpad_op;                        /* PORT */
             }
         }
 
         if (pad[0].id == 'y' && pad[0].an_dir[0] != 0xff)               /* 2278 */
         {
+            plyr_move_operate_now = stick_op;                           /* PORT */
             return pad[0].an_rot[0];
+        }
+
+        /* PORT: nothing held. */
+        if (rot == 10.0f && (dpad_op == 0xff || dpad_op == stick_op))
+        {
+            plyr_move_operate_now = stick_op;
         }
         return rot;
     }
 
-    /* opt_wrk.ana_replace swaps which stick drives the finder. */
-    if (opt_wrk.ana_replace == 0)                                       /* 2286 */
+    /* opt_wrk.ana_replace swaps which stick drives the finder.
+     * PORT: as the Controls window leaves it, read once as the ROM does. */
+    const u_char ana_replace = PlyrFinderAnaReplace();
+
+    if (ana_replace == 0)                                               /* 2286 */
     {
         if (pad[0].an_dir[1] != 0xff) { return pad[0].an_rot[1]; }
     }
-    else if (opt_wrk.ana_replace == 1)                                  /* 2291 */
+    else if (ana_replace == 1)                                          /* 2291 */
     {
         if (pad[0].an_dir[0] != 0xff) { return pad[0].an_rot[0]; }
     }
