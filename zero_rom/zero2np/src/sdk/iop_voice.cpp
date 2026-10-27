@@ -541,8 +541,8 @@ static void BeginVoiceEnd(IopVoice *v)
 
     v->playing = 0;
 
-    /* Park the play position on the loop address.  A real SPU2 voice that ends
-     * jumps to LSAX and idles there, so NAX reads that address from then on --
+    /* Park the play position on the loop address.  A voice that reaches its sample end
+     * jumps to LSAX; silent address processing continues from there --
      * and iop_snd.c's SetLoopAdrsStopBlock() points a retiring voice's LSAX at
      * the silent stop block precisely so IsInStopBlock() can watch for it.
      *
@@ -566,19 +566,10 @@ static void BeginVoiceEnd(IopVoice *v)
  *  Decode and resample
  * ------------------------------------------------------------------------ */
 
-/* One block into the voice's own buffer; returns 0 if the voice had to stop. */
-static int DecodeVoiceBlock(IopVoice *v)
+/* Address processing continues after a voice becomes silent, for SPU IRQs. */
+static void AdvanceVoiceBlock(IopVoice *v)
 {
-    const u_char *src = (const u_char *)MioPan_SpuRamPointer(v->nax, ADPCM_BLOCK_BYTES);
-
-    if (src == NULL)
-    {
-        StopVoicePlayback(v);
-        return 0;
-    }
-
-    DecodeAdpcmBlock(v->block, src, &v->hist1, &v->hist2);
-    v->nax += ADPCM_BLOCK_BYTES;
+    v->nax = (v->nax + ADPCM_BLOCK_BYTES) & 0x1fffffu;
 
     const int loop_end    = (v->header & (1 << 8)) != 0;
     const int loop_repeat = (v->header & (1 << 9)) != 0;
@@ -605,7 +596,20 @@ static int DecodeVoiceBlock(IopVoice *v)
      * This runs the ROM's SPU2 handler inline, on this thread, under the voice
      * lock -- as it did before the mixer. */
     MioPan_SdVoiceReachedAddress(VoiceCore(v), v->nax);
+}
 
+/* One block into the voice's own buffer; returns 0 if the voice had to stop. */
+static int DecodeVoiceBlock(IopVoice *v)
+{
+    const u_char *src = (const u_char *)MioPan_SpuRamPointer(v->nax, ADPCM_BLOCK_BYTES);
+    if (src == NULL)
+    {
+        StopVoicePlayback(v);
+        return 0;
+    }
+
+    DecodeAdpcmBlock(v->block, src, &v->hist1, &v->hist2);
+    AdvanceVoiceBlock(v);
     return 1;
 }
 
@@ -735,7 +739,17 @@ static void MixVoices(void)
         IopVoice *v = &voices[i];
 
         if (!VoiceSounding(v))
+        {
+            MioPan_SdVoiceReachedAddress(VoiceCore(v), v->nax);
+            v->phase += (u_int)v->pitch * MIX_BLOCK_FRAMES;
+            while (v->phase >= ADPCM_BLOCK_SAMPLES * (u_int)PITCH_ONE)
+            {
+                v->phase -= ADPCM_BLOCK_SAMPLES * (u_int)PITCH_ONE;
+                FillAdpcmHeader(v);
+                AdvanceVoiceBlock(v);
+            }
             continue;
+        }
 
         const int   c   = VoiceCore(v);
         const u_int bit = 1u << VoiceNumber(v);
