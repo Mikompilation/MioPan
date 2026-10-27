@@ -481,6 +481,9 @@ int SndBankPlay(int bank_no, int no, int effect, int loop,
                          top_adrs + info[no].loopend);                       /* 496 */
     }
 
+    if (Ret == CSND_BUF_PLAY_NO_ID && s3d_free && s3d != nullptr)
+        Snd3DFreeWrk(s3d);
+
     return Ret;                                                              /* 502 */
 }                                                                            /* 503 */
 

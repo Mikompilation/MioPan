@@ -565,19 +565,23 @@ static void StreamPlayQueueWrk(int wrk_id)
 
         /* A first play uses reset_in_time; a resume uses the ordinary fade,
          * because the stream is picking up mid-track. */
+        SND_STREAM_ERR result;
         if (play_q->first_flg)
         {
-            SndStreamPlay(wrk_id, play_q->effect, play_q->loop, play_q->vol,
+            result = SndStreamPlay(wrk_id, play_q->effect, play_q->loop, play_q->vol,
                           play_q->reset_in_time, ptr, play_q->play_spd, 0x1000);
-            play_q->first_flg = 0;
         }
         else
         {
-            SndStreamPlay(wrk_id, play_q->effect, play_q->loop, play_q->vol,
+            result = SndStreamPlay(wrk_id, play_q->effect, play_q->loop, play_q->vol,
                           play_q->in_time, ptr, play_q->play_spd, 0x1000);
         }
 
-        play_q->playing = 1;
+        if (result == SND_STREAM_OK)
+        {
+            play_q->first_flg = 0;
+            play_q->playing = 1;
+        }
     }
 }                                                                            /* 725 */
 

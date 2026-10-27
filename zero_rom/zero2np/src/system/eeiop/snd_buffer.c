@@ -218,7 +218,14 @@ int SndBufPlay(int adrs, int core, int effect, int vol, int bvol, int pitch,
     sbp->loopend_next = loopend + 0x10;                                      /* 242 */
 
     if (iopCommandRegister(REQ_SB_PLAY, (char *)&sbp->p, sizeof(SOUND_BUF_PLAY)) == 0)                     /* 247 */
+    {
+        FreeSPUVoiceCore(core, voice_no);
+        sbp->use = 0;
+        // Ownership stays with the caller, which may retry on the other core.
+        sbp->s3d = nullptr;
+        sbp->s3d_free = 0;
         return CSND_BUF_PLAY_NO_ID;
+    }
 
     sbp->play_id++;                                                          /* 248 */
 

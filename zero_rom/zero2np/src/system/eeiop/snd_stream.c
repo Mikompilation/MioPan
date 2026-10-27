@@ -154,11 +154,26 @@ int SndStreamIsHeaderReady(int wrk_id)
 }                                                                            /* 214 */
 
 /* 220 */
+// A rejected play command never reaches the IOP, so return all reservations here.
+static void ReleaseStreamPlayResources(SND_STREAM_WRK *wrk, int channels)
+{
+    if (wrk->p.irq_core >= 0)
+        irq_core_source[wrk->p.irq_core] = 0;
+    wrk->p.irq_core = -1;
+    for (int i = 0; i < channels; ++i)
+    {
+        FreeSPUVoiceCore(wrk->p.attr[i].core, wrk->p.voice[i]);
+        wrk->p.voice[i] = -1;
+    }
+    if (wrk->s3dhndl != nullptr)
+        Snd3DFreeWrk(wrk->s3dhndl);
+    wrk->s3dhndl = nullptr;
+}
+
 SND_STREAM_ERR SndStreamPlay(int wrk_id, int effect, int loop2, int vol, int in_time,
                              SND_3D_SET *s3s, float play_spd, int pitch)
 {
     int             i;
-    int             j;
     int             loop;
     SND_STREAM_WRK *wrk = &snd_stream_wrk[wrk_id];                           /* 223 */
 
@@ -210,6 +225,11 @@ SND_STREAM_ERR SndStreamPlay(int wrk_id, int effect, int loop2, int vol, int in_
     }
 
     wrk->p.irq_core = SetIRQCore(wrk);                                       /* 283 */
+    if (wrk->p.irq_core < 0)
+    {
+        ReleaseStreamPlayResources(wrk, 0);
+        return SND_STREAM_ERR_VOICE;
+    }
 
     for (i = 0; i < wrk->s.nchannel; i++)                                    /* 287 */
     {
@@ -219,14 +239,8 @@ SND_STREAM_ERR SndStreamPlay(int wrk_id, int effect, int loop2, int vol, int in_
          * so far go back before the error is reported. */
         if (wrk->p.voice[i] == -1)                                           /* 290 */
         {
-            printf("SndStreamPlay() Cannot Get Voice\n");                    /* 293 */
-
-            irq_core_source[wrk->p.irq_core] = 0;                            /* 296 */
-
-            for (j = 0; j < i; j++)                                          /* 298 */
-                FreeSPUVoiceCore(wrk->p.attr[j].core, wrk->p.voice[j]);      /* 299 */
-
-            return SND_STREAM_ERR_VOICE;                                     /* 301 */
+            ReleaseStreamPlayResources(wrk, i);
+            return SND_STREAM_ERR_VOICE;
         }
 
         SndCalcValue(wrk->vol, wrk->info[i].pan, wrk->info[i].vol,
@@ -241,7 +255,10 @@ SND_STREAM_ERR SndStreamPlay(int wrk_id, int effect, int loop2, int vol, int in_
     }
 
     if (iopCommandRegister(REQ_STREAM_PLAY, (char *)&wrk->p, sizeof(STREAM_PLAY)) == 0)                        /* 333 */
-        return SND_STREAM_ERR_IOPSEND;                                       /* 335 */
+    {
+        ReleaseStreamPlayResources(wrk, wrk->s.nchannel);
+        return SND_STREAM_ERR_IOPSEND;
+    }
 
     wrk->play_flg = 1;                                                       /* 336 */
 
@@ -262,11 +279,16 @@ void SndStreamMain(void)
         switch (wrk->status)                                                 /* 353 */
         {
         case ST_STREAM_HEADER_LOAD:
-            if (FileLoadIsEnd(wrk->header_id))                               /* 357 */
+            if (wrk->header_id == -1 || FileLoadIsEnd(wrk->header_id))
             {
-                CheckHXDData((HXD_HEADER *)wrk->header_buf, 0);              /* 359 */
-                SetStreamHeaderSub(wrk, (HXD_HEADER *)wrk->header_buf);      /* 361 */
-                SetStreamStartSub(wrk);                                      /* 363 */
+                // Keep prepared buffers while a full command queue is retried.
+                if (wrk->header_id != -1)
+                {
+                    CheckHXDData((HXD_HEADER *)wrk->header_buf, 0);              /* 359 */
+                    SetStreamHeaderSub(wrk, (HXD_HEADER *)wrk->header_buf);      /* 361 */
+                    SetStreamStartSub(wrk);                                      /* 363 */
+                    wrk->header_id = -1;
+                }
 
                 if (iopCommandRegister(REQ_STREAM_START, (char *)&wrk->s,
                                        sizeof(STREAM_START)))                /* 366 */
@@ -533,10 +555,7 @@ int SetIRQCore(SND_STREAM_WRK *wrk)
             return i;                                                        /* 670 */
         }
     }
-
-    printf("SetIRQCore() theres is no irq_core_source!\n");                  /* 674 */
-    for (;;)                                                                 /* 675 */
-        ;
+    return -1;
 }
 
 /* 681 */
@@ -560,7 +579,7 @@ static void StreamWrkRelease(SND_STREAM_WRK *wrk)
         }
     }
 
-    if (wrk->header_ready)                                                   /* 696 */
+    if (wrk->header_ready || wrk->s.spu_packet[0][0] != 0)                                                   /* 696 */
     {
         for (i = 0; i < wrk->s.nchannel; i++)                                /* 698 */
         {
