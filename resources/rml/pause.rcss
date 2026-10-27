@@ -1,0 +1,58 @@
+/*
+ * The pause screen: the butterfly over a short column of choices, where the
+ * game's own panel sat (a 340-wide window centred on the 640x448 screen).
+ */
+
+#panel
+{
+    position: absolute;
+    left: 50%;
+    top: 112dp;
+    width: 260dp;
+    margin-left: -130dp;
+    text-align: center;
+    animation: 0.2s quadratic-out rise-in;
+}
+
+#panel .emblem
+{
+    display: block;
+    width: 44dp;
+    height: 33dp;
+    margin: 0 auto 2dp auto;
+}
+
+#panel .title
+{
+    margin-bottom: 6dp;
+    font-size: 22dp;
+}
+
+#items
+{
+    padding: 8dp 0;
+}
+
+.item
+{
+    height: 26dp;
+    line-height: 26dp;
+    font-size: 16dp;
+    letter-spacing: 1dp;
+    cursor: pointer;
+}
+
+/* Centred, so the bar is the one that fades both ways. */
+.item.selected
+{
+    border-left-color: #00000000;
+    decorator: image(images/cursor_bar.png);
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+#prompts
+{
+    position: absolute;
+    right: 24dp;
+    bottom: 16dp;
+}

@@ -41,11 +41,13 @@
 #include "../main/gphase.h"                 // SetNextGPhase / GID_*
 #include "../main/phasefunc.h"              // GPHASE_ENUM + phase-callback prototypes
 #include "../save_load/prg/game_data_save.h"// GameDataSave*
+#include "../save_load/prg/system_data_save.h"  // SystemDataSave* (port)
 #include "../system/eeiop/cddat.h"          // TITLE_* / OUTGAME_PK2 / BGM*
 #include "../system/eeiop/fileload.h"       // FileLoadReqEE / FileLoadIsEnd2 / FileLoadCancel2
 #include "../system/eeiop/sndbank.h"        // SndBankNew / IsReady / Release / *LoadPriority
 #include "../system/eeiop/stream_auto.h"    // StreamAutoPlay / FadeOut / IsPlaying
 #include "../system/os/system.h"            // GetLanguage
+#include "../miopan/miopan_ui/miopan_rml_options.h"  // the RmlUi options screen (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -621,10 +623,65 @@ void end_Title_Gallery(void)
     UnlockMoveTitleMovie();                                             /* 890 */
 }
 
+/* PORT DEVIATION: the title's Options is the port's RmlUi screen
+ * (miopan_rml_options.h), which carries the game's own options beside the
+ * port's settings.  option.c still owns the phase's state -- OptionInit()
+ * seeds its working copy and OptionEnd() commits it -- and still runs the
+ * whole screen whenever RmlUi is unavailable.  The screen's "Save to memory
+ * card" is the same system-file save option.c reaches through its save
+ * window, run here while the RmlUi screen steps aside. */
+static int s_option_rml;        /* the RmlUi screen stands in for option.c's */
+static int s_option_saving;     /* and its memory-card save is running */
+
+static void TitleOptionRmlMain(void)
+{
+    if (s_option_saving != 0)
+    {
+        const int save_mode = SystemDataSaveMain();
+
+        SystemDataSaveDispMain();
+        if (save_mode != 0)
+        {
+            SystemDataSaveEnd();
+            s_option_saving = 0;
+
+            /* As option.c's save window: saved leaves the screen, backed out
+             * returns to it. */
+            if (save_mode > 0)
+            {
+                MioPan_RmlOptionsClose();
+                SetNextGPhase(GID_TITLE_MENU);
+            }
+            else
+            {
+                MioPan_RmlOptionsSetHidden(0);
+            }
+        }
+        return;
+    }
+
+    switch (MioPan_RmlOptionsConsumeRequest())
+    {
+    case MIOPAN_RML_OPTIONS_REQ_CLOSE:
+        SetNextGPhase(GID_TITLE_MENU);
+        break;
+    case MIOPAN_RML_OPTIONS_REQ_SAVE:
+        MioPan_RmlOptionsSetHidden(1);
+        SystemDataSaveInit(ol_loadGetHeap, ol_loadFreeHeap);
+        s_option_saving = 1;
+        break;
+    default:
+        break;
+    }
+}
+
 void init_Title_Option(void)
 {
     LockMoveTitleMovie();                                               /* 898 */
     OptionInit(0);                                                      /* 899 */
+
+    s_option_saving = 0;
+    s_option_rml = MioPan_RmlOptionsOpen(MIOPAN_RML_OPTIONS_FROM_TITLE);
 }
 
 GPHASE_ENUM one_Title_Option(GPHASE_ENUM dummy)
@@ -638,13 +695,31 @@ GPHASE_ENUM one_Title_Option(GPHASE_ENUM dummy)
                                         (SND_3D_SET *)0));              /* 907 */
     }
 
-    OptionMain();                                                       /* 911 */
+    if (s_option_rml != 0)
+    {
+        TitleOptionRmlMain();
+    }
+    else
+    {
+        OptionMain();                                                   /* 911 */
+    }
 
     return GPHASE_CONTINUE;                                             /* 913 */
 }
 
 void end_Title_Option(void)
 {
+    if (s_option_saving != 0)
+    {
+        SystemDataSaveEnd();
+        s_option_saving = 0;
+    }
+    if (s_option_rml != 0)
+    {
+        MioPan_RmlOptionsClose();
+        s_option_rml = 0;
+    }
+
     OptionEnd();                                                        /* 918 */
     UnlockMoveTitleMovie();                                             /* 919 */
 }

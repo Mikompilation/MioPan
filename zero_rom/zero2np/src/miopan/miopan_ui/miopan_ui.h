@@ -122,6 +122,11 @@ void RenderDrawDataFrom(const DrawSnapshot *snapshot,
  * set before Init(); it takes effect at the next frame. */
 void  SetScaleOverride(float scale);
 float GetScaleOverride();
+
+/* Arm the settings save for a change made outside the overlay's own windows --
+ * the RmlUi options screen.  Only miopan_input's settings need it: the
+ * renderer's and audio's are noticed by the overlay's compare every frame. */
+void NoteSettingsChanged();
 }
 
 #endif

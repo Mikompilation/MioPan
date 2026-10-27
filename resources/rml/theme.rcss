@@ -1,0 +1,248 @@
+/*
+ * The menus' shared look: Fatal Frame II's.
+ *
+ * Taken from the game's own windows (DrawCmnWindow, DrawCmnSelCsr): near-black
+ * panels framed in gold hairlines, white serif text, and the cursor an amber
+ * bar with a hot core between two gold rails.  The crimson of the butterfly is
+ * the game's other colour, and it stays where the game puts it -- the emblem,
+ * the glow on a title, the section headings -- never on the chrome.  Film
+ * grain lies over everything, as it does over the game.
+ *
+ *   ink        #ded3c4   aged paper: body text
+ *   ink-dim    #8a7d72   ash: help, disabled
+ *   void       #080505   the deepest black
+ *   night      #120d0d   panels
+ *   lacquer    #1b1213   keys and buttons at rest
+ *   slot       #1a1410   wells: slider tracks
+ *   gold-dim   #6b5528   frames and rules at rest
+ *   gold       #b8913e   frames
+ *   gold-hot   #e2bc62   a frame with the cursor
+ *   amber      #e8902e   the cursor, a value being changed
+ *   crimson    #a31428   headings, the butterfly's glow
+ *   candle     #d9a441   warnings
+ *
+ * Sizes are in dp, and one dp is one pixel of the PS2's 640x448 screen scaled
+ * to the game picture (miopan_rmlui.h), so a layout here is a layout on the
+ * original screen.
+ */
+
+body
+{
+    width: 100%;
+    height: 100%;
+    font-family: "Crimson Text";
+    font-size: 13dp;
+    color: #ded3c4;
+}
+
+div, p, h1, h2
+{
+    display: block;
+}
+
+.hidden
+{
+    display: none;
+}
+
+/* Over the game: a dark wash, darker at the edges, and grain on top --
+ * the frame the game puts round its own menus. */
+.backdrop
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #080505b8;
+    decorator: image(images/vignette.png), image(images/grain.png repeat);
+}
+
+.title
+{
+    font-size: 24dp;
+    font-weight: bold;
+    letter-spacing: 3dp;
+    text-transform: uppercase;
+    color: #e8ddcc;
+    font-effect: glow(1dp 4dp 0dp 0dp #a3142899);
+}
+
+.emblem
+{
+    width: 30dp;
+    height: 22.5dp;
+}
+
+.rule
+{
+    height: 6dp;
+    decorator: image(images/rule.png);
+}
+
+/* ---- the cursor ------------------------------------------------------- */
+
+/* Anything that can hold the cursor.  The bar is an image rather than a
+ * gradient so it can fall off vertically as well as along the row, the way
+ * the game's own highlight does. */
+.selectable
+{
+    padding: 0 10dp;
+    border-left: 2dp #00000000;
+}
+
+.selectable.selected
+{
+    border-left-color: #e8902e;
+    decorator: image(images/cursor_glow.png);
+    color: #fff6e8;
+}
+
+.selectable.disabled
+{
+    color: #5d524b;
+}
+
+.selectable.disabled.selected
+{
+    border-left-color: #6b5528;
+}
+
+/* ---- button prompts --------------------------------------------------- */
+
+.prompts
+{
+    text-align: right;
+    font-size: 11dp;
+    color: #8a7d72;
+}
+
+.prompt
+{
+    display: inline-block;
+    margin-left: 14dp;
+    cursor: pointer;
+}
+
+.prompt:hover
+{
+    color: #ded3c4;
+}
+
+.key
+{
+    display: inline-block;
+    padding: 0 4dp;
+    margin-right: 4dp;
+    border: 1dp #6b5528;
+    background-color: #1b1213;
+    color: #ded3c4;
+    font-weight: bold;
+    font-size: 9.5dp;
+}
+
+/* ---- the yes / no window ---------------------------------------------- */
+
+.confirm
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #08050599;
+}
+
+.confirm-box
+{
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 300dp;
+    margin-left: -150dp;
+    margin-top: -48dp;
+    padding: 16dp 20dp 14dp;
+    background-color: #0a0807f5;
+    border: 1dp #b8913e;
+    text-align: center;
+    animation: 0.15s quadratic-out fade-in;
+}
+
+.confirm-text
+{
+    margin-bottom: 4dp;
+    font-size: 14dp;
+}
+
+.confirm-note
+{
+    margin-bottom: 14dp;
+    font-size: 11dp;
+    font-style: italic;
+    color: #d9a441;
+}
+
+.confirm-choices
+{
+    text-align: center;
+}
+
+.confirm-choice
+{
+    display: inline-block;
+    width: 70dp;
+    margin: 0 8dp;
+    padding: 2dp 0;
+    text-align: center;
+    cursor: pointer;
+}
+
+/* Centred, so the bar that fades both ways. */
+.confirm-choice.selected
+{
+    border-left-color: #00000000;
+    decorator: image(images/cursor_bar.png);
+}
+
+/* ---- scrolling -------------------------------------------------------- */
+
+scrollbarvertical
+{
+    width: 3dp;
+    margin-left: 4dp;
+}
+
+scrollbarvertical slidertrack
+{
+    background-color: #1b1213;
+}
+
+scrollbarvertical sliderbar
+{
+    background-color: #6b5528;
+}
+
+scrollbarvertical sliderbar:hover,
+scrollbarvertical sliderbar:active
+{
+    background-color: #e2bc62;
+}
+
+scrollbarvertical sliderarrowdec,
+scrollbarvertical sliderarrowinc
+{
+    width: 0;
+    height: 0;
+}
+
+@keyframes fade-in
+{
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes rise-in
+{
+    from { opacity: 0; transform: translateY(6dp); }
+    to   { opacity: 1; transform: translateY(0dp); }
+}

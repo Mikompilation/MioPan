@@ -133,7 +133,29 @@ add_custom_command(TARGET MioPan POST_BUILD
             "$<TARGET_FILE_DIR:MioPan>/resources"
 )
 
-# The UI's typeface, from the RmlUi checkout; see cmake/rmlui.cmake.
+# The RmlUi menus' documents, style sheets and images, deployed next to the
+# executable on every build -- the resources copy above only runs when the
+# executable relinks -- so a menu can be restyled without touching code.
+file(GLOB_RECURSE MIOPAN_RML_FILES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/resources/rml/*")
+set(MIOPAN_RML_DEPLOYED)
+foreach(rml_file ${MIOPAN_RML_FILES})
+    file(RELATIVE_PATH rml_relative "${CMAKE_SOURCE_DIR}" "${rml_file}")
+    set(rml_output "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${rml_relative}")
+    get_filename_component(rml_output_dir "${rml_output}" DIRECTORY)
+    add_custom_command(
+        OUTPUT "${rml_output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${rml_output_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${rml_file}" "${rml_output}"
+        DEPENDS "${rml_file}"
+        VERBATIM
+    )
+    list(APPEND MIOPAN_RML_DEPLOYED "${rml_output}")
+endforeach()
+add_custom_target(deploy_rml DEPENDS ${MIOPAN_RML_DEPLOYED})
+add_dependencies(MioPan deploy_rml)
+
+# The UI's typeface, downloaded by cmake/rmlui.cmake.
 add_custom_command(TARGET MioPan POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:MioPan>/resources/fonts"

@@ -1,5 +1,6 @@
 #include "miopan_rmlui.h"
-#include "miopan_rml_hello.h"
+#include "miopan_rml_options.h"
+#include "miopan_rml_pause.h"
 #include "../io/miopan_file.h"
 #include "../io/miopan_input.h"
 #include "../io/miopan_paths.h"
@@ -34,9 +35,23 @@ constexpr float kDesignWidth = 640.0f;
 constexpr float kDesignHeight = 448.0f;
 
 constexpr const char *kFontFiles[] = {
-    "resources/fonts/LatoLatin-Regular.ttf",
-    "resources/fonts/LatoLatin-Bold.ttf",
+    "resources/fonts/CrimsonText-Regular.ttf",
+    "resources/fonts/CrimsonText-SemiBold.ttf",
+    "resources/fonts/CrimsonText-Bold.ttf",
+    "resources/fonts/CrimsonText-Italic.ttf",
 };
+
+/* Pad navigation: up, down, left, right, as the arrow keys RmlUi and the
+ * screens navigate with.  A held direction repeats like a held key. */
+constexpr Rml::Input::KeyIdentifier kNavKeys[4] = {
+    Rml::Input::KI_UP, Rml::Input::KI_DOWN, Rml::Input::KI_LEFT,
+    Rml::Input::KI_RIGHT};
+constexpr Uint64 kNavRepeatDelayMs = 380;
+constexpr Uint64 kNavRepeatIntervalMs = 85;
+/* The left stick counts as a direction past the first and lets go below the
+ * second, so a stick resting near the edge does not chatter. */
+constexpr float kStickPress = 0.6f;
+constexpr float kStickRelease = 0.35f;
 
 struct Geometry
 {
@@ -126,6 +141,18 @@ struct RmlState
 
     /* The UI holding the controls -- see UpdateControlHold(). */
     bool holding_controls = false;
+
+    /* Pad navigation, per direction: held by the d-pad, by the left stick,
+     * and when the next repeat is due. */
+    bool nav_dpad[4] = {};
+    bool nav_stick[4] = {};
+    Uint64 nav_next_repeat[4] = {};
+    float stick_x = 0.0f;
+    float stick_y = 0.0f;
+    /* Which device the player last used: the pad, for the button prompts,
+     * and the mouse, for whether hover may move a cursor. */
+    bool using_pad = false;
+    bool using_mouse = false;
 };
 
 RmlState g_rml;
@@ -612,9 +639,11 @@ bool CreateGpuResources(SDL_GPUTextureFormat format)
     sampler.min_filter = SDL_GPU_FILTER_LINEAR;
     sampler.mag_filter = SDL_GPU_FILTER_LINEAR;
     sampler.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
-    sampler.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-    sampler.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-    sampler.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    /* Wrapping, as RmlUi's own backends sample: an image decorator with
+     * `repeat` tiles by running its texture coordinates past 1. */
+    sampler.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    sampler.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    sampler.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
     g_rml.sampler = SDL_CreateGPUSampler(g_rml.device, &sampler);
     if (g_rml.sampler == nullptr)
     {
@@ -734,21 +763,109 @@ Rml::Input::KeyIdentifier ToRmlKey(SDL_Keycode key)
     }
 }
 
-/* The pad as the keys RmlUi already navigates with: the d-pad as arrows, and
- * Cross / Circle as Enter / Escape -- Enter clicks the focused element. */
+/* The pad's buttons as keys, on the game's own terms: Cross confirms, and
+ * Triangle -- FF2's back button -- Circle and START all back out, START
+ * because it is what closes the pause screen.  L1 / R1 page between sections
+ * and SELECT is Tab, the keyboard's SELECT.  The d-pad is navigation and goes
+ * through SetNavHeld() instead. */
 Rml::Input::KeyIdentifier PadKey(Uint8 button)
 {
     using namespace Rml::Input;
     switch (button)
     {
-    case SDL_GAMEPAD_BUTTON_DPAD_UP: return KI_UP;
-    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return KI_DOWN;
-    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return KI_LEFT;
-    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return KI_RIGHT;
     case SDL_GAMEPAD_BUTTON_SOUTH: return KI_RETURN;
-    case SDL_GAMEPAD_BUTTON_EAST: return KI_ESCAPE;
+    case SDL_GAMEPAD_BUTTON_EAST:
+    case SDL_GAMEPAD_BUTTON_NORTH:
+    case SDL_GAMEPAD_BUTTON_START: return KI_ESCAPE;
+    case SDL_GAMEPAD_BUTTON_BACK: return KI_TAB;
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return KI_PRIOR;
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return KI_NEXT;
     default: return KI_UNKNOWN;
     }
+}
+
+int PadDirection(Uint8 button)
+{
+    switch (button)
+    {
+    case SDL_GAMEPAD_BUTTON_DPAD_UP: return 0;
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return 1;
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return 2;
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return 3;
+    default: return -1;
+    }
+}
+
+/* One source of one direction going down or up.  The key goes down when the
+ * first source takes it and up when the last lets go, so the d-pad and the
+ * stick together do not double a move. */
+void SetNavHeld(int direction, bool from_dpad, bool held)
+{
+    bool &source = from_dpad ? g_rml.nav_dpad[direction]
+                             : g_rml.nav_stick[direction];
+    if (source == held)
+    {
+        return;
+    }
+    const bool was = g_rml.nav_dpad[direction] || g_rml.nav_stick[direction];
+    source = held;
+    const bool now = g_rml.nav_dpad[direction] || g_rml.nav_stick[direction];
+    if (!was && now)
+    {
+        g_rml.context->ProcessKeyDown(kNavKeys[direction], 0);
+        g_rml.nav_next_repeat[direction] = SDL_GetTicks() + kNavRepeatDelayMs;
+    }
+    else if (was && !now)
+    {
+        g_rml.context->ProcessKeyUp(kNavKeys[direction], 0);
+    }
+}
+
+/* The left stick as four directions, the stronger axis winning so a diagonal
+ * moves one way at a time. */
+void UpdateStickNavigation()
+{
+    const float x = g_rml.stick_x;
+    const float y = g_rml.stick_y;
+    const bool horizontal = SDL_fabsf(x) > SDL_fabsf(y);
+    const float along = horizontal ? x : y;
+    for (int direction = 0; direction < 4; direction++)
+    {
+        const bool on_axis = (direction >= 2) == horizontal;
+        const bool negative = direction == 0 || direction == 2;
+        const bool toward = negative ? along < 0.0f : along > 0.0f;
+        const float threshold =
+            g_rml.nav_stick[direction] ? kStickRelease : kStickPress;
+        SetNavHeld(direction, false,
+                   on_axis && toward && SDL_fabsf(along) > threshold);
+    }
+}
+
+void RepeatNavigation()
+{
+    const Uint64 now = SDL_GetTicks();
+    for (int direction = 0; direction < 4; direction++)
+    {
+        if ((g_rml.nav_dpad[direction] || g_rml.nav_stick[direction]) &&
+            now >= g_rml.nav_next_repeat[direction])
+        {
+            g_rml.context->ProcessKeyDown(kNavKeys[direction], 0);
+            g_rml.nav_next_repeat[direction] = now + kNavRepeatIntervalMs;
+        }
+    }
+}
+
+/* Forget held directions without telling RmlUi: called when no menu wants the
+ * controls, or the window has lost them. */
+void ClearNavigation()
+{
+    for (int direction = 0; direction < 4; direction++)
+    {
+        g_rml.nav_dpad[direction] = false;
+        g_rml.nav_stick[direction] = false;
+    }
+    g_rml.stick_x = 0.0f;
+    g_rml.stick_y = 0.0f;
 }
 
 /* A held Enter must not click again and again. */
@@ -777,6 +894,8 @@ void DispatchEvent(const SDL_Event &event)
     {
     case SDL_EVENT_MOUSE_MOTION:
     {
+        g_rml.using_pad = false;
+        g_rml.using_mouse = true;
         const Rml::Vector2i mouse = ToContext(event.motion.x, event.motion.y);
         context->ProcessMouseMove(mouse.x, mouse.y, KeyModifiers());
         break;
@@ -792,6 +911,8 @@ void DispatchEvent(const SDL_Event &event)
         {
             break;
         }
+        g_rml.using_pad = false;
+        g_rml.using_mouse = true;
         const Rml::Vector2i mouse = ToContext(event.button.x, event.button.y);
         context->ProcessMouseMove(mouse.x, mouse.y, KeyModifiers());
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
@@ -810,6 +931,8 @@ void DispatchEvent(const SDL_Event &event)
         break;
     case SDL_EVENT_KEY_DOWN:
     {
+        g_rml.using_pad = false;
+        g_rml.using_mouse = false;
         const Rml::Input::KeyIdentifier key = ToRmlKey(event.key.key);
         if (!(event.key.repeat && IsActivationKey(key)))
         {
@@ -826,6 +949,14 @@ void DispatchEvent(const SDL_Event &event)
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
     {
+        g_rml.using_pad = true;
+        g_rml.using_mouse = false;
+        const int direction = PadDirection(event.gbutton.button);
+        if (direction >= 0)
+        {
+            SetNavHeld(direction, true, event.gbutton.down);
+            break;
+        }
         const Rml::Input::KeyIdentifier key = PadKey(event.gbutton.button);
         if (key == Rml::Input::KI_UNKNOWN)
         {
@@ -841,9 +972,35 @@ void DispatchEvent(const SDL_Event &event)
         }
         break;
     }
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+    {
+        const float value = (float)event.gaxis.value / 32767.0f;
+        if (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX)
+        {
+            g_rml.stick_x = value;
+        }
+        else if (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY)
+        {
+            g_rml.stick_y = value;
+        }
+        else
+        {
+            break;
+        }
+        if (SDL_fabsf(value) > kStickPress)
+        {
+            g_rml.using_pad = true;
+            g_rml.using_mouse = false;
+        }
+        UpdateStickNavigation();
+        break;
+    }
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        context->ProcessMouseLeave();
+        break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         context->ProcessMouseLeave();
+        ClearNavigation();
         break;
     default:
         break;
@@ -1012,16 +1169,15 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device, SDL_GPUTextureFormat format
     }
     UpdateContextGeometry();
 
-    if (MioPanRmlHello::Init(g_rml.context))
-    {
-        MioPanRmlHello::Show();
-    }
+    MioPanRmlOptions::Init(g_rml.context);
+    MioPanRmlPause::Init(g_rml.context);
     return true;
 }
 
 void Shutdown()
 {
-    MioPanRmlHello::Shutdown();
+    MioPanRmlPause::Shutdown();
+    MioPanRmlOptions::Shutdown();
     if (g_rml.rml_initialised)
     {
         /* Releases every document's geometry and texture through the
@@ -1057,6 +1213,16 @@ void Frame()
     }
 
     UpdateContextGeometry();
+    if (WantsInput())
+    {
+        RepeatNavigation();
+    }
+    else
+    {
+        ClearNavigation();
+    }
+    MioPanRmlOptions::Frame();
+    MioPanRmlPause::Frame();
     g_rml.context->Update();
 
     DrawSnapshot &frame = g_rml.frame;
@@ -1080,14 +1246,75 @@ bool WantsInput()
     {
         return false;
     }
+    /* Modal documents only: a non-modal one is decoration over the game --
+     * a prompt, a hint -- and must not take the controls. */
     for (int i = 0; i < g_rml.context->GetNumDocuments(); i++)
     {
-        if (g_rml.context->GetDocument(i)->IsVisible())
+        Rml::ElementDocument *document = g_rml.context->GetDocument(i);
+        if (document->IsVisible() && document->IsModal())
         {
             return true;
         }
     }
     return false;
+}
+
+bool UsingPad()
+{
+    return g_rml.using_pad;
+}
+
+bool PointerActive()
+{
+    return g_rml.using_mouse;
+}
+
+const char *PadButtonName(SDL_GamepadButton button)
+{
+    /* The opened pad's own lettering when there is one; the game's DUALSHOCK
+     * names otherwise. */
+    SDL_Gamepad *pad = nullptr;
+    int count = 0;
+    SDL_JoystickID *pads = SDL_GetGamepads(&count);
+    for (int i = 0; pads != nullptr && i < count && pad == nullptr; i++)
+    {
+        pad = SDL_GetGamepadFromID(pads[i]);
+    }
+    SDL_free(pads);
+
+    bool playstation = true;
+    if (pad != nullptr)
+    {
+        switch (SDL_GetGamepadButtonLabel(pad, button))
+        {
+        case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
+        case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
+        case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
+        case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
+        case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
+        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
+        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+        case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
+        default: break;
+        }
+        const SDL_GamepadType type = SDL_GetGamepadType(pad);
+        playstation = type == SDL_GAMEPAD_TYPE_PS3 ||
+                      type == SDL_GAMEPAD_TYPE_PS4 ||
+                      type == SDL_GAMEPAD_TYPE_PS5;
+    }
+
+    switch (button)
+    {
+    case SDL_GAMEPAD_BUTTON_SOUTH: return "Cross";
+    case SDL_GAMEPAD_BUTTON_EAST: return "Circle";
+    case SDL_GAMEPAD_BUTTON_WEST: return "Square";
+    case SDL_GAMEPAD_BUTTON_NORTH: return "Triangle";
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return playstation ? "L1" : "LB";
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return playstation ? "R1" : "RB";
+    case SDL_GAMEPAD_BUTTON_START: return playstation ? "START" : "Menu";
+    case SDL_GAMEPAD_BUTTON_BACK: return playstation ? "SELECT" : "View";
+    default: return "?";
+    }
 }
 
 Rml::Context *GetContext()

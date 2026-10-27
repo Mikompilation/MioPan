@@ -1,0 +1,32 @@
+<rml>
+<head>
+    <title>Pause</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="pause.rcss"/>
+</head>
+<body id="pause">
+    <div class="backdrop"></div>
+    <div id="panel">
+        <img class="emblem" src="images/butterfly.png"/>
+        <h1 class="title">Pause</h1>
+        <div class="rule"></div>
+        <div id="items">
+            <div id="item-continue" class="item selectable">Continue</div>
+            <div id="item-options" class="item selectable">Options</div>
+            <div id="item-title" class="item selectable">Return to Title</div>
+        </div>
+        <div class="rule"></div>
+    </div>
+    <div id="prompts" class="prompts"></div>
+    <div id="confirm" class="confirm hidden">
+        <div class="confirm-box">
+            <p class="confirm-text"></p>
+            <p class="confirm-note"></p>
+            <div class="confirm-choices">
+                <span id="confirm-yes" class="confirm-choice selectable">Yes</span>
+                <span id="confirm-no" class="confirm-choice selectable">No</span>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

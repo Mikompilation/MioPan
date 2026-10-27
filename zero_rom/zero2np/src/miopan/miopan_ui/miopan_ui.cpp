@@ -1,5 +1,5 @@
 #include "miopan_ui.h"
-#include "miopan_rml_hello.h"
+#include "miopan_rml_options.h"
 #include "miopan_rmlui.h"
 #include "miopan_ui_assists.h"
 #include "miopan_ui_events.h"
@@ -3015,16 +3015,18 @@ void DrawDebugMenu()
     ImGui::TextDisabled("Developer");
     MioPanUi::DrawEventsMenuItem();
     MioPanUi::DrawDeveloperItems();
-    if (ImGui::MenuItem("RmlUi hello world", nullptr,
-                        MioPanRmlHello::IsVisible()))
+    /* The player's options screen, opened over whatever is running -- for
+     * working on it without going through the title or the pause screen. */
+    if (ImGui::MenuItem("Options screen (RmlUi)", nullptr,
+                        MioPan_RmlOptionsIsOpen() != 0))
     {
-        if (MioPanRmlHello::IsVisible())
+        if (MioPan_RmlOptionsIsOpen() != 0)
         {
-            MioPanRmlHello::Hide();
+            MioPan_RmlOptionsClose();
         }
         else
         {
-            MioPanRmlHello::Show();
+            MioPan_RmlOptionsOpen(MIOPAN_RML_OPTIONS_FROM_OVERLAY);
         }
     }
 
@@ -4119,5 +4121,10 @@ void SetScaleOverride(float scale)
 float GetScaleOverride()
 {
     return g_ui_scale_override;
+}
+
+void NoteSettingsChanged()
+{
+    MarkSettingsDirty();
 }
 }

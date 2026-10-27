@@ -1,0 +1,33 @@
+<rml>
+<head>
+    <title>Options</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="options.rcss"/>
+</head>
+<body id="options">
+    <div class="backdrop"></div>
+    <div id="frame">
+        <div id="header">
+            <img class="emblem" src="images/butterfly.png"/>
+            <h1 class="title">Options</h1>
+        </div>
+        <!-- Sections and their rows are built by miopan_rml_options.cpp. -->
+        <div id="tabs"></div>
+        <div class="rule" id="rule-top"></div>
+        <div id="pages"></div>
+        <div class="rule" id="rule-bottom"></div>
+        <p id="help"></p>
+        <div id="prompts" class="prompts"></div>
+    </div>
+    <div id="confirm" class="confirm hidden">
+        <div class="confirm-box">
+            <p class="confirm-text"></p>
+            <p class="confirm-note"></p>
+            <div class="confirm-choices">
+                <span id="confirm-yes" class="confirm-choice selectable">Yes</span>
+                <span id="confirm-no" class="confirm-choice selectable">No</span>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

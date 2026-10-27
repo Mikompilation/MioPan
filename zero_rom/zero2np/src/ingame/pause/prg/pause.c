@@ -35,6 +35,7 @@
 #include "../../../system/os/system.h"              // SystemBankPlay / SND_3D_SET
 #include "../../../system/pad/pad.h"                // paddat / pad / VibrateRequest
 #include "../../../miopan/miopan_config.h"          // MioPan_ConfigDebugMenuEnabled (port)
+#include "../../../miopan/miopan_ui/miopan_rml_pause.h"  // the RmlUi pause screen (port)
 
 /* Rows of the pause menu: continue / return to title / vibration toggle. */
 #define PAUSE_MENU_COUNT 3
@@ -48,6 +49,14 @@
 #define PAUSE_CAPTURE_ADRS 0x2bc0
 
 static PAUSE_CTRL pause_ctrl;       /* bss 4bbaf8 */
+
+/* PORT DEVIATION: the menu itself is the port's RmlUi pause screen
+ * (miopan_rml_pause.h) -- Continue, Options, Return to Title -- because the
+ * game's message strings have no "Options" to add a row with.  This file still
+ * owns the phase: the paused frame, the controller-unplugged step, and what
+ * each choice does, since the screen answers in PauseMain()'s own codes.  The
+ * panel below runs as it always did whenever RmlUi is unavailable. */
+static int pause_rml;
 
 static void PauseCtrlInit(void);
 static void PauseInDispCaptuer(void);
@@ -76,6 +85,8 @@ void PauseInit(void)
      * buffers, so pausing it the other way round leaves a tail playing. */
     StreamAutoAllPause();                                               /* 138 */
     SndBufAllPause();                                                   /* 139 */
+
+    pause_rml = MioPan_RmlPauseOpen();
 }
 
 static void PauseCtrlInit(void)
@@ -107,6 +118,23 @@ int PauseMain(void)
      * in -- forces the error message over whatever step was running. */
     if ((padIsConnected(0) == 0) || (GetPadDUALSHOCK2(0) == 0)) {       /* 193 */
         pause_ctrl.step = 2;                                            /* 194 */
+    }
+
+    if (pause_rml != 0) {
+        /* The unplugged message is the game's, and it needs the pad to answer
+         * it, so the screen steps aside for it. */
+        MioPan_RmlPauseSetHidden(pause_ctrl.step == 2);
+        if (pause_ctrl.step == 2) {
+            PausePadErrorPad();
+            return 0;
+        }
+
+        ret = MioPan_RmlPauseConsumeResult();
+        if (ret != 0) {
+            MioPan_RmlPauseClose();
+            pause_rml = 0;
+        }
+        return ret;
     }
 
     switch (pause_ctrl.step) {                                          /* 197 */
@@ -257,6 +285,14 @@ static void PausePadErrorPad(void)
 void PauseDispMain(void)
 {
     PauseCaptureDataDisp();                                             /* 370 */
+
+    /* The RmlUi screen draws its own panel over the paused frame. */
+    if (pause_rml != 0) {
+        if (pause_ctrl.step == 2) {
+            PausePadErrorMsgDisp(0, 0, 0x80);
+        }
+        return;
+    }
 
     PauseWinDisp(0, 0, 0x80);                                           /* 373 */
     PauseTitleDisp(0, 0, 0x80);                                         /* 375 */

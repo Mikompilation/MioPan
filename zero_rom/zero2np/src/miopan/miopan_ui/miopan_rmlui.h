@@ -2,6 +2,7 @@
 #define MIOPAN_RMLUI_H
 
 #include <SDL3/SDL_events.h>
+#include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_video.h>
 
@@ -16,7 +17,8 @@ class Context;
  * Dear ImGui stays the developer overlay; RmlUi is for what a player sees, laid
  * out in .rml/.rcss documents under resources/rml.  This is its backend: the
  * SDL_GPU renderer, the input bridge, and the one Rml::Context everything is
- * shown in.  The screens themselves live beside it (miopan_rml_*.cpp).
+ * shown in.  The screens themselves live beside it, one file each
+ * (miopan_rml_*.cpp), with what they share in miopan_rml_common.cpp.
  *
  * The context covers the game picture -- the present rect, not the window --
  * so a menu is framed with the game whatever the window's aspect.  It is laid
@@ -24,10 +26,13 @@ class Context;
  * picture's scale over the ROM's 640x448: a document written in dp units is
  * written in PS2 screen coordinates.
  *
- * While any document is visible the UI has the controls: keys, the pad and
- * the mouse go to RmlUi and the game reads nothing (MioPan_InputSetMenu-
+ * While a modal document is visible the UI has the controls: keys, the pad
+ * and the mouse go to RmlUi and the game reads nothing (MioPan_InputSetMenu-
  * Suppressed), and that hold outlasts the document until every key and pad
- * button is up, so the press that closed a menu never lands in the game.
+ * button is up, so the press that closed a menu never lands in the game.  The
+ * pad arrives as keys: the d-pad and left stick as the arrows (repeating while
+ * held), Cross as Enter, Triangle / Circle / START as Escape, L1 / R1 as Page
+ * Up / Page Down and SELECT as Tab.
  *
  * Drawing follows MioPanUi's overlay.  Frame() runs RmlUi on the game thread
  * and records what it drew into a frame list; display-rate smoothing presents
@@ -52,8 +57,20 @@ void ProcessEvent(const SDL_Event *event);
  * what they draw. */
 void Frame();
 
-/* True while a document is visible and the UI has the controls. */
+/* True while a modal document is visible and the UI has the controls. */
 bool WantsInput();
+
+/* Whether the pad was the last thing the player touched, so a screen can show
+ * its button prompts for the pad or for the keyboard. */
+bool UsingPad();
+/* What the connected pad calls `button` -- "Cross", "A", "L1", "RB" -- or the
+ * DUALSHOCK name when no pad is open. */
+const char *PadButtonName(SDL_GamepadButton button);
+/* Whether the mouse was the last thing the player used.  RmlUi re-runs hover
+ * whenever content moves under a resting pointer -- a list scrolled by the
+ * pad, a screen opening where the pointer happens to be -- so a screen lets
+ * hover move its cursor only while this says the player is pointing. */
+bool PointerActive();
 
 Rml::Context *GetContext();
 

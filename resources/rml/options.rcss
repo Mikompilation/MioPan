@@ -1,0 +1,285 @@
+/*
+ * The options screen.  theme.rcss carries the palette and the shared pieces;
+ * this is the layout: a column centred on the PS2's 640x448, title and
+ * sections at the top, the rows between two rules, help and prompts below.
+ */
+
+#frame
+{
+    position: absolute;
+    left: 50%;
+    top: 18dp;
+    bottom: 14dp;
+    width: 540dp;
+    margin-left: -270dp;
+    /* A fade rather than theme.rcss's rise: a transform on an ancestor makes
+     * RmlUi clip the scrolling rows with a mask, which the backend does not
+     * draw, so they would spill out of #pages until it settled. */
+    animation: 0.2s quadratic-out fade-in;
+}
+
+#header
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 34dp;
+}
+
+#header .emblem
+{
+    position: absolute;
+    left: 0;
+    top: 4dp;
+}
+
+#header .title
+{
+    position: absolute;
+    left: 38dp;
+    top: 0;
+    line-height: 34dp;
+    white-space: nowrap;
+}
+
+/* ---- sections ---------------------------------------------------------- */
+
+#tabs
+{
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 40dp;
+    height: 20dp;
+    white-space: nowrap;
+}
+
+.tab
+{
+    display: inline-block;
+    padding: 0 9dp;
+    height: 18dp;
+    line-height: 18dp;
+    font-size: 12dp;
+    letter-spacing: 1dp;
+    text-transform: uppercase;
+    color: #8a7d72;
+    border-bottom: 2dp #00000000;
+    cursor: pointer;
+}
+
+.tab:hover
+{
+    color: #ded3c4;
+}
+
+.tab.active
+{
+    color: #fff6e8;
+    border-bottom-color: #e2bc62;
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+#rule-top
+{
+    position: absolute;
+    left: -10dp;
+    right: -10dp;
+    top: 62dp;
+}
+
+/* ---- rows -------------------------------------------------------------- */
+
+#pages
+{
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 72dp;
+    bottom: 66dp;
+    overflow-y: auto;
+}
+
+.page
+{
+    padding-right: 8dp;
+}
+
+.heading
+{
+    margin: 10dp 0 3dp 0;
+    padding: 0 0 1dp 2dp;
+    font-size: 10dp;
+    font-weight: bold;
+    letter-spacing: 2dp;
+    text-transform: uppercase;
+    color: #c4283c;
+    border-bottom: 1dp #6b552888;
+}
+
+.row
+{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 19dp;
+    line-height: 19dp;
+    cursor: pointer;
+}
+
+.row-label
+{
+    font-size: 13dp;
+}
+
+.row-value
+{
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 220dp;
+    font-size: 12dp;
+    color: #c9bcaa;
+}
+
+.row.selected .row-value
+{
+    color: #fff6e8;
+}
+
+.row.disabled .row-value
+{
+    color: #5d524b;
+}
+
+.value
+{
+    display: inline-block;
+    min-width: 54dp;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.choice .value
+{
+    width: 168dp;
+}
+
+.slider .value
+{
+    width: 58dp;
+    text-align: right;
+    padding-right: 4dp;
+}
+
+.action-value
+{
+    padding: 0 12dp;
+    border: 1dp #6b5528;
+    background-color: #1b1213;
+    line-height: 15dp;
+    font-size: 11dp;
+    letter-spacing: 1dp;
+    text-transform: uppercase;
+}
+
+.row.selected .action-value
+{
+    border-color: #e2bc62;
+    background-color: #3a2a10;
+}
+
+.row.disabled .action-value
+{
+    border-color: #2a1c1d;
+    background-color: #120d0d;
+}
+
+/* The step arrows: dim at rest, lit on the cursor's row. */
+.arrow
+{
+    display: inline-block;
+    width: 14dp;
+    text-align: center;
+    font-size: 15dp;
+    color: #6b5528;
+}
+
+.row.selected .arrow
+{
+    color: #e8a040;
+}
+
+.row.disabled .arrow,
+.row.disabled.selected .arrow
+{
+    color: #2a1c1d;
+}
+
+.arrow:hover
+{
+    color: #f4ebde;
+}
+
+/* A slider: a well with the crimson fill inside it. */
+.track
+{
+    display: inline-block;
+    position: relative;
+    width: 120dp;
+    height: 5dp;
+    margin: 0 4dp;
+    background-color: #1a1410;
+    border: 1dp #6b5528;
+}
+
+.fill
+{
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    background-color: #8a6a2e;
+}
+
+.row.selected .fill
+{
+    background-color: #e8902e;
+}
+
+.row.disabled .fill
+{
+    background-color: #2a1c1d;
+}
+
+/* ---- help and prompts ------------------------------------------------- */
+
+#rule-bottom
+{
+    position: absolute;
+    left: -10dp;
+    right: -10dp;
+    bottom: 56dp;
+}
+
+#help
+{
+    position: absolute;
+    left: 4dp;
+    right: 4dp;
+    bottom: 20dp;
+    height: 32dp;
+    font-size: 11.5dp;
+    font-style: italic;
+    color: #a89a8c;
+}
+
+#prompts
+{
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    height: 14dp;
+}

@@ -89,6 +89,7 @@
 #include "movie_room.h"
 #include "../miopan/miopan_config.h"    // MioPan_ConfigDebugMenuEnabled (port)
 #include "../outgame/title_room.h"      // TitleRoomBeforeIngameReset (port)
+#include "../miopan/miopan_ui/miopan_rml_pause.h"  // MioPan_RmlPauseClose (port)
 
 /* --------------------------------------------------------------------------
  *  ingame.o's own storage.
@@ -1063,6 +1064,9 @@ void init_Story_Pause(void)
 void end_Story_Pause(void)
 {
     int ret;
+
+    /* PORT: whatever ended the phase, the RmlUi pause screen goes with it. */
+    MioPan_RmlPauseClose();
 
     iPauseLockTimer = 0;                                                /* 1408 */
     ret = movie_projecterIsReq();                                       /* 1409 */
