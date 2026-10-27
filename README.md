@@ -33,9 +33,9 @@ What this means in practice:
 
 # Build
 The build fetches its dependencies automatically (SDL3, SDL_shadercross, spdlog,
-cglm, Dear ImGui, ImPlot). FFmpeg, used for the game's movies, comes from the
-prebuilt tree in `extern/ffmpeg` (Windows binaries). Without it the build still
-works, but movies play their audio over a black screen.
+cglm, Dear ImGui, ImPlot). FFmpeg, used for the game's movies, is built from
+source on Linux. Windows uses the prebuilt tree in `extern/ffmpeg`; without
+that tree, Windows builds play movie audio over a black screen.
 
 ```sh
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -50,7 +50,7 @@ MinGW is the toolchain the nightly builds use. If every MinGW compile fails with
 no error message, MinGW's `bin` folder is missing from `PATH`.
 
 ## Linux
-`GCC`, `CMake` and `Ninja` are required, plus SDL3's system development packages
+`GCC`, `CMake`, `Make` and `Git` are required (Ninja is optional), plus SDL3's system development packages
 (X11/Wayland, ALSA/PulseAudio and so on). On Debian or Ubuntu:
 
 ```sh
@@ -60,6 +60,15 @@ sudo apt-get install build-essential git pkg-config cmake ninja-build \
   libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
   libdrm-dev libgbm-dev libgl1-mesa-dev libglu1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
   libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libusb-1.0-0-dev
+```
+
+A Release build with Make:
+
+```sh
+mkdir -p build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j"$(nproc)"
 ```
 
 A build only runs on systems whose glibc is at least as new as the one it was

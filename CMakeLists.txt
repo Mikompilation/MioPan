@@ -109,8 +109,8 @@ target_link_libraries(MioPan PRIVATE
 )
 #
 # The MPEG-2 decoder behind sceMpegGetPicture(); see cmake/ffmpeg.cmake.  When
-# the prebuilt tree is absent the whole thing compiles out and movies play
-# their audio over a black screen.
+# Windows prebuilt tree is absent the decoder compiles out. Other hosts
+# build FFmpeg from source.
 if(MIOPAN_HAVE_FFMPEG)
     target_compile_definitions(MioPan PRIVATE MIOPAN_HAVE_FFMPEG=1)
     target_include_directories(MioPan PRIVATE "${FFMPEG_INCLUDE_DIR}")
