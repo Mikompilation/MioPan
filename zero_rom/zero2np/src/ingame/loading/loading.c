@@ -105,6 +105,7 @@ int LoadingTexLoadWait(void)
 
 void LoadingCtrlInit(void)
 {
+    loading_ctrl.step = 0; // A previous load may have left its texture marked ready.
     loading_ctrl.anim_step  = 0;                                        /* 176 */
     loading_ctrl.anim_timer = 0;                                        /* 177 */
     loading_ctrl.fade_timer = 0;                                        /* 178 */
