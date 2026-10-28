@@ -5920,18 +5920,18 @@ bool BuildFilmGrainSheet(int size, int alpmx, int colmx)
                                   0xffu);
     }
 
+    unsigned char pixels[256][4];
+    for (unsigned int i = 0; i < 256; ++i)
+    {
+        pixels[i][0] = pixels[i][1] = pixels[i][2] = grey[i];
+        pixels[i][3] = i <= 127 ? (unsigned char)(i << 1) : (unsigned char)0xff;
+    }
     std::vector<unsigned char> rgba((size_t)size * (size_t)size * 4u);
     for (size_t i = 0; i < rgba.size(); i += 4)
     {
         const unsigned int index =
             (unsigned int)((float)alpmx * uniform()) & 0xffu;
-        const unsigned char c = grey[index];
-
-        rgba[i + 0] = c;
-        rgba[i + 1] = c;
-        rgba[i + 2] = c;
-        rgba[i + 3] = index <= 127 ? (unsigned char)(index << 1)
-                                   : (unsigned char)0xff;
+        std::memcpy(&rgba[i], pixels[index], 4);
     }
 
     if (g_film_grain_sheet != nullptr)
