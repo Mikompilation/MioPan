@@ -8,7 +8,8 @@ enum class SaveArchiveFormat
     None,
     Psu,
     Max,
-    Xps
+    Xps,
+    Cbs
 };
 bool ReadSaveArchive(const Bytes &data, std::string &directory, SaveFiles &files,
                      std::string &error);

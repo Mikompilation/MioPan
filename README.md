@@ -33,7 +33,7 @@ What this means in practice:
 
 # Build
 The build fetches its dependencies automatically (SDL3, SDL_shadercross, spdlog,
-cglm, Dear ImGui, ImPlot, RmlUi, FreeType). FFmpeg, used for the game's movies,
+cglm, Dear ImGui, ImPlot, RmlUi, FreeType, zlib). FFmpeg, used for the game's movies,
 is built from source on Linux. Windows uses the prebuilt tree in `extern/ffmpeg`;
 without that tree, Windows builds play movie audio over a black screen.
 
@@ -101,7 +101,7 @@ folder (`%APPDATA%\Mikompilation\MioPan` on Windows).
 # PS2 save transfer
 
 Open **Settings → PS2 save transfer…** in the F1 overlay to import or export EU
-(SLES-52384) saves. Import from an 8 MB memory card, PSU/MAX/XPS/SPS archive or extracted
+(SLES-52384) saves. Import from an 8 MB memory card, PSU/MAX/XPS/SPS/CBS archive or extracted
 save folder. Select one or more saves and assign their destination slots; room
 previews and play times help identify each slot.
 
@@ -111,10 +111,11 @@ Export offers these formats:
 - **Raw / non-ECC (.bin):** an 8 MB virtual memory card, for OPL.
 - **PSU (.psu):** an EMS save archive, for uLaunchELF and PS2 save-transfer tools.
 - **MAX (.max):** an Action Replay MAX save archive.
+- **CBS (.cbs):** a CodeBreaker save archive.
 - **XPS/SPS (.xps/.sps):** an X-Port V2 / SharkPort save archive.
 - **Extracted folder:** the game's save files, for tools that accept folders.
 
-PSU, MAX and XPS/SPS contain this game's selected saves and required system/icon files,
+PSU, MAX, XPS/SPS and CBS contain this game's selected saves and required system/icon files,
 not an entire card. Card exports start with a blank card. Choosing an output
 format opens its picker; confirming the destination exports immediately.
 Missing extensions are added automatically. Existing output files/folders are

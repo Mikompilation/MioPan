@@ -4,6 +4,7 @@
 #include <cstring>
 #include <ctime>
 #include <stdexcept>
+#include <zlib.h>
 
 namespace MioPanSave
 {
@@ -398,6 +399,97 @@ SaveFiles ReadXps(const Bytes &bytes, std::string &directory)
     Need(at == end, "X-Port body size does not match its files.");
     return files;
 }
+// CBS uses this fixed permutation as format data instead of an RC4 key schedule.
+void CbsCrypt(Bytes &bytes)
+{
+    constexpr char permutation[] =
+        "5f1f856f31aa3b1821b9ce1c074c9cb481b8ef9859aef926e380a3292d735162"
+        "7c6446f4341af6e1ba3a0d82790a5c1671498eac8c9f351945943f560c91000b"
+        "d7b0dd3966a176521357f3bb4ee5dcf06584b2d6df153c631d8914bdd236feb1"
+        "ca8ba4c69e674737426d6a039270057d962f4090c4f13e3d01f7681ec3fc72b5"
+        "54cfe741e44d835512220978fadea7060823bf0fccc19761c54ae6a011c2ea74"
+        "0287d5d19db77e386053958d2577105e9b7fd86edaa22e204fcd8fcbbe5ae0ed"
+        "2c9ad4e2afd0a9e8ad7abca8f2eeebf5a69928246c2b755df8d38617fbc07bb3"
+        "58dbc74bff0450e98869c92aabfd5b1b8ad9ec27440e33c86b933248b63043a5";
+    std::array<unsigned, 256> state{};
+    auto nibble = [](char c) { return unsigned(c <= '9' ? c - '0' : c - 'a' + 10); };
+    for (unsigned n = 0; n < state.size(); ++n)
+        state[n] = nibble(permutation[n * 2]) * 16 + nibble(permutation[n * 2 + 1]);
+    unsigned i = 0, j = 0;
+    for (auto &byte : bytes)
+    {
+        i = (i + 1) & 255;
+        j = (j + state[i]) & 255;
+        std::swap(state[i], state[j]);
+        byte ^= uint8_t(state[(state[i] + state[j]) & 255]);
+    }
+}
+SaveFiles ReadCbs(const Bytes &data, std::string &directory)
+{
+    const unsigned header = Get(data, 8), expanded = Get(data, 12), packed = Get(data, 16);
+    Need(header >= 124 && header <= data.size(), "Invalid CBS header size.");
+    Need(expanded >= 64 && expanded <= Limit, "Invalid CBS expanded size.");
+    Need(packed == data.size() || packed == data.size() - header, "Invalid CBS compressed size.");
+    directory = Name(data, 20);
+    Bytes compressed(data.begin() + header, data.end());
+    CbsCrypt(compressed);
+    Bytes body(expanded);
+    uLongf produced = body.size();
+    uLong consumed = compressed.size();
+    const int status = uncompress2(body.data(), &produced, compressed.data(), &consumed);
+    Need(status == Z_OK && produced == body.size() && consumed == compressed.size(),
+         "Invalid or corrupt CBS compressed data.");
+    SaveFiles files;
+    size_t at = 0;
+    while (at < body.size())
+    {
+        Need(body.size() - at >= 64 && files.size() < 64, "Invalid CBS file table.");
+        const unsigned size = Get(body, at + 16);
+        Need((Get(body, at + 20) & 0x30) == 0x10, "Unsupported CBS subdirectory.");
+        const auto name = Name(body, at + 32);
+        at += 64;
+        AddFile(files, name, body, at, size);
+        at += size;
+    }
+    return files;
+}
+Bytes WriteCbs(const std::string &directory, const SaveFiles &files)
+{
+    Bytes body;
+    for (const auto &file : files)
+    {
+        const auto entry = Entry(file.first, uint32_t(file.second.size()), false);
+        const size_t at = body.size();
+        body.resize(at + 64, 0);
+        std::copy_n(entry.begin() + 8, 8, body.begin() + at);
+        std::copy_n(entry.begin() + 24, 8, body.begin() + at + 8);
+        Put(body, at + 16, uint32_t(file.second.size()));
+        Put(body, at + 20, 0x8497);
+        SetName(body, at + 32, file.first);
+        body.insert(body.end(), file.second.begin(), file.second.end());
+    }
+    Need(body.size() <= Limit, "Save archive is too large.");
+    uLongf size = compressBound(body.size());
+    Bytes compressed(size);
+    Need(compress2(compressed.data(), &size, body.data(), body.size(), Z_BEST_COMPRESSION) == Z_OK,
+         "CBS compression failed.");
+    compressed.resize(size);
+    CbsCrypt(compressed);
+    Bytes out(296, 0);
+    std::memcpy(out.data(), "CFU", 3);
+    Put(out, 4, 8000);
+    Put(out, 8, 296);
+    Put(out, 12, uint32_t(body.size()));
+    Put(out, 16, uint32_t(out.size() + compressed.size()));
+    SetName(out, 20, directory);
+    const auto entry = Entry(directory, uint32_t(files.size() + 2), true);
+    std::copy_n(entry.begin() + 8, 8, out.begin() + 52);
+    std::copy_n(entry.begin() + 24, 8, out.begin() + 60);
+    Put(out, 76, 0x8427);
+    SetName(out, 92, directory);
+    out.insert(out.end(), compressed.begin(), compressed.end());
+    return out;
+}
 } // namespace
 bool ReadSaveArchive(const Bytes &data, std::string &directory, SaveFiles &files,
                      std::string &error)
@@ -432,6 +524,8 @@ bool ReadSaveArchive(const Bytes &data, std::string &directory, SaveFiles &files
             }
             Need(at == body.size(), "Unexpected MAX trailing data.");
         }
+        else if (data.size() >= 4 && std::memcmp(data.data(), "CFU\0", 4) == 0)
+            result = ReadCbs(data, dir);
         else if (data.size() >= 17 && std::memcmp(data.data(), "\x0d\0\0\0SharkPortSave", 17) == 0)
             result = ReadXps(data, dir);
         else
@@ -477,7 +571,7 @@ bool WriteSaveArchive(const std::string &directory, const SaveFiles &files,
     try
     {
         Need(format == SaveArchiveFormat::Psu || format == SaveArchiveFormat::Max ||
-                 format == SaveArchiveFormat::Xps,
+                 format == SaveArchiveFormat::Xps || format == SaveArchiveFormat::Cbs,
              "Choose a supported save archive format.");
         Need(!files.empty() && files.size() <= 64, "Invalid archive file count.");
         size_t total = 0;
@@ -487,7 +581,9 @@ bool WriteSaveArchive(const std::string &directory, const SaveFiles &files,
             total += file.second.size();
         }
         Bytes out;
-        if (format == SaveArchiveFormat::Psu)
+        if (format == SaveArchiveFormat::Cbs)
+            out = WriteCbs(directory, files);
+        else if (format == SaveArchiveFormat::Psu)
         {
             for (const auto &name : {directory, std::string("."), std::string("..")})
             {

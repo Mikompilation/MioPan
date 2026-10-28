@@ -53,6 +53,7 @@ include(implot)
 include(rmlui)
 include(shadercross)
 include(ffmpeg)
+include(save_zlib)
 
 # ---- sources ------------------------------------------------------------
 file(GLOB_RECURSE MIOPAN_TRANSLATION_UNITS CONFIGURE_DEPENDS
@@ -108,6 +109,7 @@ target_link_libraries(MioPan PRIVATE
     imgui::imgui
     implot::implot
     RmlUi::RmlUi
+    ZLIB::ZLIBSTATIC
 )
 #
 # The MPEG-2 decoder behind sceMpegGetPicture(); see cmake/ffmpeg.cmake.  When

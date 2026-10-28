@@ -40,6 +40,8 @@ const char *OutputSuffix()
         return ".max";
     if (output_archive == SaveArchiveFormat::Xps)
         return ".xps";
+    if (output_archive == SaveArchiveFormat::Cbs)
+        return ".cbs";
     return output_ecc ? ".ps2" : ".bin";
 }
 std::string source_error, target_error, message;
@@ -241,13 +243,13 @@ void Browse(SDL_Window *window, Dialog dialog)
             {
                 const auto &r = *static_cast<Request *>(data);
                 static const SDL_DialogFileFilter filter{"PS2 cards or save archives",
-                                                         "ps2;mcd;bin;vmc;psu;max;xps;sps"};
-                static const SDL_DialogFileFilter outputs[] = {{"PCSX2 / ECC memory card", "ps2"},
-                                                               {"OPL / raw memory card", "bin"},
-                                                               {"PSU / EMS - uLaunchELF", "psu"},
-                                                               {"Action Replay MAX", "max"},
-                                                               {"X-Port / SharkPort", "xps;sps"}};
-                const auto *save_filter = &outputs[output_archive == SaveArchiveFormat::Xps   ? 4
+                                                         "ps2;mcd;bin;vmc;psu;max;xps;sps;cbs"};
+                static const SDL_DialogFileFilter outputs[] = {
+                    {"PCSX2 / ECC memory card", "ps2"}, {"OPL / raw memory card", "bin"},
+                    {"PSU / EMS - uLaunchELF", "psu"},  {"Action Replay MAX", "max"},
+                    {"X-Port / SharkPort", "xps;sps"},  {"CodeBreaker", "cbs"}};
+                const auto *save_filter = &outputs[output_archive == SaveArchiveFormat::Cbs   ? 5
+                                                   : output_archive == SaveArchiveFormat::Xps ? 4
                                                    : output_archive == SaveArchiveFormat::Psu ? 2
                                                    : output_archive == SaveArchiveFormat::Max ? 3
                                                    : output_ecc                               ? 0
@@ -640,9 +642,9 @@ void Draw(SDL_Window *window)
                            "export immediately.");
         ImGui::Spacing();
         const float width = ImGui::GetContentRegionAvail().x;
-        const float height = std::clamp((ImGui::GetContentRegionAvail().y - 40.f) / 6.f -
+        const float height = std::clamp((ImGui::GetContentRegionAvail().y - 40.f) / 7.f -
                                             ImGui::GetStyle().ItemSpacing.y,
-                                        70.f, 110.f);
+                                        60.f, 110.f);
         int format = -1;
         if (ChoiceCard("PCSX2 / ECC\n\nStandard .ps2 memory card", width, height))
             format = 1;
@@ -657,6 +659,8 @@ void Draw(SDL_Window *window)
             format = 4;
         if (ChoiceCard("X-Port / SharkPort\n\nSingle-game .xps / .sps save archive", width, height))
             format = 5;
+        if (ChoiceCard("CodeBreaker\n\nSingle-game .cbs save archive", width, height))
+            format = 6;
         ImGui::TextWrapped(
             "Save archives contain this game's selected saves, not a whole memory card.");
         if (format >= 0)
@@ -673,6 +677,7 @@ void Draw(SDL_Window *window)
                 output_archive = format == 3   ? SaveArchiveFormat::Psu
                                  : format == 4 ? SaveArchiveFormat::Max
                                  : format == 5 ? SaveArchiveFormat::Xps
+                                 : format == 6 ? SaveArchiveFormat::Cbs
                                                : SaveArchiveFormat::None;
                 if (output[0])
                 {
