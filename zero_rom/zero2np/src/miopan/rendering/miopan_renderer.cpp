@@ -1148,6 +1148,7 @@ struct CaptureSlot
     int logical_h;
     uint64_t capture_order;
     bool valid;         /* something has been captured into it this session */
+    bool overwritten;   /* CPU uploads replaced the captured GS contents */
 };
 
 /* The live frame as drawn so far -- mechanism A's source, and the source of
@@ -6876,8 +6877,11 @@ int FindCaptureSlotIndex(unsigned int addr, int logical_w, int logical_h)
  * UpdateViewExtend(), the one point in the frame where no queued draw holds a
  * slot texture yet.
  */
+void ConsumeTextureInvalidations();
+
 int FindLatestCaptureSlot(unsigned int addr, int logical_w = 0)
 {
+    ConsumeTextureInvalidations();
     int latest = -1;
     for (size_t i = 0; i < g_capture_slots.size(); i++)
     {
@@ -6895,6 +6899,7 @@ int FindLatestCaptureSlot(unsigned int addr, int logical_w = 0)
 
 int DeclareCaptureSlot(unsigned int addr, int logical_w, int logical_h)
 {
+    ConsumeTextureInvalidations();
     if (logical_w <= 0 || logical_h <= 0)
     {
         return -1;
@@ -6903,6 +6908,8 @@ int DeclareCaptureSlot(unsigned int addr, int logical_w, int logical_h)
     int index = FindCaptureSlotIndex(addr, logical_w, logical_h);
     if (index >= 0)
     {
+        // A new capture owns this page even while its texture/source is not ready.
+        g_capture_slots[(size_t)index].overwritten = false;
         return index;
     }
 
@@ -7390,6 +7397,17 @@ void InvalidateTex0CacheRange(int addr, int size, void *ud)
     if (size <= 0)
     {
         return;
+    }
+
+    for (CaptureSlot &slot : g_capture_slots)
+    {
+        if (slot.addr < 0x4000 &&
+            RangesOverlap(addr, size, (int)slot.addr * 256,
+                          slot.logical_w * ((slot.logical_h + 31) / 32) * 32 * 4))
+        {
+            slot.valid = false;
+            slot.overwritten = true;
+        }
     }
 
     for (auto it = g_tex0_cache.begin(); it != g_tex0_cache.end();)
@@ -14704,6 +14722,7 @@ void MioPan_RendererCaptureGsBlock(unsigned int dst_addr,
      * slot copy, the source's validity were checked above, so the recorded
      * copy cannot fail after this point. */
     g_capture_slots[(size_t)dst_slot].valid = true;
+    g_capture_slots[(size_t)dst_slot].overwritten = false;
     g_capture_slots[(size_t)dst_slot].capture_order = ++g_capture_order;
 }
 
@@ -15082,7 +15101,7 @@ bool IsCaptureSlotAddr(const sceGsTex0 *tex0)
     }
     for (const CaptureSlot &slot : g_capture_slots)
     {
-        if (slot.addr == tex0->TBP0 &&
+        if (!slot.overwritten && slot.addr == tex0->TBP0 &&
             slot.logical_w == (int)tex0->TBW * 64)
         {
             return true;
@@ -15444,6 +15463,7 @@ static void DrawTexturedQuadImpl(const sceGsTex0 *tex0,
              * RecordGsCapture() to set it left every draw in the slot's first
              * frame seeing valid == false. */
             g_capture_slots[(size_t)slot_index].valid = true;
+            g_capture_slots[(size_t)slot_index].overwritten = false;
             g_capture_slots[(size_t)slot_index].capture_order = ++g_capture_order;
         }
         else
@@ -15982,6 +16002,7 @@ void MioPan_RendererDrawFinderMask(int alpha)
      * capture precedes this draw in the ordered stream, so by the time the GPU
      * reaches the draw the slot holds the frame. */
     g_capture_slots[(size_t)slot_index].valid = true;
+    g_capture_slots[(size_t)slot_index].overwritten = false;
     g_capture_slots[(size_t)slot_index].capture_order = ++g_capture_order;
 
     DrawCommand &command = g_draws.back();
