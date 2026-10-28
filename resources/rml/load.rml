@@ -1,0 +1,40 @@
+<rml>
+<head>
+    <title>Load Game</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="load.rcss"/>
+</head>
+<body id="load">
+    <div class="backdrop"></div>
+    <div id="frame">
+        <div id="header">
+            <img class="emblem" src="images/butterfly.png"/>
+            <h1 class="title">Load Game</h1>
+        </div>
+        <div class="rule"></div>
+        <!-- The five saves, built by miopan_rml_load.cpp. -->
+        <div id="slots"></div>
+        <div id="detail">
+            <p id="detail-chapter"></p>
+            <p id="detail-room"></p>
+            <div id="detail-foot">
+                <span id="detail-clears"></span>
+                <span id="detail-time"></span>
+            </div>
+        </div>
+        <div class="rule"></div>
+        <p id="message"></p>
+        <div id="prompts" class="prompts"></div>
+    </div>
+    <div id="confirm" class="confirm hidden">
+        <div class="confirm-box">
+            <p class="confirm-text"></p>
+            <p class="confirm-note"></p>
+            <div class="confirm-choices">
+                <span id="confirm-yes" class="confirm-choice selectable">Yes</span>
+                <span id="confirm-no" class="confirm-choice selectable">No</span>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

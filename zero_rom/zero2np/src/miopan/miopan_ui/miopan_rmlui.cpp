@@ -1,6 +1,8 @@
 #include "miopan_rmlui.h"
 #include "miopan_rml_options.h"
+#include "miopan_rml_load.h"
 #include "miopan_rml_pause.h"
+#include "miopan_rml_title.h"
 #include "../io/miopan_file.h"
 #include "../io/miopan_input.h"
 #include "../io/miopan_paths.h"
@@ -153,6 +155,15 @@ struct RmlState
      * and the mouse, for whether hover may move a cursor. */
     bool using_pad = false;
     bool using_mouse = false;
+
+    /* Images made at run time, by name -- see SetGeneratedImage(). */
+    struct GeneratedImage
+    {
+        std::vector<Uint8> rgba;
+        int width;
+        int height;
+    };
+    std::unordered_map<std::string, GeneratedImage> generated;
 };
 
 RmlState g_rml;
@@ -486,6 +497,26 @@ public:
                                    const Rml::String &source) override
     {
         dimensions = {0, 0};
+
+        /* A generated image arrives joined to the document's directory. */
+        const size_t generated_at = source.find(MioPanRml::kGeneratedPrefix);
+        if (generated_at != Rml::String::npos)
+        {
+            const auto image = g_rml.generated.find(source.substr(generated_at));
+            if (image == g_rml.generated.end())
+            {
+                return 0;
+            }
+            SDL_GPUTexture *texture =
+                CreateTexture(image->second.rgba.data(), image->second.width,
+                              image->second.height, image->second.width * 4);
+            if (texture != nullptr)
+            {
+                dimensions = {image->second.width, image->second.height};
+                g_rml.textures[texture] = TextureRecord{0, false};
+            }
+            return reinterpret_cast<Rml::TextureHandle>(texture);
+        }
 
         char host_path[1024];
         const int64_t size =
@@ -1130,11 +1161,15 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device, SDL_GPUTextureFormat format
 
     MioPanRmlOptions::Init(g_rml.context);
     MioPanRmlPause::Init(g_rml.context);
+    MioPanRmlTitle::Init(g_rml.context);
+    MioPanRmlLoad::Init(g_rml.context);
     return true;
 }
 
 void Shutdown()
 {
+    MioPanRmlLoad::Shutdown();
+    MioPanRmlTitle::Shutdown();
     MioPanRmlPause::Shutdown();
     MioPanRmlOptions::Shutdown();
     if (g_rml.rml_initialised)
@@ -1182,6 +1217,8 @@ void Frame()
     }
     MioPanRmlOptions::Frame();
     MioPanRmlPause::Frame();
+    MioPanRmlTitle::Frame();
+    MioPanRmlLoad::Frame();
     g_rml.context->Update();
 
     DrawSnapshot &frame = g_rml.frame;
@@ -1279,6 +1316,34 @@ const char *PadButtonName(SDL_GamepadButton button)
 Rml::Context *GetContext()
 {
     return g_rml.context;
+}
+
+void SetGeneratedImage(const std::string &name, const Uint8 *rgba, int width,
+                       int height)
+{
+    if (rgba == nullptr || width <= 0 || height <= 0)
+    {
+        return;
+    }
+    auto &image = g_rml.generated[name];
+    image.width = width;
+    image.height = height;
+    image.rgba.assign(rgba, rgba + (size_t)width * height * 4);
+
+    /* Premultiplied, as LoadTexture() leaves what it decodes. */
+    for (size_t i = 0; i < image.rgba.size(); i += 4)
+    {
+        const unsigned alpha = image.rgba[i + 3];
+        for (size_t c = 0; c < 3; c++)
+        {
+            image.rgba[i + c] = (Uint8)(image.rgba[i + c] * alpha / 255);
+        }
+    }
+}
+
+bool HasGeneratedImage(const std::string &name)
+{
+    return g_rml.generated.find(name) != g_rml.generated.end();
 }
 
 bool PrepareDrawData(const DrawSnapshot *snapshot,

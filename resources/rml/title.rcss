@@ -1,0 +1,106 @@
+/*
+ * The title screen, over whatever the title shows behind it -- the room the
+ * port puts there, or the game's own logo plate.  The game set one entry at a
+ * time between two arrows at y 355; here the whole list stands in a column
+ * below the middle of the screen, where that line sat.
+ */
+
+#shade
+{
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 180dp;
+    bottom: 0;
+    decorator: vertical-gradient(#08050500 #080505d8);
+}
+
+/* ---- press start ------------------------------------------------------- */
+
+#press
+{
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 350dp;
+    text-align: center;
+    cursor: pointer;
+}
+
+#press-text
+{
+    font-size: 17dp;
+    letter-spacing: 5dp;
+    text-transform: uppercase;
+    color: #e8ddcc;
+    font-effect: glow(1dp 4dp 0dp 0dp #a3142888);
+    animation: 1.4s cubic-in-out infinite alternate breathe;
+}
+
+@keyframes breathe
+{
+    from { opacity: 0.35; }
+    to   { opacity: 1; }
+}
+
+/* ---- the menu ---------------------------------------------------------- */
+
+#menu
+{
+    position: absolute;
+    left: 50%;
+    width: 240dp;
+    margin-left: -120dp;
+    bottom: 40dp;
+    text-align: center;
+    animation: 0.25s quadratic-out rise-in;
+}
+
+#menu .emblem
+{
+    display: block;
+    width: 36dp;
+    height: 27dp;
+    margin: 0 auto 2dp auto;
+}
+
+#items
+{
+    padding: 6dp 0;
+}
+
+.entry
+{
+    height: 23dp;
+    line-height: 23dp;
+    font-size: 15dp;
+    letter-spacing: 1dp;
+    cursor: pointer;
+}
+
+/* Centred, so the bar is the one that fades both ways. */
+.entry.selected
+{
+    border-left-color: #00000000;
+    decorator: image(images/cursor_bar.png);
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+/* The two developer entries, only there with [developer] debug_menu on. */
+.entry.developer
+{
+    font-size: 12dp;
+    color: #8a7d72;
+}
+
+.entry.developer.selected
+{
+    color: #fff6e8;
+}
+
+#prompts
+{
+    position: absolute;
+    right: 24dp;
+    bottom: 14dp;
+}

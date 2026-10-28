@@ -39,6 +39,7 @@
 #include "../system/os/system.h"                // GetLanguage / SystemBankPlay
 #include "../system/pad/pad.h"                  // pad / paddat / GetPadAnalogRpt
 #include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../miopan/miopan_ui/miopan_rml_load.h" // the RmlUi load screen (port)
 
 #define LOAD_GAME_DATA_MAX 5        /* memory-card save slots */
 
@@ -128,6 +129,7 @@ static void LoadGameMcEndConf(void);
 static void LoadGameMcEndConfPad(void);
 static void LoadGameMcEveryFrameCheck(void);
 static void LoadGameFileSelDisp(u_char alpha);
+static int  LoadGameRmlDisp(void);
 
 /* --------------------------------------------------------------------------
  *  LoadGameInit
@@ -575,8 +577,39 @@ static void LoadGameMouse(void)
         LOAD_GAME_DATA_MAX, 0, LoadGameSlotEmpty);
 }
 
+/* PORT DEVIATION: with RmlUi up, the port's load screen (miopan_rml_load.h)
+ * walks the saves and asks "load this?" itself -- so the confirm step is
+ * skipped and its "yes" lands here -- and backing out is this file's, cue and
+ * all. */
+static void LoadGameRmlFileSel(void)
+{
+    load_game_ctrl.csr = (char)MioPan_RmlLoadCursor();
+
+    switch (MioPan_RmlLoadConsumeCommand())
+    {
+    case MIOPAN_RML_LOAD_CHOSEN:
+        load_game_ctrl.msg_id = 0x1d;
+        load_game_ctrl.step   = LOADGAME_MC_SYSTEM_LOAD_INIT;
+        break;
+
+    case MIOPAN_RML_LOAD_BACK:
+        SystemBankPlay(1, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+        SetNextGPhase(GID_TITLE_MENU);
+        break;
+
+    default:
+        break;
+    }
+}
+
 static void LoadGameMcLoadFileSelPad(void)
 {                                                                       /* 700 */
+    if (MioPan_RmlLoadIsShown() != 0)
+    {
+        LoadGameRmlFileSel();
+        return;
+    }
+
     LoadGameMouse();
 
     int i;
@@ -897,6 +930,17 @@ static void LoadGameMcErrorConfWait(void)
 /* Either button backs all the way out to the title menu. */
 static void LoadGameMcErrorConfPad(void)
 {                                                                       /* 1094 */
+    /* PORT: the RmlUi screen's OK is CROSS. */
+    if (MioPan_RmlLoadIsShown() != 0)
+    {
+        if (MioPan_RmlLoadConsumeCommand() == MIOPAN_RML_LOAD_ACK)
+        {
+            SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            SetNextGPhase(GID_TITLE_MENU);
+        }
+        return;
+    }
+
     MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
 
     if (*paddat[0] == 1)                                                /* 1098 */
@@ -928,21 +972,33 @@ static void LoadGameMcEndConf(void)
  * unlocks); a first playthrough goes straight into the mission load. */
 static void LoadGameMcEndConfPad(void)
 {                                                                       /* 1131 */
-    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
-
     char move_flg;
 
     move_flg = 0;
 
-    if (*paddat[0] == 1)                                                /* 1139 */
+    /* PORT: the RmlUi screen's OK is CROSS. */
+    if (MioPan_RmlLoadIsShown() != 0)
     {
-        SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
-        move_flg = 1;
+        if (MioPan_RmlLoadConsumeCommand() == MIOPAN_RML_LOAD_ACK)
+        {
+            SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            move_flg = 1;
+        }
     }
-    else if (*paddat[1] == 1)                                           /* 1142 */
+    else
     {
-        SystemBankPlay(1, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 1145 */
-        move_flg = 1;                                                   /* 1146 */
+        MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
+        if (*paddat[0] == 1)                                            /* 1139 */
+        {
+            SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            move_flg = 1;
+        }
+        else if (*paddat[1] == 1)                                       /* 1142 */
+        {
+            SystemBankPlay(1, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000); /* 1145 */
+            move_flg = 1;                                               /* 1146 */
+        }
     }
 
     load_game_ctrl.wait_timer++;                                        /* 1148 */
@@ -1054,6 +1110,11 @@ void LoadGameDispMain(void)
     if (load_game_tex_addr == (void *)0)                                /* 1273 */
     {
         PRINT_ASSERT("Error! %s", __FUNCTION__);
+        return;
+    }
+
+    if (LoadGameRmlDisp() != 0)
+    {
         return;
     }
 
@@ -1189,4 +1250,63 @@ static void LoadGameFileSelDisp(u_char alpha)
 
     SaveLoadSelFlareDisp(0, 0, alpha, load_game_tex_addr,
                          (int)load_game_ctrl.csr);                      /* 1419 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi load screen (miopan_rml_load.h), put up for
+ *  this frame with what each step shows -- the saves from the slot select on,
+ *  the step's message, and whether the player is choosing, waiting, or has a
+ *  message to acknowledge.  1 when it is up, in place of everything below.
+ * ------------------------------------------------------------------------ */
+static int LoadGameRmlDisp(void)
+{
+    int mode;
+    int list;
+    int i;
+
+    switch (load_game_ctrl.step)
+    {
+    case LOADGAME_MC_LOAD_FILE_SEL:
+    case LOADGAME_MC_LOAD_CONF:
+        mode = MIOPAN_RML_LOAD_SELECT;
+        list = 1;
+        break;
+
+    case LOADGAME_MC_SYSTEM_LOAD_INIT:
+    case LOADGAME_MC_SYSTEM_LOAD_WAIT:
+    case LOADGAME_MC_LOAD_INIT:
+    case LOADGAME_MC_LOAD_WAIT:
+        mode = MIOPAN_RML_LOAD_BUSY;
+        list = 1;
+        break;
+
+    case LOADGAME_MC_END_CONF:
+        mode = MIOPAN_RML_LOAD_NOTICE;
+        list = 1;
+        break;
+
+    case LOADGAME_MC_ERROR_CONF_INIT:
+    case LOADGAME_MC_ERROR_CONF_WAIT:
+        mode = MIOPAN_RML_LOAD_NOTICE;
+        list = 0;
+        break;
+
+    default:
+        mode = MIOPAN_RML_LOAD_BUSY;
+        list = 0;
+        break;
+    }
+
+    /* Every snapshot has arrived by the slot select. */
+    for (i = 0; i < LOAD_GAME_DATA_MAX; i++)
+    {
+        MioPan_RmlLoadSetPicture(
+            i,
+            (list != 0 && GetMemoryCardPlayDataFlg(i) == 1)
+                ? load_game_snap_addr[i] : (void *)0,
+            load_game_snap_tex[i]);
+    }
+
+    return MioPan_RmlLoadShow(mode, load_game_ctrl.msg_id,
+                              (int)load_game_ctrl.csr, list);
 }

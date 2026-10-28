@@ -6,6 +6,8 @@
 #include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_video.h>
 
+#include <string>
+
 namespace Rml
 {
 class Context;
@@ -74,6 +76,15 @@ const char *PadButtonName(SDL_GamepadButton button);
 bool PointerActive();
 
 Rml::Context *GetContext();
+
+/* Images made at run time -- a save's room picture -- shown with
+ * <img src="gen:NAME">.  `name` includes the prefix; `rgba` is width x height
+ * straight-alpha RGBA.  RmlUi keeps the first texture it makes for a name, so
+ * a name is one picture for good: different pixels need a different name. */
+constexpr const char *kGeneratedPrefix = "gen:";
+void SetGeneratedImage(const std::string &name, const Uint8 *rgba, int width,
+                       int height);
+bool HasGeneratedImage(const std::string &name);
 
 /*
  * The frame's draw list, for the UI pass.  `snapshot` is a packet's copy on

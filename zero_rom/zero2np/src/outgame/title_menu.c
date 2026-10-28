@@ -28,6 +28,7 @@
 #include "../system/os/system.h"            // SystemBankPlay / ChangeVideoMode / GetLanguage
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
 #include "../miopan/io/miopan_menu_mouse.h" // the mouse in menus (port)
+#include "../miopan/miopan_ui/miopan_rml_title.h" // the RmlUi title screen (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -36,6 +37,7 @@
 static TITLE_MENU_CTRL title_menu_ctrl;                                 /* sbss 3f4fe0 */
 
 static void TitleMenuPad(void);
+static void TitleMenuRml(void);
 static void TitleMenuMovePhase(void);
 static void DispTitleMenuItem(int off_x, int off_y, u_char alpha);
 static void DispTitleMenuCursor(u_char rgb);
@@ -47,7 +49,38 @@ void TitleMenuCtrlInit(void)
 
 void TitleMenuMain(void)
 {
+    if (MioPan_RmlTitleShowMenu(title_menu_ctrl.csr) != 0)
+    {
+        TitleMenuRml();
+        return;
+    }
+
     TitleMenuPad();                                                     /* 92 */
+}
+
+/* PORT DEVIATION: with RmlUi up, the port's title screen (miopan_rml_title.h)
+ * shows every entry at once and reads the player; what an entry does is
+ * still TitleMenuMovePhase()'s, and backing out is this file's, cues and all.
+ * The UP / DOWN video-mode override has no place in a list that UP and DOWN
+ * walk -- the Frame Rate entry is the same switch. */
+static void TitleMenuRml(void)
+{
+    title_menu_ctrl.csr = (char)MioPan_RmlTitleMenuCursor();
+
+    switch (MioPan_RmlTitleConsumeCommand())
+    {
+    case MIOPAN_RML_TITLE_CHOOSE:
+        TitleMenuMovePhase();
+        break;
+
+    case MIOPAN_RML_TITLE_BACK:
+        SystemBankPlay(1, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+        SetNextGPhase(GID_TITLE_TOP);
+        break;
+
+    default:
+        break;
+    }
 }
 
 /* Pad masks are the game's own remapped layout (system/pad/pad.c builds `now`
@@ -195,6 +228,12 @@ void TitleMenuDispMain(int off_x, int off_y, u_char alpha)
 {
     DispTitleZeroLogo(0, 0, 0x80);                                      /* 264 */
     DispTitleTecmoLogo(0, 0, 0x80);                                     /* 267 */
+
+    /* PORT: the RmlUi screen, when it is up, draws the menu and its captions. */
+    if (MioPan_RmlTitleShowMenu(title_menu_ctrl.csr) != 0)
+    {
+        return;
+    }
 
     DispTitleMenuItem(off_x, off_y, alpha);                             /* 273 */
     DispTitleMenuCursor(GetTitleAnimRGB());                             /* 276 */

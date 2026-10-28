@@ -26,6 +26,12 @@ void PlayCancel();
 /* `text` made safe to put inside RML. */
 std::string Escape(const std::string &text);
 
+/* The pad's button icons in the game's own text (MioPanGameText) named for
+ * whichever the player last used: the pad's own lettering, or on the
+ * keyboard the keys these screens answer to -- Enter for cross, Esc for the
+ * ways back. */
+std::string NameButtonIcons(const std::string &text);
+
 /* One button prompt: what the key is on the keyboard, which pad button it is
  * (and a second, for a pair like L1 / R1), and what it does.  `id` names the
  * prompt's element, so a screen can take a click on it as the press; it may

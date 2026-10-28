@@ -50,6 +50,35 @@ std::string Escape(const std::string &text)
     return out;
 }
 
+std::string NameButtonIcons(const std::string &text)
+{
+    struct Icon
+    {
+        const char *glyph;
+        SDL_GamepadButton pad;
+        const char *key;
+    };
+    static const Icon kIcons[] = {
+        {"○", SDL_GAMEPAD_BUTTON_EAST, "Esc"},
+        {"✕", SDL_GAMEPAD_BUTTON_SOUTH, "Enter"},
+        {"△", SDL_GAMEPAD_BUTTON_NORTH, "Esc"},
+        {"□", SDL_GAMEPAD_BUTTON_WEST, "Q"},
+    };
+    const bool pad = MioPanRml::UsingPad();
+    std::string out = text;
+    for (const Icon &icon : kIcons)
+    {
+        const std::string glyph = icon.glyph;
+        const std::string name = pad ? MioPanRml::PadButtonName(icon.pad) : icon.key;
+        for (size_t at = out.find(glyph); at != std::string::npos;
+             at = out.find(glyph, at + name.size()))
+        {
+            out.replace(at, glyph.size(), name);
+        }
+    }
+    return out;
+}
+
 std::string PromptsRml(const Prompt *prompts, int count)
 {
     const bool pad = MioPanRml::UsingPad();

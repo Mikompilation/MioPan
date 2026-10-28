@@ -22,14 +22,28 @@
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat
 #include "../miopan/io/miopan_menu_mouse.h" // the mouse in menus (port)
+#include "../miopan/miopan_ui/miopan_rml_title.h" // the RmlUi title screen (port)
 
 #include <stdint.h>                         // uintptr_t
 
 static void TitleTopPad(void);
 static void TitleTopPressStartDisp(u_char rgb);
 
+/* PORT DEVIATION: with RmlUi up, the port's title screen
+ * (miopan_rml_title.h) says PRESS START and reads the answer; acting on it is
+ * still this file's, cue and all. */
 void TitleTopMain(void)
 {
+    if (MioPan_RmlTitleShowPress() != 0)
+    {
+        if (MioPan_RmlTitleConsumeCommand() == MIOPAN_RML_TITLE_START)
+        {
+            SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            SetNextGPhase(GID_TITLE_MENU);
+        }
+        return;
+    }
+
     TitleTopPad();                                                      /* 59 */
 }
 
@@ -58,7 +72,11 @@ void TitleTopDispMain(int off_x, int off_y, u_char alpha)
 
     DispTitleTecmoLogo(off_x, off_y, alpha);                            /* 94 */
 
-    TitleTopPressStartDisp(GetTitleAnimRGB());                          /* 97 */
+    /* PORT: the RmlUi screen, when it is up, has its own PRESS START. */
+    if (MioPan_RmlTitleShowPress() == 0)
+    {
+        TitleTopPressStartDisp(GetTitleAnimRGB());                      /* 97 */
+    }
 }
 
 /* The PRESS START plate.  It is additively blended (alphar 0x48) and tinted

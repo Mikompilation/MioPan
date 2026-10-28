@@ -1,0 +1,180 @@
+/*
+ * The load screen: the five saves side by side, each with its room's picture,
+ * as the game laid them out; what the chosen one holds beneath; and the
+ * game's own memory-card messages along the bottom.
+ */
+
+/* The game's 640 less a margin, centred: a widened window widens the room
+ * behind, not the screen. */
+#frame
+{
+    position: absolute;
+    left: 50%;
+    width: 568dp;
+    margin-left: -284dp;
+    top: 22dp;
+    bottom: 16dp;
+    animation: 0.2s quadratic-out rise-in;
+}
+
+#header
+{
+    height: 34dp;
+}
+
+#header .emblem
+{
+    display: inline-block;
+    width: 32dp;
+    height: 24dp;
+    margin-right: 8dp;
+    vertical-align: middle;
+}
+
+#header .title
+{
+    display: inline-block;
+    vertical-align: middle;
+}
+
+/* ---- the saves --------------------------------------------------------- */
+
+#slots
+{
+    height: 112dp;
+    padding-top: 12dp;
+    text-align: center;
+}
+
+/* Five across the 568 the frame is: 96 + 6 padding + 2 border + 8 margin. */
+.slot
+{
+    display: inline-block;
+    width: 96dp;
+    margin: 0 4dp;
+    padding: 3dp;
+    border: 1dp #6b5528;
+    background-color: #0a0807d0;
+    vertical-align: top;
+    cursor: pointer;
+}
+
+.slot.selected
+{
+    border-color: #e2bc62;
+    background-color: #2a1a0ee0;
+    decorator: image(images/cursor_glow.png);
+}
+
+.slot.empty
+{
+    border-color: #3a2f1e;
+    cursor: default;
+}
+
+/* The room's picture, 105 x 62 in the game, at its own shape. */
+.slot .picture
+{
+    display: block;
+    width: 96dp;
+    height: 57dp;
+    margin: 0 auto;
+}
+
+.slot .blank
+{
+    display: block;
+    width: 96dp;
+    height: 57dp;
+    margin: 0 auto;
+    background-color: #120d0d;
+    line-height: 57dp;
+    font-size: 11dp;
+    font-style: italic;
+    color: #5d524b;
+}
+
+.slot .number
+{
+    margin-top: 3dp;
+    font-size: 12dp;
+    letter-spacing: 1dp;
+    color: #b8913e;
+}
+
+.slot.selected .number
+{
+    color: #ffd98a;
+}
+
+.slot.empty .number
+{
+    color: #5d524b;
+}
+
+/* ---- the chosen save --------------------------------------------------- */
+
+#detail
+{
+    height: 96dp;
+    margin: 8dp 4dp 10dp 4dp;
+    padding: 10dp 16dp;
+    border: 1dp #6b5528;
+    background-color: #0a0807d8;
+}
+
+#detail-chapter
+{
+    font-size: 17dp;
+    color: #e8ddcc;
+}
+
+#detail-room
+{
+    margin-top: 2dp;
+    font-size: 13dp;
+    color: #8a7d72;
+}
+
+#detail-foot
+{
+    margin-top: 12dp;
+    font-size: 13dp;
+}
+
+#detail-clears
+{
+    color: #d9a441;
+    font-style: italic;
+}
+
+#detail-time
+{
+    float: right;
+    letter-spacing: 1dp;
+    color: #ded3c4;
+}
+
+/* ---- the game's messages ----------------------------------------------- */
+
+#message
+{
+    margin-top: 10dp;
+    min-height: 40dp;
+    padding: 0 6dp;
+    font-size: 15dp;
+    color: #e8ddcc;
+}
+
+#message.notice
+{
+    color: #fff6e8;
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e55);
+}
+
+#prompts
+{
+    position: absolute;
+    right: 0;
+    bottom: 0;
+}
