@@ -53,6 +53,7 @@
 #include "../ingame/enemy/enemy.h"               /* EneAllRelease / PreloadedEneAllRelease */
 #include "../ingame/enemy/fene_entry.h"          /* fene_entry */
 #include "../system/eeiop/cddat.h"               /* CH000_MIO_MDL / _ANM / I000_... */
+#include "../miopan/io/miopan_xbox_assets.h"     /* PORT: MioPan_XboxModelFileNo / ...ItemFileNo */
 
 #include <stdio.h>
 
@@ -105,9 +106,22 @@ void ModelMemoryFree(int wrk_no)                                        /* 13 */
  *  Item models
  * ------------------------------------------------------------------------ */
 
-/* The whole of this lives on ROM line 45; the name is the port's. */
+/* The whole of this lives on ROM line 45; the name is the port's.
+ *
+ * PORT: the converted Xbox accessories (miopan/io/miopan_xbox_assets.h) are
+ * item numbers past the ROM's nine, and their files sit past the ROM's file
+ * table, where `mdl_no + I000_PLAY_CAMERA_PK2` would land on a BGM.  One whose
+ * file is missing never gets this far -- GetPlyrAcsNo() / GetSisterAcsNo()
+ * answer -1 for it -- so the glasses stand-in below is only a backstop. */
 static int GetItemMdlFileNo(int mdl_no)
 {
+    if (mdl_no >= MIOPAN_ROM_ITEM_NUM)
+    {
+        const int file_no = MioPan_XboxItemFileNo(mdl_no);
+
+        return file_no >= 0 ? file_no : I006_MEGANE_PK2 + (mdl_no & 1);
+    }
+
     return mdl_no + I000_PLAY_CAMERA_PK2;                               /* 45 */
 }
 
@@ -125,7 +139,9 @@ MMANAGE_ERR mmanageReqItemMdl(int mdl_no)                               /* 59 */
 
 int mmanageIsReadyItemMdl(int mdl_no, void **mdl_pp, int bForceFree)    /* 63 */
 {
-    switch (ol_load.IsReady(mdl_no + I000_PLAY_CAMERA_PK2, mdl_pp))     /* 64 */
+    /* PORT: through the helper, which the ROM spells out here, so an Xbox
+     * accessory resolves to its own file (see GetItemMdlFileNo). */
+    switch (ol_load.IsReady(GetItemMdlFileNo(mdl_no), mdl_pp))          /* 64 */
     {
     case OL_LOAD_READY_READY:
         return 1;
@@ -155,9 +171,21 @@ void mmanageClearItemMdl(int mdl_no)                                    /* 80 */
  *  Character models
  * ------------------------------------------------------------------------ */
 
-/* The whole of this lives on ROM line 87; the name is the port's. */
+/* The whole of this lives on ROM line 87; the name is the port's.
+ *
+ * PORT: an Xbox costume is a model number past the ROM's 78 and a file past
+ * the ROM's table (see GetItemMdlFileNo).  One whose file has gone since the
+ * save was made loads as the girl's own model, whose tables it borrows anyway. */
 static int GetMdlFileNo(int mdl_no)
 {
+    if (mdl_no >= MIOPAN_ROM_MAN_MDL_NUM)
+    {
+        const int file_no = MioPan_XboxModelFileNo(mdl_no);
+
+        return file_no >= 0 ? file_no
+                            : MioPan_XboxModelBase(mdl_no) + CH000_MIO_MDL;
+    }
+
     return mdl_no + CH000_MIO_MDL;                                      /* 87 */
 }
 
@@ -168,7 +196,8 @@ MMANAGE_ERR mmanageReqMdl(int mdl_no)                                   /* 91 */
 
 int mmanageIsReadyMdl(int mdl_no, void **mdl_pp, int bForceFree)        /* 96 */
 {
-    switch (ol_load.IsReady(mdl_no + CH000_MIO_MDL, mdl_pp))            /* 97 */
+    /* PORT: through the helper, as in mmanageIsReadyItemMdl. */
+    switch (ol_load.IsReady(GetMdlFileNo(mdl_no), mdl_pp))              /* 97 */
     {
     case OL_LOAD_READY_READY:
         return 1;                                                       /* 99 */

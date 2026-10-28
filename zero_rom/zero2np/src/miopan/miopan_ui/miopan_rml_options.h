@@ -5,8 +5,9 @@
  * The options screen, in RmlUi: the game's own Options and the port's
  * settings on one page, in place of outgame/option.c's screen.
  *
- * Sections run across the top -- Game, Display, Graphics, Audio, Controls --
- * and each is a column of rows: a choice (left / right steps it), a slider
+ * Sections run across the top -- Game, Display, Graphics, Audio, Controls,
+ * and Special for what the port adds to the game itself (the Xbox Director's
+ * Cut import, miopan_xbox_assets.h) -- and each is a column of rows: a choice (left / right steps it), a slider
  * (left / right moves it, the mouse can drag it) or an action.  Up / down move
  * the cursor, L1 / R1 (Q / E, Page Up / Down) change section, Triangle or
  * Escape backs out.  The mouse does all of it too: hover moves the cursor,

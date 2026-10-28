@@ -27,6 +27,7 @@
 
 #include "mdldat.h"                          /* anm_tbl */
 #include "morph_dat.h"
+#include "../../miopan/io/miopan_xbox_assets.h"   /* PORT: MIOPAN_MAN_MDL_MAX */
 #include "../../common/ol_load.h"            /* ol_loadGetHeap / ol_loadFreeHeap */
 #include "../../common/packfile.h"           /* GetFileInPak */
 #include "../graph3d/sgd_types.h"            /* SGDFILEHEADER / _VECTORDATA */
@@ -44,8 +45,11 @@ MORPH_DAT ch041_morph[14] = {                               /* data 32e9d8 */
     { 25, 26 }, { -1, -1 }
 };
 
-/* Indexed by model number; only these four models morph. */
-MORPH_DAT *morph_dat[78] = {                                /* data 32ea48 */
+/* Indexed by model number; only these four models morph.
+ *
+ * PORT: 78 entries in the ROM.  The zero tail is the converted Xbox costumes'
+ * (miopan/io/miopan_xbox_assets.h), which do not morph either. */
+MORPH_DAT *morph_dat[MIOPAN_MAN_MDL_MAX] = {                                /* data 32ea48 */
     0,            0,            0,            0,            0,            0,    /*  0 */
     0,            0,            0,            0,            0,            0,    /*  6 */
     0,            0,            0,            0,            0,            ch017_morph,    /* 12 */

@@ -613,6 +613,26 @@ int MioPan_PathResolveData(const char *ps2_name, char *out, size_t out_size)
     const std::string root = DataDir();
 
     /*
+     * The Director's Cut extras Options > Special imports are game data the
+     * port wrote itself, so they live in the user directory -- the data folder
+     * may well be read-only -- and are found there before anything placed in
+     * the data folder's own xbox/ by hand.  See miopan_xbox_assets.h.
+     */
+    {
+        const std::string bare =
+            (relative.compare(0, 3, "../") == 0) ? relative.substr(3) : relative;
+
+        if (bare.compare(0, 5, "xbox/") == 0)
+        {
+            const std::string imported = std::string(MioPan_PathUserDir()) + bare;
+            if (FileExists(imported))
+            {
+                return Emit(imported, out, out_size);
+            }
+        }
+    }
+
+    /*
      * Three spellings of the same file, all against the one root.  The ROM's
      * table is written relative to the ELF's directory, so every game path
      * arrives as "../bin/data/..." -- dropping that "../" is what lets the data

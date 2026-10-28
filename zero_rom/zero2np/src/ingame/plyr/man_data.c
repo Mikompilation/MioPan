@@ -43,11 +43,17 @@
 
 /* Accessory model number -> bone index in the wearer's skeleton.  Entry 0
  * (the camera) rides bone 17, 1..5 ride bone 6, and everything from 6 up
- * rides bone 2.  data 319de8, byte-identical to the ROM. */
-int aBoneLabelTbl[16] =
+ * rides bone 2.  data 319de8, byte-identical to the ROM.
+ *
+ * PORT: one entry past the ROM's 16, for the converted Xbox sun visor, whose
+ * DC number 8 is the prototype's eye patch (miopan/io/miopan_xbox_assets.h).
+ * The DC's other accessories are 9..15, which the ROM's table already covers --
+ * the prototype sized it for them. */
+int aBoneLabelTbl[MIOPAN_ACCESSORY_NUM_MAX] =
 {
     17, 6, 6, 6, 6, 6,
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2
 };
 
 /* --------------------------------------------------------------------------

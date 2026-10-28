@@ -77,6 +77,9 @@ bool PointerActive();
 
 Rml::Context *GetContext();
 
+/* The window the UI draws into, to parent the system's own dialogs on. */
+SDL_Window *GetWindow();
+
 /* Images made at run time -- a save's room picture -- shown with
  * <img src="gen:NAME">.  `name` includes the prefix; `rgba` is width x height
  * straight-alpha RGBA.  RmlUi keeps the first texture it makes for a name, so

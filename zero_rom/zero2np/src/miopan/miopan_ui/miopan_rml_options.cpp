@@ -3,6 +3,7 @@
 #include "miopan_rmlui.h"
 #include "miopan_ui.h"
 #include "../io/miopan_input.h"
+#include "../io/miopan_xbox_assets.h"
 #include "../rendering/miopan_renderer.h"
 #include "iop_voice.h"
 
@@ -12,12 +13,15 @@
 
 #include <RmlUi/Core.h>
 
+#include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_stdinc.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -71,8 +75,10 @@ struct Row
     bool logarithmic = false;
     std::function<std::string(float)> format;
 
-    /* Action. */
+    /* Action.  action_text, when set, is shown in place of `action` and
+     * follows whatever it reports. */
     std::string action;
+    Text action_text;
     std::function<void()> run;
 
     /* Built elements, and what they show, so a refresh only touches what
@@ -1075,6 +1081,123 @@ Page ControlsPage()
 }
 
 /* ---------------------------------------------------------------------------
+ *  Special -- what the port adds to the game itself.
+ *
+ *  The Director's Cut's extra costumes and accessories come out of the
+ *  player's own Xbox copy (miopan_xbox_assets.h): a folder dialog, then a
+ *  worker converts them while the screen reports how far it has got.  They
+ *  are in the setup menu the moment it finishes.
+ * ------------------------------------------------------------------------ */
+
+/* SDL hands the chosen folder back on a thread of its own. */
+std::mutex g_xbox_pick_mutex;
+std::string g_xbox_pick;
+std::atomic<bool> g_xbox_pick_ready{false};
+std::atomic<bool> g_xbox_dialog_open{false};
+std::string g_xbox_last_folder;
+
+void SDLCALL XboxFolderPicked(void *userdata, const char *const *filelist, int filter)
+{
+    (void)userdata;
+    (void)filter;
+    /* A null list is an error and an empty one is a cancel. */
+    if (filelist == nullptr)
+    {
+        SDL_Log("[port] xbox: folder dialog failed: %s", SDL_GetError());
+    }
+    else if (filelist[0] != nullptr)
+    {
+        std::lock_guard<std::mutex> lock(g_xbox_pick_mutex);
+        g_xbox_pick = filelist[0];
+        g_xbox_pick_ready = true;
+    }
+    g_xbox_dialog_open = false;
+}
+
+void ChooseXboxFolder()
+{
+    if (MioPanXbox::ImportRunning() || g_xbox_dialog_open.load())
+    {
+        return;
+    }
+    g_xbox_dialog_open = true;
+    SDL_ShowOpenFolderDialog(XboxFolderPicked, nullptr, MioPanRml::GetWindow(),
+                             g_xbox_last_folder.empty() ? nullptr
+                                                        : g_xbox_last_folder.c_str(),
+                             false);
+}
+
+/* Game thread: start on a folder the dialog has handed back. */
+void TakeXboxFolderPick()
+{
+    if (!g_xbox_pick_ready.exchange(false))
+    {
+        return;
+    }
+    std::string folder;
+    {
+        std::lock_guard<std::mutex> lock(g_xbox_pick_mutex);
+        folder = g_xbox_pick;
+    }
+    g_xbox_last_folder = folder;
+    MioPanXbox::StartImport(folder);
+}
+
+std::string XboxInstalled()
+{
+    const int costumes = MioPan_XboxCostumeCount();
+    const int sets = MioPan_XboxAccessoryCount();
+    if (costumes == 0 && sets == 0)
+    {
+        return "None are installed yet.";
+    }
+    char text[96];
+    SDL_snprintf(text, sizeof(text), "Installed: %d costume%s and %d accessory set%s.",
+                 costumes, costumes == 1 ? "" : "s", sets, sets == 1 ? "" : "s");
+    return text;
+}
+
+Page SpecialPage()
+{
+    Page page{"special", "Special", {}};
+    std::vector<Row> &rows = page.rows;
+
+    rows.push_back(Heading("Xbox Director's Cut"));
+    Row import = Action(
+        "Costumes and accessories",
+        [] {
+            if (MioPanXbox::ImportRunning())
+            {
+                return MioPanXbox::ImportStatus();
+            }
+            std::string text =
+                "Bring in the Director's Cut's extra costumes (TYPE I to N) and "
+                "accessories from your own Xbox copy of the game: choose its "
+                "folder, the one with default.xbe in it. They join New Game's "
+                "setup. ";
+            const std::string last = MioPanXbox::ImportStatus();
+            text += last.empty() ? XboxInstalled() : last;
+            return text;
+        },
+        "Import", ChooseXboxFolder);
+    import.action_text = [] {
+        if (MioPanXbox::ImportRunning())
+        {
+            return std::string("Working...");
+        }
+        if (g_xbox_dialog_open.load())
+        {
+            return std::string("Choosing...");
+        }
+        return std::string(MioPan_XboxCostumeCount() + MioPan_XboxAccessoryCount() != 0
+                               ? "Re-import"
+                               : "Import");
+    };
+    rows.push_back(std::move(import));
+    return page;
+}
+
+/* ---------------------------------------------------------------------------
  *  Building the document.
  * ------------------------------------------------------------------------ */
 
@@ -1128,6 +1251,7 @@ void BuildPages()
     g_opt.pages.push_back(GraphicsPage());
     g_opt.pages.push_back(AudioPage());
     g_opt.pages.push_back(ControlsPage());
+    g_opt.pages.push_back(SpecialPage());
 
     using MioPanRmlCommon::Escape;
     std::string tabs;
@@ -1287,7 +1411,7 @@ std::string ValueText(const Row &row)
     case RowKind::Slider:
         return row.format(row.get_value());
     case RowKind::Action:
-        return row.action;
+        return row.action_text ? row.action_text() : row.action;
     default:
         return "";
     }
@@ -1728,6 +1852,11 @@ void Shutdown()
 
 void Frame()
 {
+    /* Ahead of the early out: an import keeps going after the screen closes,
+     * and its files should reach the menus whether or not this is open. */
+    TakeXboxFolderPick();
+    MioPanXbox::Poll();
+
     if (!g_opt.open)
     {
         return;

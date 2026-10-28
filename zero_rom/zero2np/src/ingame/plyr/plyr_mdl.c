@@ -44,6 +44,7 @@
 #include "../../system/eeiop/sndbank.h"
 #include "../map/MapDoor.h"
 #include "../map/MapDraw.h"
+#include "../../miopan/io/miopan_xbox_assets.h"   /* PORT: MioPan_XboxModelUsable / ...ItemUsable */
 #include "../map/map_rectangle.h"
 #include "../event/prg/ev_macro.h"
 
@@ -978,8 +979,16 @@ int plyr_mdlBankIsLoopSnd(int no)
     return 0;
 }
 
+/* PORT: the four getters below hand out a converted Xbox costume or accessory
+ * only while its file is there (miopan/io/miopan_xbox_assets.h).  A save made
+ * with one keeps its number; without the file it reads as the girl's own model
+ * and no accessory, and the setters leave GameCostume as the save had it. */
 int GetPlyrMdlNo(void)
 {
+    if (MioPan_XboxModelUsable(GameCostume.mPlyrMdlNo) == 0)
+    {
+        return 0;
+    }
     return GameCostume.mPlyrMdlNo;
 }
 
@@ -990,6 +999,11 @@ void SetPlyrMdlNo(int iMdlNo)
 
 int GetPlyrAcsNo(void)
 {
+    if (GameCostume.mPlyrAcsNo >= 0 &&
+        MioPan_XboxItemUsable(GameCostume.mPlyrAcsNo) == 0)
+    {
+        return -1;
+    }
     return GameCostume.mPlyrAcsNo;
 }
 
@@ -1000,6 +1014,10 @@ void SetPlyrAcsNo(int iMdlNo)
 
 int GetSisterMdlNo(void)
 {
+    if (MioPan_XboxModelUsable(GameCostume.mSisterMdlNo) == 0)
+    {
+        return 1;
+    }
     return GameCostume.mSisterMdlNo;
 }
 
@@ -1010,6 +1028,11 @@ void SetSisterMdlNo(int iMdlNo)
 
 int GetSisterAcsNo(void)
 {
+    if (GameCostume.mSisterAcsNo >= 0 &&
+        MioPan_XboxItemUsable(GameCostume.mSisterAcsNo) == 0)
+    {
+        return -1;
+    }
     return GameCostume.mSisterAcsNo;
 }
 

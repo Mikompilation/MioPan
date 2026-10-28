@@ -41,6 +41,7 @@
 
 #include "../../common/utility2.h"              /* PRINT_WARNING */
 #include "../../graphics/motion/mdlwork.h"      /* ANI_CTRL, HeaderSection */
+#include "../../miopan/io/miopan_xbox_assets.h" /* PORT: MIOPAN_ACCESSORY_NUM_MAX */
 
 class MAN_DATA
 {
@@ -126,8 +127,8 @@ private:
 };
 
 /* Bone the accessory item rides on, indexed by the accessory's model number.
- * data 319de8, verified against the ROM. */
-extern int aBoneLabelTbl[16];
+ * data 319de8, verified against the ROM.  PORT: one entry longer (man_data.c). */
+extern int aBoneLabelTbl[MIOPAN_ACCESSORY_NUM_MAX];
 
 /* Park one item SGD on a bone of pAniCtrl's skeleton and draw it. */
 void ManItemSGDDraw(HeaderSection *l_hs, ANI_CTRL *pAniCtrl, int iItemLabel);

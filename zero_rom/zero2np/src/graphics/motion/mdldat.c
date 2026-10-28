@@ -20,7 +20,7 @@
 #define MAN_ENTRY(h, n, c, w, p, l, wd, cd, col) \
     { 1.0f, h, n, c, w, p, l, wd, cd, col }
 
-MANMDL_DAT manmdl_dat[78] = {
+MANMDL_DAT manmdl_dat[] = {
     MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
     MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
     MAN_ENTRY(1,  1, 1,  1, 1, 1, NULL, NULL, NULL),
@@ -98,8 +98,28 @@ MANMDL_DAT manmdl_dat[78] = {
     MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
     MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
     MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
+
+    /* PORT: the converted Xbox costumes (miopan/io/miopan_xbox_assets.h),
+     * model numbers 78.. with Mio's at the even ones.  Each is the girl's own
+     * entry: same skeleton, same lip-sync table, no cloth -- the DC's cloth
+     * data for these lives in its executable, which nothing here reads. */
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL),
+    MAN_ENTRY(2, 14, 1, 25, 3, 5, ch000_wmim_tbl, NULL, NULL),
     MAN_ENTRY(2, 14, 1, 25, 3, 5, ch001_wmim_tbl, NULL, NULL)
 };
+
+static_assert(sizeof(manmdl_dat) / sizeof(manmdl_dat[0]) == MIOPAN_MAN_MDL_MAX,
+              "one entry per ROM model and per Xbox costume model");
 
 #undef MAN_ENTRY
 

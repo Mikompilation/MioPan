@@ -10,8 +10,10 @@
 #define _GRAPHICS_MOTION_MDLDAT_H
 
 #include "mdlwork.h"
+#include "../../miopan/io/miopan_xbox_assets.h"   /* PORT: MIOPAN_MAN_MDL_MAX */
 
-extern MANMDL_DAT manmdl_dat[78];
+/* PORT: 78 in the ROM; the tail is the Xbox costumes' (mdldat.c). */
+extern MANMDL_DAT manmdl_dat[MIOPAN_MAN_MDL_MAX];
 
 /* Furniture-model cloth/collision table.  acsInitCloth reads this instead of
  * manmdl_dat[] when it is building a chodo (map drape) rather than a

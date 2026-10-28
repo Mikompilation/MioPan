@@ -45,6 +45,7 @@
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
 #include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../miopan/io/miopan_xbox_assets.h"  // the converted Xbox extras (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -188,6 +189,101 @@ static COSTUME_TWIN_TBL costume_tbl[SETUP_MENU_COSTUME_MAX] =           /* rodat
     { 62, 63, 6, 7 },
     { 76, 77, 6, 7 }
 };
+
+/* PORT: the converted Xbox extras (miopan/io/miopan_xbox_assets.h).
+ *
+ * costume_csr runs on past the ROM's nine into the Xbox costumes -- TYPE I..N,
+ * as the Director's Cut names them after the prototype's TYPE A..H -- and each
+ * girl's accessory cursor past Off (0) and the glasses (1) into the DC's four
+ * accessory sets.  The extras are open whenever their files are there; the
+ * ROM's own entries keep their clear-flag locks.  With nothing converted every
+ * helper below answers exactly what the ROM's code did. */
+static int SetupMenuCostumeNum(void)
+{
+    return SETUP_MENU_COSTUME_MAX + MioPan_XboxCostumeCount();
+}
+
+static int SetupMenuCostumeIsOpen(int costume_csr)
+{
+    if (costume_csr >= SETUP_MENU_COSTUME_MAX)
+    {
+        return 1;
+    }
+    return clear_flg_ctrl.costume_flg.IsUp(costume_csr);
+}
+
+/* Step an accessory cursor one place left (-1) or right (+1), passing over the
+ * glasses while they are locked.  With no Xbox sets this is the ROM's own
+ * toggle and lock test. */
+static char SetupMenuAcsStep(char acs_csr, int dir)
+{
+    const int num = 2 + MioPan_XboxAccessoryCount();
+    int       i;
+
+    for (i = 0; i < num; i++)
+    {
+        acs_csr = (char)((acs_csr + num + dir) % num);
+        if ((acs_csr != 1) ||
+            (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) != 0))
+        {
+            break;
+        }
+    }
+    return acs_csr;
+}
+
+static int SetupMenuCostumeMdl(int girl)
+{
+    const int csr = setup_menu_ctrl.costume_csr;
+
+    if (csr >= SETUP_MENU_COSTUME_MAX)
+    {
+        return MioPan_XboxCostumeModel(csr - SETUP_MENU_COSTUME_MAX, girl);
+    }
+    return girl == MIOPAN_XBOX_GIRL_MIO ? costume_tbl[csr].mMioMdl
+                                        : costume_tbl[csr].mMayuMdl;
+}
+
+/* -1 for Off.  The glasses are the same pair for every costume. */
+static int SetupMenuAcsMdl(int girl, int acs_csr)
+{
+    if (acs_csr >= 2)
+    {
+        return MioPan_XboxAccessoryItem(acs_csr - 2, girl);
+    }
+    if (acs_csr == 1)
+    {
+        return girl == MIOPAN_XBOX_GIRL_MIO ? costume_tbl[0].mMioAcsMdl
+                                            : costume_tbl[0].mMayuAcsMdl;
+    }
+    return -1;
+}
+
+/* A label in the message font: the setup pak has plates for TYPE A..H and
+ * On / Off only. */
+static void SetupMenuXboxLabelDisp(int x, int y, u_char alpha, u_char rgb, const char *str)
+{
+    char buf[32];
+    int  i;
+
+    for (i = 0; str[i] != '\0' && i < (int)sizeof(buf) - 1; i++)
+    {
+        buf[i] = (str[i] >= 'a' && str[i] <= 'z') ? (char)(str[i] - 'a' + 'A') : str[i];
+    }
+    buf[i] = '\0';
+    SetASCIIString3(0, (float)x, (float)y, 1, rgb, rgb, rgb, alpha, buf);
+}
+
+static void SetupMenuAcsDisp(int acs_csr, int x, int y, u_char alpha, u_char rgb, u_char flg)
+{
+    if (acs_csr >= 2)
+    {
+        SetupMenuXboxLabelDisp(x + 6, y + 6, alpha, rgb,
+                               MioPan_XboxAccessoryName(acs_csr - 2));
+        return;
+    }
+    setup_on_off_disp_func[acs_csr](x, y, alpha, rgb, flg);
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Mode entry points.
@@ -431,12 +527,13 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
         case SETUP_MENU_SETUP_CSR_COSTUME:
             csr_back_up = setup_menu_ctrl.costume_csr;                  /* 436 */
 
-            for (i = 0; i < SETUP_MENU_COSTUME_MAX; i++) {              /* 438 */
+            /* PORT: over the Xbox costumes too -- SetupMenuCostumeNum(). */
+            for (i = 0; i < SetupMenuCostumeNum(); i++) {               /* 438 */
                 setup_menu_ctrl.costume_csr =
-                    (char)((setup_menu_ctrl.costume_csr + (SETUP_MENU_COSTUME_MAX - 1)) %
-                           SETUP_MENU_COSTUME_MAX);                     /* 439 */
+                    (char)((setup_menu_ctrl.costume_csr + (SetupMenuCostumeNum() - 1)) %
+                           SetupMenuCostumeNum());                      /* 439 */
 
-                if (clear_flg_ctrl.costume_flg.IsUp(setup_menu_ctrl.costume_csr) != 0)
+                if (SetupMenuCostumeIsOpen(setup_menu_ctrl.costume_csr) != 0)
                 {
                     break;
                 }
@@ -455,16 +552,24 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
         case SETUP_MENU_SETUP_CSR_MIO_ACS:
             csr_back_up = setup_menu_ctrl.mio_csr;                      /* 457 */
 
-            setup_menu_ctrl.mio_csr = (char)(setup_menu_ctrl.mio_csr ^ 1);  /* 459 */
-
-            /* accessory_flg bit 1 is Mio's and bit 2 Mayu's, which is exactly
-             * the row index -- the ROM passes setup_csr rather than a literal
-             * (the bit position is computed at run time, so it cannot be a
-             * constant that GCC folded). */
-            if ((setup_menu_ctrl.mio_csr == 1) &&
-                (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 461 */
+            if (MioPan_XboxAccessoryCount() != 0)
             {
-                setup_menu_ctrl.mio_csr = 0;
+                /* PORT: Off, the glasses, then the Xbox sets. */
+                setup_menu_ctrl.mio_csr = SetupMenuAcsStep(setup_menu_ctrl.mio_csr, -1);
+            }
+            else
+            {
+                setup_menu_ctrl.mio_csr = (char)(setup_menu_ctrl.mio_csr ^ 1);  /* 459 */
+
+                /* accessory_flg bit 1 is Mio's and bit 2 Mayu's, which is exactly
+                 * the row index -- the ROM passes setup_csr rather than a literal
+                 * (the bit position is computed at run time, so it cannot be a
+                 * constant that GCC folded). */
+                if ((setup_menu_ctrl.mio_csr == 1) &&
+                    (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 461 */
+                {
+                    setup_menu_ctrl.mio_csr = 0;
+                }
             }
 
             if (csr_back_up != setup_menu_ctrl.mio_csr)                 /* 468 */
@@ -480,12 +585,20 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
         case SETUP_MENU_SETUP_CSR_MAYU_ACS:
             csr_back_up = setup_menu_ctrl.mayu_csr;                     /* 476 */
 
-            setup_menu_ctrl.mayu_csr = (char)(setup_menu_ctrl.mayu_csr ^ 1);  /* 478 */
-
-            if ((setup_menu_ctrl.mayu_csr == 1) &&
-                (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 481 */
+            if (MioPan_XboxAccessoryCount() != 0)
             {
-                setup_menu_ctrl.mayu_csr = 0;
+                /* PORT: Off, the glasses, then the Xbox sets. */
+                setup_menu_ctrl.mayu_csr = SetupMenuAcsStep(setup_menu_ctrl.mayu_csr, -1);
+            }
+            else
+            {
+                setup_menu_ctrl.mayu_csr = (char)(setup_menu_ctrl.mayu_csr ^ 1);  /* 478 */
+
+                if ((setup_menu_ctrl.mayu_csr == 1) &&
+                    (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 481 */
+                {
+                    setup_menu_ctrl.mayu_csr = 0;
+                }
             }
 
             if (csr_back_up != setup_menu_ctrl.mayu_csr)                /* 489 */
@@ -538,11 +651,12 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
         case SETUP_MENU_SETUP_CSR_COSTUME:
             csr_back_up = setup_menu_ctrl.costume_csr;                  /* 526 */
 
-            for (i = 0; i < SETUP_MENU_COSTUME_MAX; i++) {              /* 528 */
+            /* PORT: over the Xbox costumes too -- SetupMenuCostumeNum(). */
+            for (i = 0; i < SetupMenuCostumeNum(); i++) {               /* 528 */
                 setup_menu_ctrl.costume_csr =
-                    (char)((setup_menu_ctrl.costume_csr + 1) % SETUP_MENU_COSTUME_MAX);  /* 529 */
+                    (char)((setup_menu_ctrl.costume_csr + 1) % SetupMenuCostumeNum());  /* 529 */
 
-                if (clear_flg_ctrl.costume_flg.IsUp(setup_menu_ctrl.costume_csr) != 0)
+                if (SetupMenuCostumeIsOpen(setup_menu_ctrl.costume_csr) != 0)
                 {
                     break;
                 }
@@ -561,12 +675,20 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
         case SETUP_MENU_SETUP_CSR_MIO_ACS:
             csr_back_up = setup_menu_ctrl.mio_csr;                      /* 546 */
 
-            setup_menu_ctrl.mio_csr = (char)(setup_menu_ctrl.mio_csr ^ 1);  /* 548 */
-
-            if ((setup_menu_ctrl.mio_csr == 1) &&
-                (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 551 */
+            if (MioPan_XboxAccessoryCount() != 0)
             {
-                setup_menu_ctrl.mio_csr = 0;
+                /* PORT: Off, the glasses, then the Xbox sets. */
+                setup_menu_ctrl.mio_csr = SetupMenuAcsStep(setup_menu_ctrl.mio_csr, +1);
+            }
+            else
+            {
+                setup_menu_ctrl.mio_csr = (char)(setup_menu_ctrl.mio_csr ^ 1);  /* 548 */
+
+                if ((setup_menu_ctrl.mio_csr == 1) &&
+                    (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 551 */
+                {
+                    setup_menu_ctrl.mio_csr = 0;
+                }
             }
 
             if (csr_back_up != setup_menu_ctrl.mio_csr)                 /* 558 */
@@ -582,12 +704,20 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
         case SETUP_MENU_SETUP_CSR_MAYU_ACS:
             csr_back_up = setup_menu_ctrl.mayu_csr;                     /* 566 */
 
-            setup_menu_ctrl.mayu_csr = (char)(setup_menu_ctrl.mayu_csr ^ 1);  /* 568 */
-
-            if ((setup_menu_ctrl.mayu_csr == 1) &&
-                (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 571 */
+            if (MioPan_XboxAccessoryCount() != 0)
             {
-                setup_menu_ctrl.mayu_csr = 0;
+                /* PORT: Off, the glasses, then the Xbox sets. */
+                setup_menu_ctrl.mayu_csr = SetupMenuAcsStep(setup_menu_ctrl.mayu_csr, +1);
+            }
+            else
+            {
+                setup_menu_ctrl.mayu_csr = (char)(setup_menu_ctrl.mayu_csr ^ 1);  /* 568 */
+
+                if ((setup_menu_ctrl.mayu_csr == 1) &&
+                    (clear_flg_ctrl.accessory_flg.IsUp(setup_menu_ctrl.setup_csr) == 0))  /* 571 */
+                {
+                    setup_menu_ctrl.mayu_csr = 0;
+                }
             }
 
             if (csr_back_up != setup_menu_ctrl.mayu_csr)                /* 579 */
@@ -654,26 +784,16 @@ static void SetupMenuSetupSelPad(void)                                  /* 397 *
 
             /* The commit.  Everything the ingame side reads comes from here;
              * the menu keeps no copy of its own. */
-            SetPlyrMdlNo(costume_tbl[setup_menu_ctrl.costume_csr].mMioMdl);   /* 627 */
-            SetSisterMdlNo(costume_tbl[setup_menu_ctrl.costume_csr].mMayuMdl); /* 628 */
+            /* PORT: through the helpers above, which read costume_tbl[] for
+             * the ROM's own entries exactly as these lines did -- including
+             * the glasses, which every costume pairs with 6 / 7. */
+            SetPlyrMdlNo(SetupMenuCostumeMdl(MIOPAN_XBOX_GIRL_MIO));    /* 627 */
+            SetSisterMdlNo(SetupMenuCostumeMdl(MIOPAN_XBOX_GIRL_MAYU)); /* 628 */
 
-            if (setup_menu_ctrl.mio_csr == 1)                           /* 631 */
-            {
-                SetPlyrAcsNo(costume_tbl[setup_menu_ctrl.costume_csr].mMioAcsMdl); /* 632 */
-            }
-            else
-            {
-                SetPlyrAcsNo(-1);                                       /* 635 */
-            }
-
-            if (setup_menu_ctrl.mayu_csr == 1)                          /* 637 */
-            {
-                SetSisterAcsNo(costume_tbl[setup_menu_ctrl.costume_csr].mMayuAcsMdl); /* 638 */
-            }
-            else
-            {
-                SetSisterAcsNo(-1);                                     /* 641 */
-            }
+            SetPlyrAcsNo(SetupMenuAcsMdl(MIOPAN_XBOX_GIRL_MIO,
+                                         setup_menu_ctrl.mio_csr));     /* 631..635 */
+            SetSisterAcsNo(SetupMenuAcsMdl(MIOPAN_XBOX_GIRL_MAYU,
+                                           setup_menu_ctrl.mayu_csr));  /* 637..641 */
 
             ingame_wrk.mDifficulty.Set(setup_menu_ctrl.difficulty_csr); /* 644 */
         }
@@ -829,9 +949,9 @@ static void SetupMenuSelMenuDisp(int off_x, int off_y, u_char alpha)     /* 798 
     SetupMenuMioDisp(off_x, off_y, setup_alpha, 0x80, 0);               /* 840 */
     SetupMenuMayuDisp(off_x, off_y, setup_alpha, 0x80, 0);              /* 843 */
 
-    setup_on_off_disp_func[setup_menu_ctrl.mio_csr](off_x + 444, off_y + 211,
+    SetupMenuAcsDisp(setup_menu_ctrl.mio_csr, off_x + 444, off_y + 211,
                                                     setup_alpha, 0x80, 0);  /* 846 */
-    setup_on_off_disp_func[setup_menu_ctrl.mayu_csr](off_x + 444, off_y + 241,
+    SetupMenuAcsDisp(setup_menu_ctrl.mayu_csr, off_x + 444, off_y + 241,
                                                      setup_alpha, 0x80, 0); /* 849 */
 
     if (setup_menu_ctrl.menu_csr == SETUP_MENU_CSR_STORY)               /* 852 */
@@ -950,23 +1070,23 @@ static void SetupMenuSelSetupDisp(int off_x, int off_y, u_char alpha)   /* 885 *
 
     if (setup_menu_ctrl.setup_csr == SETUP_MENU_SETUP_CSR_MIO_ACS)      /* 987 */
     {
-        setup_on_off_disp_func[setup_menu_ctrl.mio_csr](off_x + 444, off_y + 211,
+        SetupMenuAcsDisp(setup_menu_ctrl.mio_csr, off_x + 444, off_y + 211,
                                                         alpha, 0x80, 1);    /* 988 */
     }
     else
     {
-        setup_on_off_disp_func[setup_menu_ctrl.mio_csr](off_x + 444, off_y + 211,
+        SetupMenuAcsDisp(setup_menu_ctrl.mio_csr, off_x + 444, off_y + 211,
                                                         non_sel_alpha, 0x80, 0);  /* 991 */
     }
 
     if (setup_menu_ctrl.setup_csr == SETUP_MENU_SETUP_CSR_MAYU_ACS)     /* 995 */
     {
-        setup_on_off_disp_func[setup_menu_ctrl.mayu_csr](off_x + 444, off_y + 241,
+        SetupMenuAcsDisp(setup_menu_ctrl.mayu_csr, off_x + 444, off_y + 241,
                                                          alpha, 0x80, 1);   /* 996 */
     }
     else
     {
-        setup_on_off_disp_func[setup_menu_ctrl.mayu_csr](off_x + 444, off_y + 241,
+        SetupMenuAcsDisp(setup_menu_ctrl.mayu_csr, off_x + 444, off_y + 241,
                                                          non_sel_alpha, 0x80, 0);  /* 999 */
     }
 
@@ -1062,9 +1182,9 @@ static void SetupMenuExitConfDisp(int off_x, int off_y, u_char alpha)   /* 1059 
     SetupMenuMioDisp(off_x, off_y, setup_alpha, 0x80, 0);               /* 1103 */
     SetupMenuMayuDisp(off_x, off_y, setup_alpha, 0x80, 0);              /* 1106 */
 
-    setup_on_off_disp_func[setup_menu_ctrl.mio_csr](off_x + 444, off_y + 211,
+    SetupMenuAcsDisp(setup_menu_ctrl.mio_csr, off_x + 444, off_y + 211,
                                                     setup_alpha, 0x80, 0);  /* 1109 */
-    setup_on_off_disp_func[setup_menu_ctrl.mayu_csr](off_x + 444, off_y + 241,
+    SetupMenuAcsDisp(setup_menu_ctrl.mayu_csr, off_x + 444, off_y + 241,
                                                      setup_alpha, 0x80, 0); /* 1112 */
 
     for (i = 0; i < 2; i++) {                                           /* 1117 */
@@ -1285,6 +1405,30 @@ static void SetupMenuCostumeTypeDisp(int costume_type, int off_x, int off_y,
         { 15, 22 },
         { 15, 23 }
     };
+
+    /* PORT: an Xbox costume has no letter plate -- the "TYPE" word, then its
+     * letter, I onwards, in the message font. */
+    if (costume_type >= SETUP_MENU_COSTUME_MAX &&
+        costume_type < SetupMenuCostumeNum())
+    {
+        char letter[2] = { (char)('I' + costume_type - SETUP_MENU_COSTUME_MAX), '\0' };
+
+        CopySprDToSpr(&costume_ds, &setup_tex[costume_type_tbl[1][0]]);
+        costume_ds.x = costume_ds.x + (float)off_x;
+        costume_ds.y = costume_ds.y + (float)off_y;
+        costume_ds.alpha = (u_char)(((int)costume_ds.alpha * (int)alpha) >> 7);
+        costume_ds.r = rgb;
+        costume_ds.g = rgb;
+        costume_ds.b = rgb;
+        if (flg == 1)
+        {
+            costume_ds.alphar = 0x48;
+        }
+        DispSprD(&costume_ds);
+
+        SetupMenuXboxLabelDisp(461 + off_x, 186 + off_y, alpha, rgb, letter);
+        return;
+    }
 
     if ((u_int)costume_type >= (u_int)SETUP_MENU_COSTUME_MAX)           /* 1357 */
     {

@@ -1318,6 +1318,11 @@ Rml::Context *GetContext()
     return g_rml.context;
 }
 
+SDL_Window *GetWindow()
+{
+    return g_rml.window;
+}
+
 void SetGeneratedImage(const std::string &name, const Uint8 *rgba, int width,
                        int height)
 {

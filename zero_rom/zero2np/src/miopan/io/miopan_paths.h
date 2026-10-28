@@ -62,7 +62,9 @@ int MioPan_PathLooksLikeDataDir(const char *dir);
  * against the data root: strip the device prefix, leading slashes and the
  * ";version" suffix, turn '\' into '/', then look under the root.  A leading
  * "../" is dropped if the direct join misses, and "bin/" is retried as "bin2/",
- * because both extracted-tree layouts are in circulation.
+ * because both extracted-tree layouts are in circulation.  A name under xbox/
+ * -- the imported Director's Cut extras -- is looked for in the user directory
+ * first.
  *
  * Returns 1 with `out` filled, 0 if the file is not there.
  */

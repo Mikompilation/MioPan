@@ -12,6 +12,7 @@
 #include "../../graphics/graph3d/g3ddbg.h"
 #include "../../graphics/graph3d/gra3dBoundingBox.h"
 #include "../../graphics/graph3d/gra3dConst.h"
+#include "../../miopan/io/miopan_xbox_assets.h"   /* PORT: MioPan_XboxModelBase */
 
 struct alignas(16) CHARBBDATA
 {
@@ -105,6 +106,10 @@ static const CHARBBDATA s_aCharBBData[78] =
 static const CHARBBDATA &_GetCharBBDataRef(int iModelId)
 {
     const CHARBBDATA *data;
+
+    /* PORT: a converted Xbox costume has its girl's box, as every ROM costume
+     * does through the proxy chain (miopan_xbox_assets.h). */
+    iModelId = MioPan_XboxModelBase(iModelId);
 
     do
     {

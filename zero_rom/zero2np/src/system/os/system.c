@@ -89,13 +89,20 @@ int          system_sound_bank_id;          // sdata 3f462c : handle for the sys
 // performance counter object (FrameInit() is a method on it)
 #include "../../debug/zero2_perf.h"          // C_ZERO2_PERF_CNT c_zero2_perf_cnt (sdata 3f4908)
 #include "../../miopan/miopan_memory.h"      // host backing for fixed EE addresses
+#include "../../miopan/io/miopan_xbox_assets.h" // PORT: the converted Xbox extras
 
 // ──────────────────────────────────────────────────────────────────────
 // CD data tables handed to cddatInit().  IMG_BD.BIN holds 0x118b (4491)
 // entries.  The values below are recovered from SLES_523.84 at the
 // symbol addresses recorded in globals.txt/symbols.txt.
+//
+// PORT: all four tables have room past the ROM's entries for the Xbox
+// Director's Cut costumes and accessories, imported through Options >
+// Special.  MioPan_XboxAssetsRegister() (miopan/io/miopan_xbox_assets.cpp)
+// gives each one a fixed slot at boot, numbered after the ROM's files so no
+// ROM file number moves, and an import fills its slot in place.
 
-static CD_DAT_TBL cd_dat_tbl[4491] =
+static CD_DAT_TBL cd_dat_tbl[4491 + MIOPAN_XBOX_FILE_MAX] =
 {
     { 0, 1, 23660, 2662400, 2662400 },
     { 0, 0, 0, 0, 0 },
@@ -4590,7 +4597,7 @@ static CD_DAT_TBL cd_dat_tbl[4491] =
     { 0, 1, 747957, 50544, 50544 }
 };
 
-static char *filename_path[54] =
+static char *filename_path[54 + 2] =
 {
     (char *)"../bin/data/tim/",
     (char *)"../bin/data/",
@@ -4645,10 +4652,14 @@ static char *filename_path[54] =
     (char *)"../bin/data/tim/gallery/",
     (char *)"../bin/data/tim/lang_sl/",
     (char *)"../bin/data/tim/clear/",
-    (char *)"../bin/data/subtitle/"
+    (char *)"../bin/data/subtitle/",
+
+    /* PORT: the imported Xbox extras (see the note above). */
+    (char *)"../xbox/man/mdl/",
+    (char *)"../xbox/item/"
 };
 
-static char file_ext_tbl[4491] =
+static char file_ext_tbl[4491 + MIOPAN_XBOX_FILE_MAX] =
 {
     0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
     3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -4840,7 +4851,7 @@ static char file_ext_tbl[4491] =
     2, 2, 2
 };
 
-static FNAME_DAT filename_dat[4491] =
+static FNAME_DAT filename_dat[4491 + MIOPAN_XBOX_FILE_MAX] =
 {
     { 0, 1, (char *)"comp_tes.pks" },
     { 0, 1, (char *)"comp_tes.cmp" },
@@ -9446,8 +9457,13 @@ void InitSystemON(void)
     ee_iopInit(&def);
 
     // CD data table: 0x118b files, paths rooted at "host0:".
+    //
+    // PORT: plus a slot for each of the Xbox extras, whether or not it has
+    // been imported yet -- see the note above cd_dat_tbl[].
     cddatInit("IMG_BD.BIN", "host0:", filename_dat, filename_path,
-              cd_dat_tbl, file_ext_tbl, 0x118b);
+              cd_dat_tbl, file_ext_tbl,
+              MioPan_XboxAssetsRegister(cd_dat_tbl, filename_dat, file_ext_tbl,
+                                        54, 55));
 
     _InitException();
     snd3DSetEnvironment(&s3d_env);
