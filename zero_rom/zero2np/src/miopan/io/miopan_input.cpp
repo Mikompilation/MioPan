@@ -1077,6 +1077,28 @@ int MioPan_InputButtonHeld(int index)
     return s_suppressed == 0 ? held : 0;
 }
 
+unsigned char MioPan_InputButtonPressure(int index)
+{
+    if (!MioPan_InputButtonHeld(index))
+        return 0;
+    if (MioPan_MenuMouseHeld(index))
+        return 255;
+
+    const bool *keys = SDL_GetKeyboardState(nullptr);
+    int magnitude = 0;
+    for (int i = 0; i < MIOPAN_INPUT_MAX_SOURCES; ++i)
+    {
+        const MioPan_InputSource *source = &s_buttons[index].src[i];
+        if (SourceHeld(source, keys))
+        {
+            const int value = SourceMagnitude(source, keys);
+            if (value > magnitude)
+                magnitude = value;
+        }
+    }
+    return (unsigned char)(magnitude * 255 / MIOPAN_SRC_FULL);
+}
+
 unsigned char MioPan_InputStickValue(int index)
 {
     int analog_value = 127;

@@ -102,6 +102,7 @@ void MioPan_InputUpdate(void);
 
 // 1 if logical button `index` (0..15) is currently held by any of its sources.
 int MioPan_InputButtonHeld(int index);
+unsigned char MioPan_InputButtonPressure(int index);
 
 // Stick axis `index` (0..3) as a PS2 0..255 value (127 = centred), taking
 // whichever of the analog and digital sources shows the larger deflection.

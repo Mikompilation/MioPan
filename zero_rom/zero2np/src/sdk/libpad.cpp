@@ -119,6 +119,15 @@ int scePadRead(int port, int slot, unsigned char *rdata)
         rdata[s_stick_rdata_byte[i]] = MioPan_InputStickValue(i);
     }
 
+    // DualShock 2 pressure order differs from the logical button order.
+    static const int pressure_buttons[12] = {3, 2, 0, 1, 4, 7, 5, 6, 8, 10, 9, 11};
+    for (i = 0; i < 12; ++i)
+    {
+        const int button = pressure_buttons[i];
+        rdata[8 + i] = (raw_buttons & s_button_bits[button]) != 0 ? 0
+            : MioPan_InputButtonPressure(button);
+    }
+
     return 1;
 }
 
