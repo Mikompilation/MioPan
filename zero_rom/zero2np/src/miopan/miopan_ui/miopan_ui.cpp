@@ -1321,7 +1321,7 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 41 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 40 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
@@ -2868,23 +2868,6 @@ void DrawDiagnosticsMenu()
         ImGui::TextDisabled(
             "  shadows %d / caster draws %d / receiver draws %d / map %s",
             shadows, casters, receivers, valid ? "yes" : "no");
-    }
-    ImGui::Separator();
-
-    ImGui::TextDisabled("Animated character lighting");
-    const int animated_backend =
-        MioPan_RendererGetAnimatedLightingBackend();
-    if (ImGui::MenuItem("GPU vertex (fast)", nullptr,
-                        animated_backend == MIOPAN_ANIMATED_LIGHTING_GPU))
-    {
-        MioPan_RendererSetAnimatedLightingBackend(
-            MIOPAN_ANIMATED_LIGHTING_GPU);
-    }
-    if (ImGui::MenuItem("CPU reference (A/B)", nullptr,
-                        animated_backend == MIOPAN_ANIMATED_LIGHTING_CPU))
-    {
-        MioPan_RendererSetAnimatedLightingBackend(
-            MIOPAN_ANIMATED_LIGHTING_CPU);
     }
     ImGui::Separator();
 

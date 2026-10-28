@@ -38,7 +38,6 @@ typedef struct MioPan_ConfigRenderer
     int   aspect_mode;       /* MIOPAN_ASPECT_*        */
     float aspect_ratio;      /* used when aspect_mode is CUSTOM */
     int   lighting_mode;     /* MIOPAN_LIGHTING_*      */
-    int   animated_lighting; /* MIOPAN_ANIMATED_LIGHTING_* */
     int   shadow_filter;     /* MIOPAN_SHADOW_FILTER_*  */
     int   extra_presents;    /* frame smoothing: 0..3 additional presents */
     int   interpolate_presents;

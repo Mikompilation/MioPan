@@ -638,17 +638,6 @@ enum
                           MIOPAN_VU1_TERM_POINT
 };
 
-/* Animated-character lighting backend.  GPU is the normal fast path; CPU is
- * the established gra3dCalcVertexColor reference retained for visual A/B
- * checks and unsupported/malformed mesh fallback. */
-enum
-{
-    MIOPAN_ANIMATED_LIGHTING_GPU = 0,
-    MIOPAN_ANIMATED_LIGHTING_CPU = 1
-};
-int  MioPan_RendererGetAnimatedLightingBackend(void);
-void MioPan_RendererSetAnimatedLightingBackend(int backend);
-
 /* Diagnostic render overrides exposed through the host UI. */
 enum
 {

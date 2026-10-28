@@ -54,7 +54,6 @@ MioPan_Config miopan_config = {
         /* .aspect_mode       = */ MIOPAN_ASPECT_AUTO,
         /* .aspect_ratio      = */ 16.0f / 9.0f,
         /* .lighting_mode     = */ MIOPAN_LIGHTING_VERTEX,
-        /* .animated_lighting = */ MIOPAN_ANIMATED_LIGHTING_GPU,
         /* .shadow_filter     = */ MIOPAN_SHADOW_FILTER_SOFT,
         /* .extra_presents    = */ 0,
         /* .interpolate_presents = */ 1,
@@ -347,11 +346,6 @@ const EnumName kShadowFilters[] = {
     {nullptr, 0},
 };
 
-const EnumName kAnimatedLighting[] = {
-    {"gpu", MIOPAN_ANIMATED_LIGHTING_GPU},
-    {"cpu", MIOPAN_ANIMATED_LIGHTING_CPU},
-    {nullptr, 0},
-};
 
 const EnumName kHdrModes[] = {
     {"off", MIOPAN_HDR_OFF},
@@ -1647,8 +1641,6 @@ static void ConfigLoadOnce(void)
      * ratio left in the companion key. */
     ReadAspect("render", "aspect", &r->aspect_mode, &r->aspect_ratio);
     ReadEnum("lighting", "spotlights", kLightingModes, &r->lighting_mode);
-    ReadEnum("lighting", "animated_characters", kAnimatedLighting,
-             &r->animated_lighting);
     ReadEnum("shadow", "filter", kShadowFilters, &r->shadow_filter);
     ReadEnum("smoothing", "mode", kSmoothingModes, &r->smoothing_mode);
     ReadInt("smoothing", "extra_presents", &r->extra_presents);
@@ -1875,8 +1867,6 @@ int MioPan_ConfigSave(void)
         "[lighting]\n"
         "; vertex reproduces the PS2 VU1 path; fragment is smoother\n"
         "spotlights = %s\n"
-        "; gpu | cpu   (cpu is the slow reference path, for A/B only)\n"
-        "animated_characters = %s\n"
         "\n"
         "[smoothing]\n"
         "; field | display\n"
@@ -2012,7 +2002,6 @@ int MioPan_ConfigSave(void)
         r->gs_by_reference,
         r->indexed_streams,
         EnumToName(kLightingModes, r->lighting_mode),
-        EnumToName(kAnimatedLighting, r->animated_lighting),
         EnumToName(kSmoothingModes, r->smoothing_mode),
         r->extra_presents,
         r->interpolate_presents,
@@ -2210,7 +2199,6 @@ void MioPan_ConfigApply(void)
     MioPan_RendererSetMsaaSamples(r->msaa_samples);
     MioPan_RendererSetAnisotropy(r->anisotropy);
     MioPan_RendererSetLightingMode(r->lighting_mode);
-    MioPan_RendererSetAnimatedLightingBackend(r->animated_lighting);
     MioPan_RendererSetShadowFilter(r->shadow_filter);
     MioPan_RendererSetExtraPresents(r->extra_presents);
     MioPan_RendererSetPresentInterpolation(r->interpolate_presents);
@@ -2269,7 +2257,6 @@ void MioPan_ConfigCapture(void)
     r->msaa_samples = MioPan_RendererGetMsaaSamples();
     r->anisotropy = MioPan_RendererGetAnisotropy();
     r->lighting_mode = MioPan_RendererGetLightingMode();
-    r->animated_lighting = MioPan_RendererGetAnimatedLightingBackend();
     r->shadow_filter = MioPan_RendererGetShadowFilter();
     r->smoothing_mode = MioPan_RendererGetSmoothingMode();
     r->extra_presents = MioPan_RendererGetExtraPresents();

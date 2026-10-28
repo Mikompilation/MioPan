@@ -1384,7 +1384,6 @@ bool g_mesh_cache_available;
 int g_lighting_mode = MIOPAN_LIGHTING_VERTEX;
 int g_shadow_filter = MIOPAN_SHADOW_FILTER_SOFT;
 bool g_lighting_mode_initialized;
-int g_animated_lighting_backend = MIOPAN_ANIMATED_LIGHTING_GPU;
 /*
  * Presented frames per logical frame.  1 is the only value the game ever asks
  * for: the 30 Hz cadence is the game loop's own two-field V-blank wait
@@ -14125,19 +14124,6 @@ void MioPan_RendererSetLightingMode(int mode)
     g_lighting_mode = (mode == MIOPAN_LIGHTING_FRAGMENT ||
                        mode == MIOPAN_LIGHTING_FRAGMENT_ALL)
         ? mode : MIOPAN_LIGHTING_VERTEX;
-}
-
-int MioPan_RendererGetAnimatedLightingBackend(void)
-{
-    return g_animated_lighting_backend;
-}
-
-void MioPan_RendererSetAnimatedLightingBackend(int backend)
-{
-    g_animated_lighting_backend =
-        backend == MIOPAN_ANIMATED_LIGHTING_CPU
-            ? MIOPAN_ANIMATED_LIGHTING_CPU
-            : MIOPAN_ANIMATED_LIGHTING_GPU;
 }
 
 unsigned int MioPan_RendererGetDebugViewFlags(void)
