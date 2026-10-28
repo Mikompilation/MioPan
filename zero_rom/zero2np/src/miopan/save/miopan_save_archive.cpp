@@ -319,6 +319,85 @@ Bytes Entry(const std::string &name, uint32_t length, bool directory)
         SetName(entry, 64, name);
     return entry;
 }
+uint32_t XpsChecksum(const Bytes &bytes, size_t first, size_t last)
+{
+    uint32_t sum = 0;
+    for (size_t i = first; i < last; ++i)
+        sum += uint32_t(bytes[i]) << (sum % 24);
+    return sum;
+}
+void Append32(Bytes &bytes, uint32_t value)
+{
+    const size_t at = bytes.size();
+    bytes.resize(at + 4);
+    Put(bytes, at, value);
+}
+Bytes XpsDescriptor(const std::string &name, uint32_t size, bool directory)
+{
+    const auto entry = Entry(name, size, directory);
+    Bytes descriptor(250, 0);
+    descriptor[0] = 250;
+    SetName(descriptor, 2, name);
+    Put(descriptor, 66, size);
+    // X-Port stores the PS2 mode bytes in the opposite order.
+    descriptor[78] = entry[1];
+    descriptor[79] = entry[0];
+    std::copy_n(entry.begin() + 8, 8, descriptor.begin() + 82);
+    std::copy_n(entry.begin() + 24, 8, descriptor.begin() + 90);
+    SetName(descriptor, 114, name);
+    SetName(descriptor, 178, name);
+    return descriptor;
+}
+SaveFiles ReadXps(const Bytes &bytes, std::string &directory)
+{
+    Need(Get(bytes, 17) == 0, "Unsupported X-Port save type.");
+    size_t at = 21;
+    for (int field = 0; field < 3; ++field)
+    {
+        const unsigned size = Get(bytes, at);
+        at += 4;
+        Need(size <= bytes.size() - at, "Truncated X-Port description.");
+        at += size;
+    }
+    const unsigned length = Get(bytes, at);
+    at += 4;
+    Need(length <= bytes.size() - at, "Truncated X-Port body.");
+    const size_t body = at, end = at + length;
+    Need(end == bytes.size() || bytes.size() - end == 4, "Unexpected X-Port trailing data.");
+    if (end != bytes.size())
+    {
+        const uint32_t stored = Get(bytes, end);
+        Need(stored == 0 || stored == XpsChecksum(bytes, body, end), "X-Port checksum mismatch.");
+    }
+    SaveFiles files;
+    unsigned count = 0;
+    for (unsigned index = 0; index <= count; ++index)
+    {
+        Need(at <= end && end - at >= 98, "Truncated X-Port descriptor.");
+        const unsigned header = Get(bytes, at) & 0xffff;
+        Need(header >= 98 && header <= end - at, "Invalid X-Port descriptor size.");
+        const auto name = Name(bytes, at + 2);
+        const unsigned size = Get(bytes, at + 66);
+        const unsigned mode = unsigned(bytes[at + 78]) << 8 | bytes[at + 79];
+        at += header;
+        if (index == 0)
+        {
+            Need((mode & 0x30) == 0x20 && size >= 3 && size <= 66,
+                 "Invalid X-Port save directory.");
+            directory = name;
+            count = size - 2;
+        }
+        else
+        {
+            Need((mode & 0x30) == 0x10, "Unsupported X-Port subdirectory.");
+            Need(size <= end - at, "Truncated X-Port file.");
+            AddFile(files, name, bytes, at, size);
+            at += size;
+        }
+    }
+    Need(at == end, "X-Port body size does not match its files.");
+    return files;
+}
 } // namespace
 bool ReadSaveArchive(const Bytes &data, std::string &directory, SaveFiles &files,
                      std::string &error)
@@ -353,10 +432,12 @@ bool ReadSaveArchive(const Bytes &data, std::string &directory, SaveFiles &files
             }
             Need(at == body.size(), "Unexpected MAX trailing data.");
         }
+        else if (data.size() >= 17 && std::memcmp(data.data(), "\x0d\0\0\0SharkPortSave", 17) == 0)
+            result = ReadXps(data, dir);
         else
         {
             Need(data.size() >= 1536 && (Get(data, 0) & 0x8020) == 0x8020,
-                 "Not a PSU or MAX save archive.");
+                 "Not a supported PS2 save archive.");
             dir = Name(data, 64);
             const unsigned count = Get(data, 4);
             Need(count >= 3 && count <= 66, "Invalid PSU file count.");
@@ -395,8 +476,9 @@ bool WriteSaveArchive(const std::string &directory, const SaveFiles &files,
 {
     try
     {
-        Need(format == SaveArchiveFormat::Psu || format == SaveArchiveFormat::Max,
-             "Choose PSU or MAX archive format.");
+        Need(format == SaveArchiveFormat::Psu || format == SaveArchiveFormat::Max ||
+                 format == SaveArchiveFormat::Xps,
+             "Choose a supported save archive format.");
         Need(!files.empty() && files.size() <= 64, "Invalid archive file count.");
         size_t total = 0;
         for (const auto &file : files)
@@ -419,6 +501,29 @@ bool WriteSaveArchive(const std::string &directory, const SaveFiles &files,
                 out.insert(out.end(), file.second.begin(), file.second.end());
                 out.resize(out.size() + (1024 - file.second.size() % 1024) % 1024, 0);
             }
+        }
+        else if (format == SaveArchiveFormat::Xps)
+        {
+            const char magic[] = "\x0d\0\0\0SharkPortSave";
+            out.assign(magic, magic + 17);
+            Append32(out, 0);
+            Append32(out, uint32_t(directory.size()));
+            out.insert(out.end(), directory.begin(), directory.end());
+            Append32(out, 0); // Optional date and comment strings.
+            Append32(out, 0);
+            const size_t length_at = out.size();
+            Append32(out, 0);
+            const size_t body = out.size();
+            auto descriptor = XpsDescriptor(directory, uint32_t(files.size() + 2), true);
+            out.insert(out.end(), descriptor.begin(), descriptor.end());
+            for (const auto &file : files)
+            {
+                descriptor = XpsDescriptor(file.first, uint32_t(file.second.size()), false);
+                out.insert(out.end(), descriptor.begin(), descriptor.end());
+                out.insert(out.end(), file.second.begin(), file.second.end());
+            }
+            Put(out, length_at, uint32_t(out.size() - body));
+            Append32(out, XpsChecksum(out, body, out.size()));
         }
         else
         {

@@ -38,6 +38,8 @@ const char *OutputSuffix()
         return ".psu";
     if (output_archive == SaveArchiveFormat::Max)
         return ".max";
+    if (output_archive == SaveArchiveFormat::Xps)
+        return ".xps";
     return output_ecc ? ".ps2" : ".bin";
 }
 std::string source_error, target_error, message;
@@ -239,12 +241,14 @@ void Browse(SDL_Window *window, Dialog dialog)
             {
                 const auto &r = *static_cast<Request *>(data);
                 static const SDL_DialogFileFilter filter{"PS2 cards or save archives",
-                                                         "ps2;mcd;bin;vmc;psu;max"};
+                                                         "ps2;mcd;bin;vmc;psu;max;xps;sps"};
                 static const SDL_DialogFileFilter outputs[] = {{"PCSX2 / ECC memory card", "ps2"},
                                                                {"OPL / raw memory card", "bin"},
                                                                {"PSU / EMS - uLaunchELF", "psu"},
-                                                               {"Action Replay MAX", "max"}};
-                const auto *save_filter = &outputs[output_archive == SaveArchiveFormat::Psu   ? 2
+                                                               {"Action Replay MAX", "max"},
+                                                               {"X-Port / SharkPort", "xps;sps"}};
+                const auto *save_filter = &outputs[output_archive == SaveArchiveFormat::Xps   ? 4
+                                                   : output_archive == SaveArchiveFormat::Psu ? 2
                                                    : output_archive == SaveArchiveFormat::Max ? 3
                                                    : output_ecc                               ? 0
                                                                                               : 1];
@@ -584,8 +588,9 @@ void Draw(SDL_Window *window)
         ImGui::TextUnformatted("Choose where your PS2 saves are stored");
         ImGui::Spacing();
         const float width = ImGui::GetContentRegionAvail().x;
-        if (ChoiceCard("Open a card or save archive\n\nPCSX2 / OPL card, PSU or Action Replay MAX",
-                       width))
+        if (ChoiceCard(
+                "Open a card or save archive\n\nPCSX2 / OPL card or single-game save archive",
+                width))
             ChooseStorage(window, StorageKind::Card);
         if (ChoiceCard("Open a save folder\n\nUse extracted PS2 save files", width))
             ChooseStorage(window, StorageKind::Folder);
@@ -635,7 +640,7 @@ void Draw(SDL_Window *window)
                            "export immediately.");
         ImGui::Spacing();
         const float width = ImGui::GetContentRegionAvail().x;
-        const float height = std::clamp((ImGui::GetContentRegionAvail().y - 40.f) / 5.f -
+        const float height = std::clamp((ImGui::GetContentRegionAvail().y - 40.f) / 6.f -
                                             ImGui::GetStyle().ItemSpacing.y,
                                         70.f, 110.f);
         int format = -1;
@@ -643,15 +648,17 @@ void Draw(SDL_Window *window)
             format = 1;
         if (ChoiceCard("OPL / raw\n\nNon-ECC .bin memory card", width, height))
             format = 0;
-        if (ChoiceCard("Extracted save folder\n\nCreate save files inside the chosen folder",
-                       width))
+        if (ChoiceCard("Extracted save folder\n\nCreate save files inside the chosen folder", width,
+                       height))
             format = 2;
         if (ChoiceCard("PSU / EMS\n\nuLaunchELF and PS2 save-transfer tools", width, height))
             format = 3;
         if (ChoiceCard("Action Replay MAX\n\nSingle-game .max save archive", width, height))
             format = 4;
+        if (ChoiceCard("X-Port / SharkPort\n\nSingle-game .xps / .sps save archive", width, height))
+            format = 5;
         ImGui::TextWrapped(
-            "PSU and MAX contain this game's selected saves, not a whole memory card.");
+            "Save archives contain this game's selected saves, not a whole memory card.");
         if (format >= 0)
         {
             message.clear();
@@ -665,6 +672,7 @@ void Draw(SDL_Window *window)
                 output_ecc = format == 1;
                 output_archive = format == 3   ? SaveArchiveFormat::Psu
                                  : format == 4 ? SaveArchiveFormat::Max
+                                 : format == 5 ? SaveArchiveFormat::Xps
                                                : SaveArchiveFormat::None;
                 if (output[0])
                 {
