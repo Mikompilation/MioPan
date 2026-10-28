@@ -3944,9 +3944,9 @@ void InitRenderResolutionFromEnvironment()
 
 /* One download per frame, not one per probe: a hundred 8x1 copies would each
  * pay D3D12's 256-byte row-pitch realignment.  Ghosts on screen cluster, so
- * their bounding box is normally small; it is capped, and a probe outside the
- * capped box simply has no answer that frame. */
-constexpr int kDepthProbeRegionMax = 256;
+ * their bounding box is normally small; the limit covers the full logical
+ * frame so distant probes are not dropped. */
+constexpr int kDepthProbeRegionMax = kLogicalWidth;
 /* Round the downloaded width up to this so the row pitch is a whole number of
  * 256-byte lines for a 4-byte format, which is what D3D12 wants and what keeps
  * SDL off its realignment path. */
@@ -3980,6 +3980,10 @@ Uint32 g_depth_probe_pending_w;
 Uint32 g_depth_probe_pending_h;
 bool g_depth_probe_supported = true;
 bool g_depth_probe_logged;
+SDL_GPUTexture *g_visibility_depth_texture;
+bool g_visibility_depth_recorded;
+SDL_GPUGraphicsPipeline *g_visibility_pipelines[kPipelineLayoutCount][2][GS_DEPTH_COMPARE_COUNT];
+bool g_visibility_pipeline_failed[kPipelineLayoutCount][2][GS_DEPTH_COMPARE_COUNT];
 
 void ReleaseDepthProbeResources()
 {
@@ -3995,6 +3999,21 @@ void ReleaseDepthProbeResources()
         g_depth_probe_transfer = nullptr;
         g_depth_probe_transfer_size = 0;
     }
+    if (g_visibility_depth_texture != nullptr)
+    {
+        SDL_ReleaseGPUTexture(g_device, g_visibility_depth_texture);
+        g_visibility_depth_texture = nullptr;
+    }
+    for (auto &layouts : g_visibility_pipelines)
+        for (auto &transforms : layouts)
+            for (auto &pipeline : transforms)
+                if (pipeline != nullptr)
+                {
+                    SDL_ReleaseGPUGraphicsPipeline(g_device, pipeline);
+                    pipeline = nullptr;
+                }
+    std::memset(g_visibility_pipeline_failed, 0, sizeof(g_visibility_pipeline_failed));
+    g_visibility_depth_recorded = false;
     for (DepthProbe &probe : g_depth_probes)
     {
         probe = DepthProbe{};
@@ -4020,9 +4039,9 @@ void ResolveDepthProbes()
     SDL_ReleaseGPUFence(g_device, g_depth_probe_fence);
     g_depth_probe_fence = nullptr;
 
-    if (g_depth_probe_pending_texture != g_depth_texture ||
-        g_depth_probe_pending_w != g_depth_width ||
-        g_depth_probe_pending_h != g_depth_height)
+    if (g_depth_probe_pending_texture != g_visibility_depth_texture ||
+        g_depth_probe_pending_w != kLogicalWidth ||
+        g_depth_probe_pending_h != kLogicalHeight)
     {
         /* The buffer was resized while this was in flight.  Every probe's
          * pixel was measured against the old one, so throw the frame away. */
@@ -4078,36 +4097,10 @@ void ResolveDepthProbes()
 void RecordDepthProbeDownload()
 {
     if (!g_depth_probe_supported || g_depth_probe_fence != nullptr ||
-        g_depth_texture == nullptr || g_depth_width == 0 ||
-        g_depth_height == 0)
-    {
+        !g_visibility_depth_recorded || g_visibility_depth_texture == nullptr)
         return;
-    }
-    /*
-     * PORT LIMIT, and the one thing MSAA costs beyond bandwidth: a
-     * multisampled texture cannot be downloaded, and SDL_GPU resolves colour
-     * targets only -- there is no depth resolve to read instead.  So while
-     * MSAA is on this probe stands down and MioPan_RendererQueryPointOccluded()
-     * answers UNAVAILABLE, which effect_sub.o's CheckPointDepth() already
-     * treats as "not occluded".  A ghost stays a finder target through a wall
-     * it would otherwise be hidden by -- exactly the degradation the port had
-     * before the probe existed.  Not latched: turning MSAA off restores it on
-     * the next frame.
-     */
-    if (g_depth_samples > 1)
-    {
-        /* Drop the stored answers rather than leaving them.  Nothing else
-         * clears them -- ResolveDepthProbes() returns early when there is no
-         * fence -- so without this the last read-back before MSAA came on
-         * would keep being reported as this frame's. */
-        for (DepthProbe &probe : g_depth_probes)
-        {
-            probe.read_valid = false;
-        }
-        return;
-    }
-    const int depth_w = (int)g_depth_width;
-    const int depth_h = (int)g_depth_height;
+    const int depth_w = kLogicalWidth;
+    const int depth_h = kLogicalHeight;
 
     /* Only D32_FLOAT is decoded here.  The others are 24- or 16-bit normalised
      * and would each need their own unpack; reversed-Z already wants
@@ -4199,7 +4192,7 @@ void RecordDepthProbeDownload()
     }
 
     SDL_GPUTextureRegion source{};
-    source.texture = g_depth_texture;
+    source.texture = g_visibility_depth_texture;
     source.x = (Uint32)rx;
     source.y = (Uint32)ry;
     source.w = (Uint32)rw;
@@ -4226,9 +4219,9 @@ void RecordDepthProbeDownload()
     }
 
     g_depth_probe_fence = fence;
-    g_depth_probe_pending_texture = g_depth_texture;
-    g_depth_probe_pending_w = g_depth_width;
-    g_depth_probe_pending_h = g_depth_height;
+    g_depth_probe_pending_texture = g_visibility_depth_texture;
+    g_depth_probe_pending_w = kLogicalWidth;
+    g_depth_probe_pending_h = kLogicalHeight;
     g_depth_probe_pending_rect[0] = rx;
     g_depth_probe_pending_rect[1] = ry;
     g_depth_probe_pending_rect[2] = rw;
@@ -4999,7 +4992,7 @@ bool CreatePipelineVariant(SDL_GPUGraphicsPipeline **out_pipeline,
                            bool enable_depth_write, bool wireframe,
                            GsBlendMode blend_mode,
                            MeshPipelineLayout mesh_layout,
-                           bool fragment_lighting, int sample_count)
+                           bool fragment_lighting, int sample_count, bool visibility = false)
 {
     fragment_lighting = fragment_lighting && transform_mesh &&
                         mesh_layout != MESH_PIPELINE_CACHED_ANIMATED;
@@ -5093,7 +5086,7 @@ bool CreatePipelineVariant(SDL_GPUGraphicsPipeline **out_pipeline,
         break;
     }
     info.target_info.color_target_descriptions = &color_target;
-    info.target_info.num_color_targets = 1;
+    info.target_info.num_color_targets = visibility ? 0 : 1;
     info.target_info.has_depth_stencil_target = true;
     info.target_info.depth_stencil_format = g_depth_format;
 
@@ -5170,6 +5163,26 @@ SDL_GPUGraphicsPipeline *GetPipeline(MeshPipelineLayout mesh_layout,
     }
     return GetPipeline(mesh_layout, transform_mesh, depth_test, depth_compare,
                        true, wireframe, GS_BLEND_ALPHA, fragment_lighting);
+}
+
+SDL_GPUGraphicsPipeline *GetVisibilityPipeline(MeshPipelineLayout layout,
+                                               bool transform_mesh,
+                                               GsDepthCompare compare)
+{
+    SDL_GPUGraphicsPipeline *&pipeline =
+        g_visibility_pipelines[layout][transform_mesh ? 1 : 0][compare];
+    bool &failed = g_visibility_pipeline_failed[layout][transform_mesh ? 1 : 0][compare];
+    if (pipeline == nullptr && !failed)
+    {
+        failed = !CreatePipelineVariant(&pipeline, transform_mesh, true, compare,
+                                         true, false, GS_BLEND_ALPHA, layout,
+                                         false, 1, true);
+        if (failed)
+        {
+            g_depth_probe_supported = false;
+        }
+    }
+    return pipeline;
 }
 
 /*
@@ -10274,7 +10287,7 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
                        Uint32 target_width, Uint32 target_height,
                        bool streamed_ready, bool mesh_colours_ready,
                        bool animated_vertices_ready,
-                       size_t first, size_t last)
+                       size_t first, size_t last, bool visibility = false)
 {
     if (first >= last || last > g_draws.size())
     {
@@ -10313,6 +10326,8 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         {
             continue;
         }
+        if (visibility && (!draw.depth_test || !draw.depth_write))
+            continue;
         /* The caster's pixels belong to the shadow map, not the frame.
          * RecordShadowMapPass() has already replayed it. */
         if (draw.shadow_caster)
@@ -10375,7 +10390,12 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         bool depth_test = draw.depth_test && !g_dbg_nodepth;
         const MeshPipelineLayout layout = DrawPipelineLayout(draw);
         SDL_GPUGraphicsPipeline *pipeline;
-        if (draw.finder_mask)
+        if (visibility)
+        {
+            pipeline = GetVisibilityPipeline(layout,
+                draw.indexed_mesh || draw.transform_mesh, draw.depth_compare);
+        }
+        else if (draw.finder_mask)
         {
             /* Nothing to fall back to: without its own shader this draw would
              * paint a flat copy of the scene over the whole frame, which is
@@ -10511,7 +10531,7 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
                                      (Uint32)sizeof(g_uniforms));
         SDL_PushGPUFragmentUniformData(cmd, 0, &g_uniforms,
                                        (Uint32)sizeof(g_uniforms));
-        if (draw.fragment_lighting)
+        if (draw.fragment_lighting && !visibility)
         {
             if (draw.fragment_light_index >= g_fragment_light_states.size())
             {
@@ -10534,9 +10554,10 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
             }
             if (draw.vertex_light_index != bound_vertex_light_index)
             {
-                SDL_PushGPUVertexUniformData(
-                    cmd, 1, &g_vertex_light_states[draw.vertex_light_index],
-                    (Uint32)sizeof(MioPanLightState));
+                MioPanLightState light = g_vertex_light_states[draw.vertex_light_index];
+                if (visibility)
+                    light.config[1] &= ~1;
+                SDL_PushGPUVertexUniformData(cmd, 1, &light, (Uint32)sizeof(light));
                 bound_vertex_light_index = draw.vertex_light_index;
             }
         }
@@ -10621,6 +10642,64 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
             DrawStreamedPrimitives(pass, draw);
         }
     }
+}
+
+
+void RecordVisibilityDepth(SDL_GPUCommandBuffer *cmd)
+{
+    if (!g_depth_probe_supported || g_depth_probe_fence != nullptr ||
+        !g_3d_camera_valid ||
+        std::none_of(std::begin(g_depth_probes), std::end(g_depth_probes),
+                     [](const DepthProbe &probe) { return probe.posted; }))
+    {
+        return;
+    }
+    if (g_depth_format != SDL_GPU_TEXTUREFORMAT_D32_FLOAT)
+    {
+        g_depth_probe_supported = false;
+        SDL_Log("MioPan: visibility needs D32_FLOAT depth; probes unavailable");
+        return;
+    }
+    if (g_visibility_depth_texture == nullptr)
+    {
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = g_depth_format;
+        info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+        info.width = kLogicalWidth;
+        info.height = kLogicalHeight;
+        info.layer_count_or_depth = 1;
+        info.num_levels = 1;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        g_visibility_depth_texture = SDL_CreateGPUTexture(g_device, &info);
+        if (g_visibility_depth_texture == nullptr)
+        {
+            LogSdlError("SDL_CreateGPUTexture(visibility depth)");
+            g_depth_probe_supported = false;
+            return;
+        }
+    }
+    SDL_GPUDepthStencilTargetInfo depth{};
+    depth.texture = g_visibility_depth_texture;
+    depth.clear_depth = 0.0f;
+    depth.load_op = SDL_GPU_LOADOP_CLEAR;
+    depth.store_op = SDL_GPU_STOREOP_STORE;
+    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, nullptr, 0, &depth);
+    if (pass == nullptr)
+    {
+        LogSdlError("SDL_BeginGPURenderPass(visibility depth)");
+        g_depth_probe_supported = false;
+        return;
+    }
+    const auto uniforms = g_uniforms;
+    DrawQueuedSprites(pass, cmd, kLogicalWidth, kLogicalHeight,
+                      g_frame_upload.vertices_uploaded, g_frame_upload.colours_ready,
+                      g_frame_upload.animated_vertices_ready, 0, g_draws.size(), true);
+    g_uniforms = uniforms;
+    SDL_EndGPURenderPass(pass);
+    g_visibility_depth_recorded = true;
 }
 
 /*
@@ -11149,12 +11228,9 @@ void RecordCopyOnlyUploads(SDL_GPUCommandBuffer *cmd, const char *submit_label)
  * The frame's upload stage: everything that writes a GPU buffer or mutates the
  * draw queue, in the order the record stage needs it.
  *
- * It runs once per logical frame, and a repeated present must not run any of it
- * again -- ApplyOriginalAspectToVertices() applies its scale in place, so a
- * second pass would shrink every screen-space draw twice, and
- * ConvertMeshDrawsToStreamed() rewrites g_draws.  All the record stage needs
- * out of it afterwards is the three readiness flags, which is why they are
- * latched into g_frame_upload rather than carried down as locals.
+ * Visibility and presentation can both upload a logical frame. The in-place
+ * aspect correction has already run once in EndFrame. Repeated presents only
+ * need the readiness flags latched in g_frame_upload.
  */
 void UploadFrameResources(SDL_GPUCommandBuffer *cmd,
                           TextureUploadResult *texture_upload,
@@ -11163,8 +11239,6 @@ void UploadFrameResources(SDL_GPUCommandBuffer *cmd,
 {
     const uint64_t upload_start =
         MioPan_ProfilerBeginPhase(MIOPAN_PROFILE_RENDERER_UPLOAD);
-    ApplyOriginalAspectToVertices();
-
     *texture_upload = UploadPendingTextures(cmd);
     /* A transfer allocation/copy-pass failure must not sample an
      * uninitialized texture.  Keep the decoded pixels queued for the next
@@ -12355,7 +12429,6 @@ struct FramePacket
     float view_extend_x = 1.0f;
     float view_extend_y = 1.0f;
     FrameUploadState upload{};
-    DepthProbe depth_probes[MIOPAN_DEPTH_PROBE_SLOTS];
     SkyFollow sky_follow[SKY_FOLLOW_LAYERS];
     MioPanUi::DrawSnapshot *ui = nullptr;
     MioPanRml::DrawSnapshot *rml = nullptr;
@@ -12636,8 +12709,6 @@ void HandOverFrameState(FramePacket &packet)
     packet.view_extend_x = g_view_extend_x;
     packet.view_extend_y = g_view_extend_y;
     packet.upload = g_frame_upload;
-    std::memcpy(packet.depth_probes, g_depth_probes,
-                sizeof(packet.depth_probes));
     std::memcpy(packet.sky_follow, g_sky_follow, sizeof(packet.sky_follow));
 }
 
@@ -12683,7 +12754,6 @@ void ExchangePresenterState(FramePacket &packet)
     std::swap(g_view_extend_x, packet.view_extend_x);
     std::swap(g_view_extend_y, packet.view_extend_y);
     std::swap(g_frame_upload, packet.upload);
-    std::swap(g_depth_probes, packet.depth_probes);
     std::swap(g_sky_follow, packet.sky_follow);
 }
 
@@ -13220,7 +13290,6 @@ void PresenterStep()
         }
         if (first)
         {
-            RecordDepthProbeDownload();
             g_packet_first_present_done = true;
         }
         g_packet_shown_at_end = raw_t >= 1.0;
@@ -14064,14 +14133,14 @@ int MioPan_RendererGetLightingMode(void)
  * rather than through a mirror of GS memory. */
 int MioPan_RendererQueryPointOccluded(int slot, const float *world_pos)
 {
+    PresentStateGuard guard;
     if (slot < 0 || slot >= MIOPAN_DEPTH_PROBE_SLOTS || world_pos == nullptr ||
-        !g_depth_probe_supported || !g_3d_camera_valid ||
-        g_depth_width == 0 || g_depth_height == 0)
+        !g_depth_probe_supported || !g_3d_camera_valid)
     {
         return MIOPAN_DEPTH_PROBE_UNAVAILABLE;
     }
-    const int depth_w = (int)g_depth_width;
-    const int depth_h = (int)g_depth_height;
+    const int depth_w = kLogicalWidth;
+    const int depth_h = kLogicalHeight;
 
     float clip[4];
     const float local[4] = {world_pos[0], world_pos[1], world_pos[2], 1.0f};
@@ -14271,12 +14340,13 @@ void MioPan_RendererBeginFrame(void)
     g_fragment_light_states.clear();
     /* Take last frame's read-back before anything queries a probe, and drop
      * the postings so a probe whose caller stopped asking stops being
-     * downloaded for.  In display mode the presenter issues the download. */
+     * downloaded for.  Downloads belong to logical frames in both modes. */
     {
         PresentStateGuard guard;
         ResolveDepthProbes();
     }
     ClearDepthProbePostings();
+    g_visibility_depth_recorded = false;
     for (DrawSourceFrameMetrics &metrics : g_draw_source_metrics)
     {
         metrics = {};
@@ -14318,6 +14388,45 @@ void MioPan_RendererBeginFrame(void)
     CountGameFrame();
 }
 
+void RecordLogicalVisibility()
+{
+    PresentStateGuard guard;
+    if (!g_3d_camera_valid || !g_depth_probe_supported || g_depth_probe_fence != nullptr ||
+        std::none_of(std::begin(g_depth_probes), std::end(g_depth_probes),
+                     [](const DepthProbe &probe) { return probe.posted; }))
+        return;
+    SDL_GPUCommandBuffer *cmd = SDL_AcquireGPUCommandBuffer(g_device);
+    if (cmd == nullptr)
+        return;
+    const auto previous_upload = g_frame_upload;
+    TextureUploadResult textures;
+    MeshUploadResult meshes;
+    UploadFrameResources(cmd, &textures, &meshes, -1.0f);
+    RecordVisibilityDepth(cmd);
+    std::vector<MeshCacheEntryPtr> pins;
+    const bool pinned = BuildMeshSubmissionPins(meshes.uploaded_entries, true, &pins);
+    const bool submitted = pinned ? SubmitMeshCommandBuffer(cmd, std::move(pins))
+                                  : SDL_SubmitGPUCommandBuffer(cmd);
+    if (!pinned)
+        SDL_WaitForGPUIdle(g_device);
+    if (submitted)
+    {
+        CommitTextureUploads(textures);
+        CommitMeshUploads(meshes.uploaded_entries, meshes.colour_bytes, meshes.animated_bytes);
+        RecordDepthProbeDownload();
+    }
+    else
+    {
+        g_visibility_depth_recorded = false;
+        LogSdlError("SDL_SubmitGPUCommandBuffer(visibility)");
+    }
+    for (SDL_GPUTransferBuffer *transfer : textures.transfers)
+        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
+    for (SDL_GPUTransferBuffer *transfer : meshes.transfers)
+        SDL_ReleaseGPUTransferBuffer(g_device, transfer);
+    g_frame_upload = previous_upload;
+}
+
 void MioPan_RendererEndFrame(void)
 {
     bool presented;
@@ -14338,6 +14447,12 @@ void MioPan_RendererEndFrame(void)
     MioPanUi::Draw();
     MioPanUi::EndFrame();
     MioPanRml::Frame();
+    if (g_frame_active)
+    {
+        // Visibility and presentation must consume the same once-scaled vertices.
+        ApplyOriginalAspectToVertices();
+        RecordLogicalVisibility();
+    }
     presented = false;
     present_due = g_frame_active && ShouldPresentFrame();
     if (g_frame_active && !present_due &&
@@ -14379,14 +14494,6 @@ void MioPan_RendererEndFrame(void)
     else
     {
         g_smoothing_present_end = 0;
-    }
-    /* After the frame's own submit: the render pass has ended, so a copy pass
-     * may read the depth texture.  Its own command buffer, so the present path
-     * keeps its plain submit and needs no fence of its own.  The presenter
-     * issues it in display mode, after each packet's first present. */
-    if (presented && !g_display_mode_active)
-    {
-        RecordDepthProbeDownload();
     }
     g_frame_active = false;
     /* This tick's geometry becomes the next one's "previous", or the pair is

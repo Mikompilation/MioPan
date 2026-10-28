@@ -85,22 +85,17 @@ int  MioPan_RendererGetSmooth2d(void);
  * photograph is read back out of, the shadow atlas, the present blit and the
  * host UI are all single-sampled exactly as before.
  *
- * Two costs are worth knowing before turning it up.
+ * Resolve cost is worth knowing before turning it up.
  *
- *   1. Resolves.  An effect that samples the GS frame buffer already breaks
+ * Resolves.  An effect that samples the GS frame buffer already breaks
  *      the replay into segments so the frame so far can be copied; with MSAA
  *      on, every one of those breaks resolves the whole target as well.  A
  *      frame carrying several refraction or smear effects therefore pays
  *      several full-resolution resolves on top of the extra rasterisation.
  *      This game uses those effects heavily, so the cost is not the "free at
  *      4x" of a forward renderer with a single pass.
- *   2. The depth read-back stops.  A multisampled depth texture cannot be
- *      downloaded and SDL_GPU resolves colour only, so while MSAA is on
- *      MioPan_RendererQueryPointOccluded() answers UNAVAILABLE and
- *      effect_sub.o's CheckPointDepth() degrades to "on screen means
- *      visible" -- a ghost can stay a finder target through a wall.  That is
- *      the behaviour the port had before the probe existed, and it comes back
- *      the frame MSAA is turned off.
+ * Gameplay visibility uses an independent single-sample depth pass at every
+ * MSAA setting, at the game's logical resolution.
  *
  * Live.  Pipelines are cached per sample count and never released, so a change
  * costs one warm-up of the new set and leaves any command buffer still holding

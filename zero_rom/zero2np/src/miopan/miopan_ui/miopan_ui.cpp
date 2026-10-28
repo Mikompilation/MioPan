@@ -788,9 +788,8 @@ void DrawAntiAliasingMenu()
     ImGui::TextDisabled("  Cost: this game samples the frame buffer for its");
     ImGui::TextDisabled("  effects, and each such grab forces a full resolve,");
     ImGui::TextDisabled("  so an effect-heavy scene costs far more than a");
-    ImGui::TextDisabled("  plain one. While it is on, the depth read-back is");
-    ImGui::TextDisabled("  unavailable and a ghost can stay a camera target");
-    ImGui::TextDisabled("  through a wall.");
+    ImGui::TextDisabled("  plain one. Gameplay visibility uses its own depth");
+    ImGui::TextDisabled("  pass at every MSAA setting.");
 
     ImGui::Separator();
 
