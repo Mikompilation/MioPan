@@ -1,3 +1,4 @@
+#include <cerrno>
 /* ==========================================================================
  *  libmc.cpp  (SCE PS2 memory-card library -- PC-port shim)
  *
@@ -397,11 +398,13 @@ int sceMcClose(int fd)
         return PostResult(sceMcResNoEntry);
     }
 
-    std::fclose(f->fp);
+    const int closed = std::fclose(f->fp);
+    const int result = closed == 0 ? sceMcResSucceed
+        : (errno == ENOSPC ? sceMcResFullDevice : sceMcResFailReplace);
     f->fp = 0;
     f->path.clear();
 
-    return PostResult(sceMcResSucceed);
+    return PostResult(result);
 }
 
 int sceMcRead(int fd, void *buff, int size)
@@ -441,7 +444,8 @@ int sceMcWrite(int fd, const void *buff, int size)
     }
 
     put = std::fwrite(buff, 1, (std::size_t)size, f->fp);
-    std::fflush(f->fp);
+    if (put != (std::size_t)size || std::fflush(f->fp) != 0)
+        return PostResult(errno == ENOSPC ? sceMcResFullDevice : sceMcResFailReplace);
     return PostResult((int)put);
 }
 
