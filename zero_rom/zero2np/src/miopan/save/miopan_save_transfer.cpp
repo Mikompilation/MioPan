@@ -231,8 +231,20 @@ bool ReadStorage(const fs::path &path, StorageKind kind, bool native_allowed, St
             {
                 result.card = Read(path, 8650752);
                 SaveFiles files;
-                if (!ReadMemoryCard(result.card, files, result.has_save, error))
-                    return false;
+                if (result.card.size() == 8388608 || result.card.size() == 8650752)
+                {
+                    if (!ReadMemoryCard(result.card, files, result.has_save, error))
+                        return false;
+                }
+                else
+                {
+                    std::string directory;
+                    if (!ReadSaveArchive(result.card, directory, files, error))
+                        return false;
+                    if (directory != FolderName)
+                        throw std::runtime_error("This archive is not an EU Project Zero II save.");
+                    result.has_save = true;
+                }
                 if (result.has_save && !InspectFiles(files, false, result.save, error))
                     return false;
             }
@@ -367,7 +379,7 @@ void CommitCard(const fs::path &path, const Bytes &bytes)
 {
     if (path.empty() || fs::exists(path) || fs::is_symlink(path))
         throw std::runtime_error(
-            "Choose a new output filename; existing cards are never overwritten.");
+            "Choose a new output filename; existing output files are never overwritten.");
     auto dest = fs::absolute(path).lexically_normal();
     fs::create_directories(dest.parent_path());
     const auto stage = dest.parent_path() / (".miopan-card-" + Unique());
@@ -393,7 +405,8 @@ void CommitCard(const fs::path &path, const Bytes &bytes)
 } // namespace
 bool TransferBatch(const Storage &source, const Storage &destination,
                    const std::vector<SlotMapping> &slots, bool export_ps2,
-                   const fs::path &card_output, std::string &error, bool ecc)
+                   const fs::path &card_output, std::string &error, bool ecc,
+                   SaveArchiveFormat archive)
 {
     try
     {
@@ -419,7 +432,12 @@ bool TransferBatch(const Storage &source, const Storage &destination,
         else
         {
             Bytes output;
-            if (!WriteMemoryCard(destination.card, next.files, output, error, ecc))
+            if (archive == SaveArchiveFormat::None)
+            {
+                if (!WriteMemoryCard(destination.card, next.files, output, error, ecc))
+                    return false;
+            }
+            else if (!WriteSaveArchive(FolderName, next.files, archive, output, error))
                 return false;
             if (!SameStorage(source, export_ps2, error) || !SameStorage(destination, false, error))
                 throw std::runtime_error(

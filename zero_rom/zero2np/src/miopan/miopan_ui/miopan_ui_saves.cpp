@@ -31,6 +31,15 @@ char external[4096]{}, output[4096]{};
 Storage source, target;
 bool source_ok = false, target_ok = false;
 bool output_ecc = true;
+SaveArchiveFormat output_archive = SaveArchiveFormat::None;
+const char *OutputSuffix()
+{
+    if (output_archive == SaveArchiveFormat::Psu)
+        return ".psu";
+    if (output_archive == SaveArchiveFormat::Max)
+        return ".max";
+    return output_ecc ? ".ps2" : ".bin";
+}
 std::string source_error, target_error, message;
 std::array<bool, 5> selected{};
 std::array<int, 5> destination{-1, -1, -1, -1, -1};
@@ -74,7 +83,7 @@ void SuggestOutput()
         auto name = base;
         if (i)
             name += "-" + std::to_string(i + 1);
-        name += output_ecc ? ".ps2" : ".bin";
+        name += OutputSuffix();
         std::error_code ec;
         if (!fs::exists(name, ec) && !ec)
         {
@@ -150,7 +159,7 @@ fs::path CardOutputPath()
 {
     auto path = fs::u8path(output);
     if (!path.empty() && (!path.has_extension() || path.extension() == "."))
-        path.replace_extension(output_ecc ? ".ps2" : ".bin");
+        path.replace_extension(OutputSuffix());
     return path;
 }
 bool ApplyOutputExtension()
@@ -229,12 +238,21 @@ void Browse(SDL_Window *window, Dialog dialog)
             [](void *data)
             {
                 const auto &r = *static_cast<Request *>(data);
-                static const SDL_DialogFileFilter filter{"PS2 memory cards", "ps2;bin;vmc"};
+                static const SDL_DialogFileFilter filter{"PS2 cards or save archives",
+                                                         "ps2;mcd;bin;vmc;psu;max"};
+                static const SDL_DialogFileFilter outputs[] = {{"PCSX2 / ECC memory card", "ps2"},
+                                                               {"OPL / raw memory card", "bin"},
+                                                               {"PSU / EMS - uLaunchELF", "psu"},
+                                                               {"Action Replay MAX", "max"}};
+                const auto *save_filter = &outputs[output_archive == SaveArchiveFormat::Psu   ? 2
+                                                   : output_archive == SaveArchiveFormat::Max ? 3
+                                                   : output_ecc                               ? 0
+                                                                                              : 1];
                 void *context = reinterpret_cast<void *>(static_cast<intptr_t>(r.dialog));
                 if (r.dialog == Dialog::Folder || r.dialog == Dialog::OutputFolder)
                     SDL_ShowOpenFolderDialog(Picked, context, r.window, r.path, false);
                 else if (r.dialog == Dialog::Output)
-                    SDL_ShowSaveFileDialog(Picked, context, r.window, &filter, 1, r.path);
+                    SDL_ShowSaveFileDialog(Picked, context, r.window, save_filter, 1, r.path);
                 else
                     SDL_ShowOpenFileDialog(Picked, context, r.window, &filter, 1, r.path, false);
             },
@@ -312,7 +330,8 @@ void Commit()
         return;
     const auto slots = Mappings();
     std::string error;
-    if (TransferBatch(source, target, slots, exporting, fs::u8path(output), error, output_ecc))
+    if (TransferBatch(source, target, slots, exporting, fs::u8path(output), error, output_ecc,
+                      output_archive))
     {
         message =
             (exporting ? "Exported " : "Imported ") + std::to_string(slots.size()) + " save(s).";
@@ -452,12 +471,12 @@ void MenuItem()
 }
 namespace
 {
-bool ChoiceCard(const char *label, float width)
+bool ChoiceCard(const char *label, float width, float height = 110.f)
 {
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
-    const bool pressed = ImGui::Button(label, ImVec2(width, 110));
+    const bool pressed = ImGui::Button(label, ImVec2(width, height));
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
     const ImVec2 origin = ImGui::GetItemRectMin();
@@ -471,13 +490,15 @@ bool ChoiceCard(const char *label, float width)
     {
         const auto &value = line == 0 ? title : description;
         const float x = origin.x + (width - ImGui::CalcTextSize(value.c_str()).x) * .5f;
-        draw->AddText(ImVec2(x, origin.y + (line == 0 ? 28.f : 64.f)), colour, value.c_str());
+        draw->AddText(ImVec2(x, origin.y + (line == 0 ? height * .26f : height * .60f)), colour,
+                      value.c_str());
     }
     return pressed;
 }
 void ChooseDirection(bool to_ps2)
 {
     exporting = to_ps2;
+    output_archive = SaveArchiveFormat::None;
     ps2_kind = exporting ? StorageKind::BlankCard : StorageKind::Card;
     external[0] = output[0] = 0;
     path_dirty = false;
@@ -535,7 +556,9 @@ void Draw(SDL_Window *window)
     {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float width = std::min(860.f, available.x);
-        const float height = std::min(step == Step::Operation ? 300.f : 430.f, available.y);
+        const float height = step == Step::Format
+                                 ? available.y
+                                 : std::min(step == Step::Operation ? 300.f : 430.f, available.y);
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (available.x - width) * .5f);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (available.y - height) * .5f);
         ImGui::BeginChild("choice-panel", ImVec2(width, height), 0, ImGuiWindowFlags_NoBackground);
@@ -561,7 +584,8 @@ void Draw(SDL_Window *window)
         ImGui::TextUnformatted("Choose where your PS2 saves are stored");
         ImGui::Spacing();
         const float width = ImGui::GetContentRegionAvail().x;
-        if (ChoiceCard("Open a memory card\n\nPCSX2 (.ps2) or raw / OPL (.bin, .vmc)", width))
+        if (ChoiceCard("Open a card or save archive\n\nPCSX2 / OPL card, PSU or Action Replay MAX",
+                       width))
             ChooseStorage(window, StorageKind::Card);
         if (ChoiceCard("Open a save folder\n\nUse extracted PS2 save files", width))
             ChooseStorage(window, StorageKind::Folder);
@@ -611,28 +635,41 @@ void Draw(SDL_Window *window)
                            "export immediately.");
         ImGui::Spacing();
         const float width = ImGui::GetContentRegionAvail().x;
+        const float height = std::clamp((ImGui::GetContentRegionAvail().y - 40.f) / 5.f -
+                                            ImGui::GetStyle().ItemSpacing.y,
+                                        70.f, 110.f);
         int format = -1;
-        if (ChoiceCard("PCSX2 / ECC\n\nStandard .ps2 memory card", width))
+        if (ChoiceCard("PCSX2 / ECC\n\nStandard .ps2 memory card", width, height))
             format = 1;
-        if (ChoiceCard("OPL / raw\n\nNon-ECC .bin memory card", width))
+        if (ChoiceCard("OPL / raw\n\nNon-ECC .bin memory card", width, height))
             format = 0;
         if (ChoiceCard("Extracted save folder\n\nCreate save files inside the chosen folder",
                        width))
             format = 2;
+        if (ChoiceCard("PSU / EMS\n\nuLaunchELF and PS2 save-transfer tools", width, height))
+            format = 3;
+        if (ChoiceCard("Action Replay MAX\n\nSingle-game .max save archive", width, height))
+            format = 4;
+        ImGui::TextWrapped(
+            "PSU and MAX contain this game's selected saves, not a whole memory card.");
         if (format >= 0)
         {
             message.clear();
             ps2_kind = StorageKind::BlankCard;
+            output_archive = SaveArchiveFormat::None;
             target_ok = ReadStorage({}, StorageKind::BlankCard, false, target, target_error);
             if (format == 2)
                 Browse(window, Dialog::OutputFolder);
             else
             {
                 output_ecc = format == 1;
+                output_archive = format == 3   ? SaveArchiveFormat::Psu
+                                 : format == 4 ? SaveArchiveFormat::Max
+                                               : SaveArchiveFormat::None;
                 if (output[0])
                 {
                     auto path = fs::u8path(output);
-                    path.replace_extension(output_ecc ? ".ps2" : ".bin");
+                    path.replace_extension(OutputSuffix());
                     const auto text = PathUtf8(path);
                     if (text.size() >= sizeof(output))
                         message = "Output path is too long.";

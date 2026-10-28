@@ -101,7 +101,7 @@ folder (`%APPDATA%\Mikompilation\MioPan` on Windows).
 # PS2 save transfer
 
 Open **Settings → PS2 save transfer…** in the F1 overlay to import or export EU
-(SLES-52384) saves. Import from an 8 MB memory card or extracted
+(SLES-52384) saves. Import from an 8 MB memory card, PSU/MAX archive or extracted
 save folder. Select one or more saves and assign their destination slots; room
 previews and play times help identify each slot.
 
@@ -109,9 +109,12 @@ Export offers these formats:
 
 - **ECC (.ps2):** a memory card with spare/ECC bytes, for PCSX2.
 - **Raw / non-ECC (.bin):** an 8 MB virtual memory card, for OPL.
+- **PSU (.psu):** an EMS save archive, for uLaunchELF and PS2 save-transfer tools.
+- **MAX (.max):** an Action Replay MAX save archive.
 - **Extracted folder:** the game's save files, for tools that accept folders.
 
-Card exports start with a blank card. Choosing an output
+PSU and MAX contain this game's selected saves and required system/icon files,
+not an entire card. Card exports start with a blank card. Choosing an output
 format opens its picker; confirming the destination exports immediately.
 Missing extensions are added automatically. Existing output files/folders are
 not overwritten. Importing replaces only the destination slots you selected.

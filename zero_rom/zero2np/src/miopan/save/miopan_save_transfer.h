@@ -1,5 +1,6 @@
 #ifndef MIOPAN_SAVE_TRANSFER_H
 #define MIOPAN_SAVE_TRANSFER_H
+#include "miopan_save_archive.h"
 #include "miopan_save_codec.h"
 #include <array>
 #include <filesystem>
@@ -50,7 +51,8 @@ bool BuildBatch(const Folder &source, const Folder *destination,
 // Uses the captured snapshots; card output must be a new filename. No persistent backups.
 bool TransferBatch(const Storage &source, const Storage &destination,
                    const std::vector<SlotMapping> &slots, bool export_ps2,
-                   const std::filesystem::path &card_output, std::string &error, bool ecc = true);
+                   const std::filesystem::path &card_output, std::string &error, bool ecc = true,
+                   SaveArchiveFormat archive = SaveArchiveFormat::None);
 bool Inspect(const std::filesystem::path &path, bool native_allowed, Folder &folder,
              std::string &error);
 } // namespace MioPanSave
