@@ -324,8 +324,8 @@ void StreamStart(STREAM_START *p)
     printf("loop_end = %d, loop_end_fraction = %d\n",
            stp->loop_end_block, stp->loop_end_fraction);
 
-    if (stp->loop_start_block == stp->loop_end_block)
-        stp->loop = 0;
+    // Preloading must honour loop bounds before StreamPlay arrives.
+    stp->loop = stp->loop_start_block != stp->loop_end_block;
 
     /* ROM BUG: `i` is left at stp->nchannel by the copy loop above, so this
      * reads one past spu_loop_packet[] -- for the usual nchannel of 2 that is

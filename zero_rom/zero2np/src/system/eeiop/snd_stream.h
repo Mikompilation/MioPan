@@ -55,6 +55,7 @@ typedef struct _SND_STREAM_WRK      /* 0x1c0 */
     /* 0x194:2 */ unsigned int play_flg     : 1;
     /* 0x194:3 */ unsigned int fade_stop    : 1;
     /* 0x194:4 */ unsigned int stop         : 1;
+    unsigned int loop_requested : 1;
     /* 0x198 */ int    header_id;           /* fileload id of the HXD load  */
     /* 0x19c */ void  *s3dhndl;
     /* 0x1a0 */ void  *header_buf;
@@ -76,8 +77,8 @@ void SndStreamMain(void);
 
 /* header_file_no == -0x21 means "the header is already in wrk->s", used by
  * the resume path; anything else is loaded through fileload.c. */
-SND_STREAM_ERR SndStreamStart(int wrk_id, int file_no, int header_file_no, int offset);
-SND_STREAM_ERR SndStreamStartHeaderOnMemory(int wrk_id, int file_no, void *header, int offset);
+SND_STREAM_ERR SndStreamStart(int wrk_id, int file_no, int header_file_no, int offset, int loop = 1);
+SND_STREAM_ERR SndStreamStartHeaderOnMemory(int wrk_id, int file_no, void *header, int offset, int loop = 1);
 SND_STREAM_ERR SndStreamPlay(int wrk_id, int effect, int loop2, int vol, int in_time,
                              SND_3D_SET *s3s, float play_spd, int pitch);
 

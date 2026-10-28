@@ -69,7 +69,7 @@ void SndStreamInit(int load_priority)
 }                                                                            /* 112 */
 
 /* 115 */
-SND_STREAM_ERR SndStreamStartHeaderOnMemory(int wrk_id, int file_no, void *header, int offset)
+SND_STREAM_ERR SndStreamStartHeaderOnMemory(int wrk_id, int file_no, void *header, int offset, int loop)
 {
     SND_STREAM_WRK *wrk = &snd_stream_wrk[wrk_id];                           /* 116 */
     SND_STREAM_ERR  ret;
@@ -77,6 +77,8 @@ SND_STREAM_ERR SndStreamStartHeaderOnMemory(int wrk_id, int file_no, void *heade
     ret = SndStreamInitWrk(wrk, file_no, offset);                            /* 117 */
     if (ret != SND_STREAM_OK)                                                /* 120 */
         return ret;
+
+    wrk->loop_requested = loop != 0;
 
     CheckHXDData((HXD_HEADER *)header, 0);                                   /* 125 */
     SetStreamHeaderSub(wrk, (HXD_HEADER *)header);                           /* 129 */
@@ -92,7 +94,7 @@ SND_STREAM_ERR SndStreamStartHeaderOnMemory(int wrk_id, int file_no, void *heade
 }                                                                            /* 143 */
 
 /* 149 */
-SND_STREAM_ERR SndStreamStart(int wrk_id, int file_no, int header_file_no, int offset)
+SND_STREAM_ERR SndStreamStart(int wrk_id, int file_no, int header_file_no, int offset, int loop)
 {
     SND_STREAM_WRK *wrk = &snd_stream_wrk[wrk_id];
     SND_STREAM_ERR  ret;
@@ -100,6 +102,8 @@ SND_STREAM_ERR SndStreamStart(int wrk_id, int file_no, int header_file_no, int o
     ret = SndStreamInitWrk(wrk, file_no, offset);                            /* 150 */
     if (ret != SND_STREAM_OK)                                                /* 158 */
         return ret;
+
+    wrk->loop_requested = loop != 0;
 
     /* -0x21 means the caller has already filled in the header fields, so
      * there is nothing to load and the start can go straight out. */
@@ -481,11 +485,13 @@ static void SetStreamStartSub(SND_STREAM_WRK *wrk)
     else if (wrk->s.offset >= (wrk->s.size >> 11) - 0x40)
         wrk->s.offset = 0;
 
-    wrk->s.loop_start_block    = wrk->info[0].loopstart;                     /* 593 */
-    wrk->s.loop_end_block      = wrk->info[0].loopend;                       /* 594 */
-    wrk->s.loop_start_fraction = wrk->info[0].loopstart %
+    // Loop intent is known at preload time; header bounds alone do not enable it.
+    const bool loop = wrk->loop_requested && wrk->info[0].attr.loop;
+    wrk->s.loop_start_block = loop ? wrk->info[0].loopstart : 0;
+    wrk->s.loop_end_block = loop ? wrk->info[0].loopend : 0;
+    wrk->s.loop_start_fraction = wrk->s.loop_start_block %
                                  (wrk->s.interleave_byte >> 4);              /* 597 */
-    wrk->s.loop_end_fraction   = wrk->info[0].loopend %
+    wrk->s.loop_end_fraction   = wrk->s.loop_end_block %
                                  (wrk->s.interleave_byte >> 4);              /* 598 */
 
     int need_loop_packet = (wrk->s.loop_start_fraction != 0 || wrk->s.loop_end_fraction != 0);  /* 599 */
