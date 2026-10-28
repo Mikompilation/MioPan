@@ -21,6 +21,7 @@ struct Folder
 {
     std::map<std::string, Bytes> files;
     std::array<SlotInfo, 5> slots;
+    SaveVersion version = SaveVersion::Prototype;
 };
 enum class StorageKind
 {
@@ -47,12 +48,13 @@ bool ReadStorage(const std::filesystem::path &path, StorageKind kind, bool nativ
                  Storage &storage, std::string &error);
 bool BuildBatch(const Folder &source, const Folder *destination,
                 const std::vector<SlotMapping> &slots, bool export_ps2, Folder &result,
-                std::string &error);
+                std::string &error, SaveVersion version = SaveVersion::Retail);
 // Uses the captured snapshots; card output must be a new filename. No persistent backups.
 bool TransferBatch(const Storage &source, const Storage &destination,
                    const std::vector<SlotMapping> &slots, bool export_ps2,
                    const std::filesystem::path &card_output, std::string &error, bool ecc = true,
-                   SaveArchiveFormat archive = SaveArchiveFormat::None);
+                   SaveArchiveFormat archive = SaveArchiveFormat::None,
+                   SaveVersion version = SaveVersion::Retail);
 bool Inspect(const std::filesystem::path &path, bool native_allowed, Folder &folder,
              std::string &error);
 } // namespace MioPanSave

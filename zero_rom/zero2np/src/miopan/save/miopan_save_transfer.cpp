@@ -89,6 +89,23 @@ void SyncDirectory(const fs::path &path)
         throw std::runtime_error("Cannot sync save directory.");
 #endif
 }
+Bytes ConvertSystem(Bytes data, SaveVersion version)
+{
+    const bool empty = Empty(data);
+    if (version != SaveVersion::Prototype && version != SaveVersion::Retail)
+        throw std::runtime_error("Unknown PS2 game version.");
+    if (version == SaveVersion::Retail && data.size() == 44)
+    {
+        // Retail adds an effects volume after the prototype's shared/music volume.
+        const Bytes volume(data.begin() + 28, data.begin() + 32);
+        data.insert(data.begin() + 32, volume.begin(), volume.end());
+    }
+    else if (version == SaveVersion::Prototype && data.size() == 48)
+        data.erase(data.begin() + 32, data.begin() + 36);
+    if (!empty)
+        Seal(data);
+    return data;
+}
 Folder Fresh(const Folder &source, bool ps2)
 {
     Folder out;
@@ -154,9 +171,24 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
         const auto &head = result.files.at(FolderName);
         const auto &sys = result.files.at("Zero2System");
         const auto &icon = result.files.at("icon.sys");
-        if (head.size() != HeadSize || !Checksum(head) || sys.size() != 44 ||
-            (!Checksum(sys) && !Empty(sys)))
-            throw std::runtime_error("Invalid EU save header or system file.");
+        if (head.size() != HeadSize || !Checksum(head))
+            throw std::runtime_error("Invalid EU save header or checksum.");
+        if (sys.size() != 44 && sys.size() != 48)
+            throw std::runtime_error("Unknown FF2 system-save version; EU retail or February 2004 "
+                                     "prototype saves are required.");
+        if (!Checksum(sys) && !Empty(sys))
+            throw std::runtime_error("Invalid system-save checksum.");
+        result.version = sys.size() == 48 ? SaveVersion::Retail : SaveVersion::Prototype;
+        // Older MioPan exports paired prototype options with retail gameplay pointers.
+        if (sys.size() == 44)
+        {
+            std::string detail;
+            for (int i = 0; i < 5; ++i)
+                if (head[125 + i] == 1 &&
+                    !Validate(files.at(Name(i)), detail, SaveVersion::Prototype) &&
+                    Validate(files.at(Name(i)), detail, SaveVersion::Retail))
+                    result.version = SaveVersion::Retail;
+        }
         if (icon.size() != 964 || std::memcmp(icon.data(), "PS2D", 4) != 0 ||
             result.files.at(Icon).empty())
             throw std::runtime_error("Missing or invalid PS2 save icons.");
@@ -177,7 +209,7 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
                 slot.description = "Empty";
                 continue;
             }
-            if (!Validate(d, error))
+            if (!Validate(d, error, result.version))
                 return false;
             const auto *g = d.data();
             if (U32(head.data() + i * 4) != g[0] || U32(head.data() + 20 + i * 4) != g[2] ||
@@ -269,7 +301,7 @@ bool ReadStorage(const fs::path &path, StorageKind kind, bool native_allowed, St
 }
 bool BuildBatch(const Folder &source, const Folder *destination,
                 const std::vector<SlotMapping> &slots, bool export_ps2, Folder &result,
-                std::string &error)
+                std::string &error, SaveVersion version)
 {
     try
     {
@@ -292,7 +324,9 @@ bool BuildBatch(const Folder &source, const Folder *destination,
             if (!source.slots[slot.source].occupied)
                 throw std::runtime_error("Cannot transfer an empty slot.");
             auto payload = source.files.at(Name(slot.source));
-            if (!(export_ps2 ? ToPs2(payload, payload, error) : ToNative(payload, payload, error)))
+            if (!ToNative(payload, payload, error, source.version))
+                return false;
+            if (export_ps2 && !ToPs2(payload, payload, error, version))
                 return false;
             next.files[Name(slot.destination)] = std::move(payload);
             auto *out = next.files[FolderName].data();
@@ -303,6 +337,8 @@ bool BuildBatch(const Folder &source, const Folder *destination,
                             in + field.first + slot.source * field.second, field.second);
         }
         Seal(next.files[FolderName]);
+        next.files["Zero2System"] = ConvertSystem(next.files.at("Zero2System"),
+                                                  export_ps2 ? version : SaveVersion::Prototype);
         return InspectFiles(next.files, !export_ps2, result, error);
     }
     catch (const std::exception &e)
@@ -406,7 +442,7 @@ void CommitCard(const fs::path &path, const Bytes &bytes)
 bool TransferBatch(const Storage &source, const Storage &destination,
                    const std::vector<SlotMapping> &slots, bool export_ps2,
                    const fs::path &card_output, std::string &error, bool ecc,
-                   SaveArchiveFormat archive)
+                   SaveArchiveFormat archive, SaveVersion version)
 {
     try
     {
@@ -424,7 +460,7 @@ bool TransferBatch(const Storage &source, const Storage &destination,
                 "Source or destination changed; refresh and review the slots again. " + error);
         Folder next;
         if (!BuildBatch(source.save, destination.has_save ? &destination.save : nullptr, slots,
-                        export_ps2, next, error))
+                        export_ps2, next, error, version))
             return false;
         error.clear();
         if (destination.kind == StorageKind::Folder)

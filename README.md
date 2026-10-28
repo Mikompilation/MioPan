@@ -105,6 +105,12 @@ Open **Settings → PS2 save transfer…** in the F1 overlay to import or export
 save folder. Select one or more saves and assign their destination slots; room
 previews and play times help identify each slot.
 
+EU retail and February 2004 prototype saves are supported. For export, select
+the target PS2 game version on the save-selection page. Retail's separate music
+and effects volumes become one shared volume in MioPan; new PC save folders use
+the music level. Existing destination settings are retained when importing.
+Exports to retail use the shared level for both volumes.
+
 Export offers these formats:
 
 - **ECC (.ps2):** a memory card with spare/ECC bytes, for PCSX2.

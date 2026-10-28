@@ -31,6 +31,7 @@ char external[4096]{}, output[4096]{};
 Storage source, target;
 bool source_ok = false, target_ok = false;
 bool output_ecc = true;
+int output_version = int(SaveVersion::Retail);
 SaveArchiveFormat output_archive = SaveArchiveFormat::None;
 const char *OutputSuffix()
 {
@@ -337,7 +338,7 @@ void Commit()
     const auto slots = Mappings();
     std::string error;
     if (TransferBatch(source, target, slots, exporting, fs::u8path(output), error, output_ecc,
-                      output_archive))
+                      output_archive, static_cast<SaveVersion>(output_version)))
     {
         message =
             (exporting ? "Exported " : "Imported ") + std::to_string(slots.size()) + " save(s).";
@@ -600,6 +601,16 @@ void Draw(SDL_Window *window)
     else if (step == Step::Slots)
     {
         ImGui::TextUnformatted("Select source saves, then choose a destination slot for each.");
+        if (exporting)
+        {
+            ImGui::SetNextItemWidth(280.f);
+            ImGui::Combo("Target PS2 game", &output_version,
+                         "Prototype (2004-02-06)\0Retail release (EU)\0");
+        }
+        else
+            ImGui::Text("Source version: %s", source.save.version == SaveVersion::Retail
+                                                  ? "EU retail release"
+                                                  : "February 2004 prototype");
         const int count = int(std::count(selected.begin(), selected.end(), true));
         const int available =
             int(std::count_if(source.save.slots.begin(), source.save.slots.end(),

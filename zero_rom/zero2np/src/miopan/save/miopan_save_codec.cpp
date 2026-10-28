@@ -71,44 +71,58 @@ void Copy(uint8_t *out, const uint8_t *in, bool native, std::initializer_list<Sp
 }
 constexpr uint32_t motion[] = {0x34e088, 0x2f9cd0, 0x2f9ce0, 0x34e058, 0x34e060,
                                0x2f9cf0, 0x34e068, 0x34e070, 0x34e078, 0x34e080};
-// EU retail static ghost-table addresses, paired with the port's stable set IDs.
+constexpr uint32_t prototype_motion[] = {0x3f4410, 0x34f980, 0x34f990, 0x3f43e0, 0x3f43e8,
+                                         0x34f9a0, 0x3f43f0, 0x3f43f8, 0x3f4400, 0x3f4408};
+// PS2 static ghost-table addresses, paired with the port's stable set IDs.
 struct Ghost
 {
-    uint32_t address, code;
+    uint32_t address, code, prototype;
 };
 constexpr Ghost ghosts[] = {
-    {0x34b980, 1},   {0x33f970, 17},  {0x33f976, 18},  {0x33f97c, 19},  {0x33f982, 20},
-    {0x33f988, 21},  {0x33f98e, 22},  {0x33f9c0, 65},  {0x33f9c6, 66},  {0x33f9cc, 67},
-    {0x33f9d2, 68},  {0x33f9d8, 69},  {0x33fa28, 113}, {0x33fa2e, 114}, {0x33fa34, 115},
-    {0x33fa3a, 116}, {0x33fa40, 117}, {0x33fab0, 129}, {0x33fab6, 130}, {0x33fabc, 131},
-    {0x33fac2, 132}, {0x33fac8, 133}, {0x33f958, 193}, {0x33f95e, 194}, {0x33f964, 195},
-    {0x33f96a, 196}, {0x33f9e0, 241}, {0x33f9e6, 242}, {0x33f9ec, 243}, {0x33f9f2, 244},
-    {0x33fa78, 289}, {0x33fa7e, 290}, {0x33fa84, 291}, {0x33fa8a, 292}, {0x33fa90, 293},
-    {0x33fa60, 465}, {0x33fa66, 466}, {0x33fa6c, 467}, {0x34b988, 545}, {0x33fa10, 625},
-    {0x33fa16, 626}, {0x33fa1c, 627}, {0x33fa48, 641}, {0x33fa4e, 642}, {0x33fa54, 643},
-    {0x33f998, 769}, {0x33f99e, 770}, {0x33f9a4, 771}, {0x33f9aa, 772}, {0x33f9b0, 773},
-    {0x33f9b6, 774}, {0x33fad0, 833}, {0x33fad6, 834}, {0x33fadc, 835}, {0x33fae2, 836},
-    {0x33fae8, 837}, {0x34b990, 897}, {0x33f9f8, 945}, {0x33f9fe, 946}, {0x33fa04, 947},
-    {0x33fa98, 993}, {0x33fa9e, 994}, {0x33faa4, 995},
+    {0x34b980, 1, 0x3f0700},   {0x33f970, 17, 0x3adb08},  {0x33f976, 18, 0x3adb0e},
+    {0x33f97c, 19, 0x3adb14},  {0x33f982, 20, 0x3adb1a},  {0x33f988, 21, 0x3adb20},
+    {0x33f98e, 22, 0x3adb26},  {0x33f9c0, 65, 0x3adb58},  {0x33f9c6, 66, 0x3adb5e},
+    {0x33f9cc, 67, 0x3adb64},  {0x33f9d2, 68, 0x3adb6a},  {0x33f9d8, 69, 0x3adb70},
+    {0x33fa28, 113, 0x3adbc0}, {0x33fa2e, 114, 0x3adbc6}, {0x33fa34, 115, 0x3adbcc},
+    {0x33fa3a, 116, 0x3adbd2}, {0x33fa40, 117, 0x3adbd8}, {0x33fab0, 129, 0x3adc48},
+    {0x33fab6, 130, 0x3adc4e}, {0x33fabc, 131, 0x3adc54}, {0x33fac2, 132, 0x3adc5a},
+    {0x33fac8, 133, 0x3adc60}, {0x33f958, 193, 0x3adaf0}, {0x33f95e, 194, 0x3adaf6},
+    {0x33f964, 195, 0x3adafc}, {0x33f96a, 196, 0x3adb02}, {0x33f9e0, 241, 0x3adb78},
+    {0x33f9e6, 242, 0x3adb7e}, {0x33f9ec, 243, 0x3adb84}, {0x33f9f2, 244, 0x3adb8a},
+    {0x33fa78, 289, 0x3adc10}, {0x33fa7e, 290, 0x3adc16}, {0x33fa84, 291, 0x3adc1c},
+    {0x33fa8a, 292, 0x3adc22}, {0x33fa90, 293, 0x3adc28}, {0x33fa60, 465, 0x3adbf8},
+    {0x33fa66, 466, 0x3adbfe}, {0x33fa6c, 467, 0x3adc04}, {0x34b988, 545, 0x3f0708},
+    {0x33fa10, 625, 0x3adba8}, {0x33fa16, 626, 0x3adbae}, {0x33fa1c, 627, 0x3adbb4},
+    {0x33fa48, 641, 0x3adbe0}, {0x33fa4e, 642, 0x3adbe6}, {0x33fa54, 643, 0x3adbec},
+    {0x33f998, 769, 0x3adb30}, {0x33f99e, 770, 0x3adb36}, {0x33f9a4, 771, 0x3adb3c},
+    {0x33f9aa, 772, 0x3adb42}, {0x33f9b0, 773, 0x3adb48}, {0x33f9b6, 774, 0x3adb4e},
+    {0x33fad0, 833, 0x3adc68}, {0x33fad6, 834, 0x3adc6e}, {0x33fadc, 835, 0x3adc74},
+    {0x33fae2, 836, 0x3adc7a}, {0x33fae8, 837, 0x3adc80}, {0x34b990, 897, 0x3f0710},
+    {0x33f9f8, 945, 0x3adb90}, {0x33f9fe, 946, 0x3adb96}, {0x33fa04, 947, 0x3adb9c},
+    {0x33fa98, 993, 0x3adc30}, {0x33fa9e, 994, 0x3adc36}, {0x33faa4, 995, 0x3adc3c},
 };
-uint32_t GhostPointer(uint64_t value, bool native)
+uint32_t GhostPointer(uint64_t value, bool native, SaveVersion version)
 {
     if (!value)
         return 0;
     for (const auto &g : ghosts)
-        if (value == (native ? g.address : g.code))
-            return native ? g.code : g.address;
+    {
+        const auto address = version == SaveVersion::Retail ? g.address : g.prototype;
+        if (value == (native ? address : g.code))
+            return native ? g.code : address;
+    }
     return 0xffffffffu;
 }
-void Record(unsigned block, uint8_t *out, const uint8_t *in, bool native)
+void Record(unsigned block, uint8_t *out, const uint8_t *in, bool native, SaveVersion version)
 {
+    const auto &animation = version == SaveVersion::Retail ? motion : prototype_motion;
     switch (block)
     {
     case 1:
         Copy(out, in, native, {{0, 0, 0x344}, {0x350, offsetof(PLYR_WRK, fl_pow), 0x30}});
         // Sound references are rebound by PlayerMain/SisterMain, never imported as pointers.
         if (!native)
-            Put(out + 0x344, 0x2e8c70, 4);
+            Put(out + 0x344, version == SaveVersion::Retail ? 0x2e8c70 : 0x33cda0, 4);
         break;
     case 2:
         Copy(out, in, native,
@@ -122,7 +136,7 @@ void Record(unsigned block, uint8_t *out, const uint8_t *in, bool native)
         std::memset(out + (native ? offsetof(SIS_WRK, alg) : 0x110) + 0x10, 0, 0x98);
         out[(native ? offsetof(SIS_WRK, alg) : 0x110) + 2] = 0;
         if (!native)
-            Put(out + 0x220, 0x2f9f90, 4);
+            Put(out + 0x220, version == SaveVersion::Retail ? 0x2f9f90 : 0x34fc10, 4);
         break;
     case 3:
         Copy(out, in, native,
@@ -139,11 +153,11 @@ void Record(unsigned block, uint8_t *out, const uint8_t *in, bool native)
         if (native)
         {
             for (unsigned i = 0; i < 10; ++i)
-                if (motion[i] == pointer)
+                if (animation[i] == pointer)
                     value = i + 1;
         }
         else if (pointer >= 1 && pointer <= 10)
-            value = motion[pointer - 1];
+            value = animation[pointer - 1];
         Put(out + (native ? offsetof(SIS_MOTION, sat) : 4), value, native ? sizeof(void *) : 4);
         break;
     }
@@ -171,13 +185,14 @@ void Record(unsigned block, uint8_t *out, const uint8_t *in, bool native)
     case 47:
         Copy(out, in, native, {{0, 0, 0x11}, {24, 32, 8}});
         Put(out + (native ? 24 : 20),
-            GhostPointer(Get(in + (native ? 20 : 24), native ? 4 : 8), native), native ? 8 : 4);
+            GhostPointer(Get(in + (native ? 20 : 24), native ? 4 : 8), native, version),
+            native ? 8 : 4);
         break;
     }
 }
-bool Convert(const Bytes &in, Bytes &out, bool native, std::string &error)
+bool Convert(const Bytes &in, Bytes &out, bool native, std::string &error, SaveVersion version)
 {
-    if (!Validate(in, error))
+    if (!Validate(in, error, version))
         return false;
     bool source_native = in.size() == NativeSize();
     if (source_native == native)
@@ -198,7 +213,7 @@ bool Convert(const Bytes &in, Bytes &out, bool native, std::string &error)
         if (Size(b, false) == Size(b, true))
             std::memcpy(dst, p, Size(b, false));
         else
-            Record(b, dst, p, native);
+            Record(b, dst, p, native, version);
     }
     Seal(result);
     out = std::move(result);
@@ -247,8 +262,11 @@ Bytes EmptySlot(size_t size)
     Put(d.data() + size - 4, 0xffffffffu, 4);
     return d;
 }
-bool Validate(const Bytes &d, std::string &error)
+bool Validate(const Bytes &d, std::string &error, SaveVersion version)
 {
+    if (version != SaveVersion::Retail && version != SaveVersion::Prototype)
+        return Fail(error, "Unknown PS2 game version.");
+    const auto &animation = version == SaveVersion::Retail ? motion : prototype_motion;
     if (sizeof(void *) != 8)
         return Fail(error, "Save conversion requires a 64-bit build.");
     if (d.size() != Ps2Size && d.size() != NativeSize())
@@ -271,12 +289,13 @@ bool Validate(const Bytes &d, std::string &error)
     }
     const auto *motion_data = d.data() + BlockOffset(5, native);
     auto ptr = Get(motion_data + (native ? offsetof(SIS_MOTION, sat) : 4), native ? 8 : 4);
-    if (ptr && ((native && ptr > 10) || (!native && std::find(std::begin(motion), std::end(motion),
-                                                              ptr) == std::end(motion))))
+    if (ptr &&
+        ((native && ptr > 10) || (!native && std::find(std::begin(animation), std::end(animation),
+                                                       ptr) == std::end(animation))))
         return Fail(error, "Unknown EU Mayu animation table.");
     const auto *ghost = d.data() + BlockOffset(47, native);
     ptr = Get(ghost + (native ? 24 : 20), native ? 8 : 4);
-    if (GhostPointer(ptr, !native) == 0xffffffffu)
+    if (GhostPointer(ptr, !native, version) == 0xffffffffu)
         return Fail(error, "Unknown EU ghost state table.");
     for (unsigned block : {14u, 15u})
     {
@@ -299,12 +318,12 @@ bool Validate(const Bytes &d, std::string &error)
     error.clear();
     return true;
 }
-bool ToNative(const Bytes &ps2, Bytes &native, std::string &error)
+bool ToNative(const Bytes &ps2, Bytes &native, std::string &error, SaveVersion version)
 {
-    return Convert(ps2, native, true, error);
+    return Convert(ps2, native, true, error, version);
 }
-bool ToPs2(const Bytes &native, Bytes &ps2, std::string &error)
+bool ToPs2(const Bytes &native, Bytes &ps2, std::string &error, SaveVersion version)
 {
-    return Convert(native, ps2, false, error);
+    return Convert(native, ps2, false, error, version);
 }
 } // namespace MioPanSave
