@@ -98,6 +98,29 @@ environment variable or `data_folder` under `[paths]` in `miopan.ini`.
 Settings, logs and memory card saves are stored in the user's application data
 folder (`%APPDATA%\Mikompilation\MioPan` on Windows).
 
+# PS2 save transfer
+
+Open **Settings → PS2 save transfer…** in the F1 overlay to import or export EU
+(SLES-52384) saves. Import from an 8 MB memory card or extracted
+save folder. Select one or more saves and assign their destination slots; room
+previews and play times help identify each slot.
+
+Export offers these formats:
+
+- **ECC (.ps2):** a memory card with spare/ECC bytes, for PCSX2.
+- **Raw / non-ECC (.bin):** an 8 MB virtual memory card, for OPL.
+- **Extracted folder:** the game's save files, for tools that accept folders.
+
+Card exports start with a blank card. Choosing an output
+format opens its picker; confirming the destination exports immediately.
+Missing extensions are added automatically. Existing output files/folders are
+not overwritten. Importing replaces only the destination slots you selected.
+
+The running game is unchanged by imports; load the imported save normally.
+Close the game's save/load screen before transferring. Saves made during a
+scripted Mayu action must be saved again after that action finishes before
+conversion.
+
 # License
 MioPan is licensed under the [GNU AGPL v3](LICENSE). Fatal Frame II is the property
 of its respective owners. This project is not affiliated with or endorsed by them.

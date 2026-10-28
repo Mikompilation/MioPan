@@ -13,6 +13,9 @@
 #include "mc_icon.h"                            /* LiberateMemoryCardIconDataMem */
 #include "mc_set_data.h"                        /* SoftReset lock / head init */
 
+namespace { bool card_in_use = false; }
+bool MemoryCardIsInUse(void) { return card_in_use; }
+
 void MemoryCardInit(void)
 {
     sceMcInit();                                                        /* 48 */
@@ -20,6 +23,7 @@ void MemoryCardInit(void)
 
 void MemoryCardExeInit(void)
 {
+    card_in_use = true;
     MemoryCardSoftResetLock();                                          /* 61 */
     MemoryCardInfoCtrlInit();                                           /* 63 */
     MemoryCardPlayDataHeadInit();                                       /* 65 */
@@ -34,5 +38,6 @@ void MemoryCardEnd(void)
      * out-parameters are NULL because nothing is left to read the result. */
     sceMcSync(0, (int *)0, (int *)0);                                   /* 84 */
 
-    MemoryCardSoftResetUnlock();                                        /* 87 */
+    MemoryCardSoftResetUnlock();
+    card_in_use = false;                                        /* 87 */
 }

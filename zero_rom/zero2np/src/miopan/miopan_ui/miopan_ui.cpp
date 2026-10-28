@@ -4,6 +4,7 @@
 #include "miopan_ui_assists.h"
 #include "miopan_ui_events.h"
 #include "miopan_ui_title.h"
+#include "miopan_ui_saves.h"
 #include "../os/miopan_pacing.h"
 #include "../rendering/miopan_renderer.h"
 #include "../miopan_config.h"
@@ -1400,7 +1401,7 @@ void UpdateUiMouse()
      * profiler's windows are left out: they are read rather than used, and
      * leaving the graphs up must not cost finder aiming. */
     g_ui_mouse_busy =
-        g_show_controls || g_show_data_folder || io.WantTextInput ||
+        g_show_controls || g_show_data_folder || MioPanUiSaves::IsOpen() || io.WantTextInput ||
         ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) ||
         MioPanRml::WantsInput();
 
@@ -2800,6 +2801,7 @@ void DrawSettingsMenu()
     }
     DrawControlsSettingsMenu();
     MioPanUi::DrawTitleMenuItem();
+    MioPanUiSaves::MenuItem();
     ImGui::Separator();
 
     DrawInterfaceScaleMenu();
@@ -3684,6 +3686,7 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device,
         return false;
     }
 
+    MioPanUiSaves::Init(device);
     return true;
 }
 
@@ -3695,6 +3698,7 @@ void Shutdown()
     }
 
     ImGui::SetCurrentContext(g_context);
+    MioPanUiSaves::Shutdown();
     if (g_frame_started)
     {
         ImGui::EndFrame();
@@ -3819,6 +3823,7 @@ void Draw()
     /* Every frame, open or not: it also steps the event-jump driver. */
     MioPanUi::DrawEventsWindow();
     MioPanUi::DrawTitleWindow();
+    MioPanUiSaves::Draw(g_window);
     if (!g_show_performance_summary)
     {
         DrawProfilerGraphs();

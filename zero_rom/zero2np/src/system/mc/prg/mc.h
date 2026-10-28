@@ -44,4 +44,6 @@ void MemoryCardInit(void);      /* 0x1df010 */
 void MemoryCardExeInit(void);   /* 0x1df030 */
 void MemoryCardEnd(void);       /* 0x1df060 */
 
+bool MemoryCardIsInUse(void);
+
 #endif /* _SYSTEM_MC_PRG_MC_H */
