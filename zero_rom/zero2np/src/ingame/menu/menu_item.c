@@ -96,6 +96,9 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_item.h" // the RmlUi page (port)
+
+#include <string.h>                             // memset (port)
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -219,6 +222,8 @@ static void MenuItemCaptionDisp(int off_x, int off_y, u_char alpha);
 static void MenuItemConfirmDisp(int off_x, int off_y, u_char alpha);
 static void MenuItemUseSelDisp(int off_x, int off_y, u_char alpha);
 static void MenuItemNoHaveItemDisp(int off_x, int off_y, u_char alpha);
+static void MenuItemRmlPad(void);
+static int  MenuItemRmlDisp(u_char alpha);
 
 /* --------------------------------------------------------------------------
  *  Entry / texture
@@ -344,11 +349,18 @@ void MenuItem(void)                                                     /* 299 *
 
     if (menu_wrk.step == MENU_ITEM_STEP_MAIN) {                         /* 328 */
         if (menu_item_ctrl.ref_ctrl.data_num != 0) {                    /* 330 */
-            if (menu_item_pad_func[menu_item_ctrl.sub_step] != nullptr) { /* 332 */
+            /* PORT: the RmlUi page's input in place of the pad's. */
+            if (MioPan_RmlMenuItemIsShown() != 0) {
+                MenuItemRmlPad();
+            }
+            else if (menu_item_pad_func[menu_item_ctrl.sub_step] != nullptr) { /* 332 */
                 (*menu_item_pad_func[menu_item_ctrl.sub_step])();        /* 333 */
             }
 
             MenuCmnCrossFade();                                         /* 337 */
+        }
+        else if (MioPan_RmlMenuItemIsShown() != 0) {
+            MenuItemRmlPad();
         }
         else {
             MenuNonItemPad();                                           /* 341 */
@@ -691,6 +703,12 @@ void MenuItemDisp(void)                                                 /* 697 *
         if (menu_item_disp.anim_step != MENU_ITEM_ANIM_END) {           /* 708 */
             MenuInOutAnimCtrl(&menu_item_disp.anim_step,
                               &menu_item_disp.anim_timer, &alpha);      /* 710 */
+
+            /* PORT: the RmlUi page in place of everything below; the fade
+             * above still paces the hand-back. */
+            if (MenuItemRmlDisp(alpha) != 0) {
+                return;
+            }
 
             MenuItemTitleDisp(0, 0, alpha);                             /* 713 */
 
@@ -1241,4 +1259,191 @@ static void MenuItemNoHaveItemDisp(int off_x, int off_y, u_char alpha)  /* 1363 
     PrintMsg(0x36, 0, msg_data.pos_x, msg_data.pos_y, 1, alpha, 0);     /* 1377 */
 
     DrawCmnCapGroup_W(12, 12, alpha, 0);                                /* 1381 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_item.h).  The screen
+ *  shows the list and asks; every answer is this file's own -- the moves and
+ *  their cross-fade as MenuItemPad() makes them, MenuItemUseItemMain() and
+ *  MenuItemUse(), the windows' cues, leaving.
+ * ------------------------------------------------------------------------ */
+
+static void MenuItemRmlPad(void)
+{
+    int    arg;
+    int    i;
+    short  disp_num;
+    u_char load_flg;
+    const int command = MioPan_RmlMenuItemConsumeCommand(&arg);
+
+    /* An empty inventory, as MenuNonItemPad(): only the way back. */
+    if (menu_item_ctrl.ref_ctrl.data_num == 0) {
+        if (command == MIOPAN_RML_MENU_ITEM_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            SetNextMenuStep(MENU_STEP_TOP);
+        }
+        return;
+    }
+
+    disp_num = menu_item_ctrl.ref_ctrl.data_num;
+    if (MENU_ITEM_DISP_NUM < disp_num) {
+        disp_num = MENU_ITEM_DISP_NUM;
+    }
+
+    switch (menu_item_ctrl.sub_step) {
+    case MENU_ITEM_SUB_LIST:
+        load_flg = 0;
+        switch (command) {
+        case MIOPAN_RML_MENU_ITEM_UP:
+            load_flg = (MenuRefMovePadLup(&menu_item_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                          disp_num, MENU_ITEM_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_ITEM_DOWN:
+            load_flg = (MenuRefMovePadLdown(&menu_item_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                            disp_num, MENU_ITEM_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_ITEM_PAGE_UP:
+            load_flg = (MenuRefMovePageUp(&menu_item_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                          disp_num, MENU_ITEM_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_ITEM_PAGE_DOWN:
+            load_flg = (MenuRefMovePageDown(&menu_item_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                            disp_num, MENU_ITEM_DISP_NUM) != 0);
+            break;
+        /* A row pointed at: stepped to the pad's way, so the list and the
+         * picture follow as they always do. */
+        case MIOPAN_RML_MENU_ITEM_ROW:
+            for (i = 0; (i < MENU_ITEM_DISP_NUM) && (menu_wrk.cursor != arg) &&
+                        (arg >= 0) && (arg < disp_num); i++) {
+                if (arg < menu_wrk.cursor) {
+                    load_flg |= (MenuRefMovePadLup(&menu_item_ctrl.ref_ctrl,
+                                                   &menu_wrk.cursor, disp_num,
+                                                   MENU_ITEM_DISP_NUM) != 0);
+                }
+                else {
+                    load_flg |= (MenuRefMovePadLdown(&menu_item_ctrl.ref_ctrl,
+                                                     &menu_wrk.cursor, disp_num,
+                                                     MENU_ITEM_DISP_NUM) != 0);
+                }
+            }
+            break;
+        case MIOPAN_RML_MENU_ITEM_CHOOSE:
+            if (GetPlyrItemHaveNum(
+                    disp_item[menu_item_ctrl.ref_ctrl.data_pos].item_id) != 0) {
+                MenuItemUseItemMain(disp_item[menu_item_ctrl.ref_ctrl.data_pos].item_id);
+            }
+            break;
+        case MIOPAN_RML_MENU_ITEM_BACK:
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuItemOutReq();
+            break;
+        default:
+            break;
+        }
+        if (load_flg == 1) {
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuCrossFadeOutStart(menu_item_ctrl.cross_fade_flg);
+            menu_item_ctrl.cross_fade_flg ^= 1;
+            MenuCrossFadeInStart(menu_item_ctrl.cross_fade_flg,
+                                 disp_item[menu_item_ctrl.ref_ctrl.data_pos].item_id
+                                     + ITEM_PICTURE_PK2);
+        }
+        break;
+
+    /* As MenuCmnConfirmPad(): either button dismisses it, each with its
+     * cue. */
+    case MENU_ITEM_SUB_NO_USE:
+        if (command == MIOPAN_RML_MENU_ITEM_ACK) {
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_item_ctrl.sub_step = MENU_ITEM_SUB_LIST;
+        }
+        else if (command == MIOPAN_RML_MENU_ITEM_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_item_ctrl.sub_step = MENU_ITEM_SUB_LIST;
+        }
+        break;
+
+    /* As MenuItemUseSelPad(), the screen keeping the yes / no cursor. */
+    case MENU_ITEM_SUB_USE_SEL:
+        if (command == MIOPAN_RML_MENU_ITEM_YES) {
+            MenuItemUse();
+            menu_item_ctrl.sub_step = MENU_ITEM_SUB_LIST;
+        }
+        else if (command == MIOPAN_RML_MENU_ITEM_NO) {
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_item_ctrl.sub_step = MENU_ITEM_SUB_LIST;
+        }
+        else if (command == MIOPAN_RML_MENU_ITEM_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_item_ctrl.sub_step = MENU_ITEM_SUB_LIST;
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* The screen up for this frame: the rows shown, the item under the cursor,
+ * and the cross-fade's two pictures with their alphas, worked out as
+ * MenuItemPictureDisp() works them out -- outside MAIN the outgoing one is
+ * gone and the incoming one takes the page's own fade. */
+static int MenuItemRmlDisp(u_char alpha)
+{
+    MIOPAN_RML_MENU_ITEM page;
+    u_char fade_alpha[2];
+    int    disp_num;
+    int    i;
+    int    slot;
+
+    memset(&page, 0, sizeof(page));
+
+    disp_num = menu_item_ctrl.ref_ctrl.data_num;
+    if (MENU_ITEM_DISP_NUM < disp_num) {
+        disp_num = MENU_ITEM_DISP_NUM;
+    }
+
+    if (menu_item_ctrl.ref_ctrl.data_num == 0) {
+        page.mode = MIOPAN_RML_MENU_ITEM_EMPTY;
+    }
+    else if (menu_item_ctrl.sub_step == MENU_ITEM_SUB_NO_USE) {
+        page.mode = MIOPAN_RML_MENU_ITEM_NO_USE;
+    }
+    else if (menu_item_ctrl.sub_step == MENU_ITEM_SUB_USE_SEL) {
+        page.mode = MIOPAN_RML_MENU_ITEM_USE_SEL;
+    }
+    else {
+        page.mode = MIOPAN_RML_MENU_ITEM_LIST;
+    }
+    page.closing = menu_wrk.step != MENU_ITEM_STEP_MAIN;
+    page.cursor  = menu_wrk.cursor;
+    page.start   = menu_item_ctrl.ref_ctrl.disp_start_pos;
+    page.count   = menu_item_ctrl.ref_ctrl.data_num;
+    for (i = 0; i < disp_num; i++) {
+        page.item[i] = disp_item[menu_item_ctrl.ref_ctrl.disp_start_pos + i].item_id;
+        page.have[i] = disp_item[menu_item_ctrl.ref_ctrl.disp_start_pos + i].have_num;
+    }
+    page.selected = (menu_item_ctrl.ref_ctrl.data_num > 0)
+                        ? disp_item[menu_item_ctrl.ref_ctrl.data_pos].item_id : 0;
+    page.pak = menu_item_tex_addr;
+
+    if (disp_num != 0) {
+        fade_alpha[0] = 0;
+        fade_alpha[1] = 0;
+        GetMenuCrossFadeAlpha(fade_alpha);
+
+        if (menu_wrk.step != MENU_ITEM_STEP_MAIN) {
+            fade_alpha[menu_item_ctrl.cross_fade_flg ^ 1] = 0;
+            fade_alpha[menu_item_ctrl.cross_fade_flg] = alpha;
+        }
+        for (i = 0; i < 2; i++) {
+            slot = menu_item_ctrl.cross_fade_flg ^ (i == 0 ? 1 : 0);
+            if ((CheckCrossFadeDisp(slot) != 0) && (fade_alpha[slot] != 0)) {
+                page.picture[i] = GetCrossFadeDataAddr(slot);
+                page.picture_alpha[i] = fade_alpha[slot];
+            }
+        }
+    }
+
+    return MioPan_RmlMenuItemShow(&page);
 }

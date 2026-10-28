@@ -1,0 +1,115 @@
+/*
+ * The Item page, as menu_item.c lays it out: the list on the game's row bars
+ * between its frame and scrollbar, the picture in its round plate, the
+ * description on its striped window, and the game's windows over it all.
+ */
+
+/* The game's flat squares: the panels the list and the description sit on,
+ * and the scrollbar's backing. */
+.square
+{
+    position: absolute;
+}
+
+/* The scrollbar's arrows pulse, as Zero2Anim2D_CsrAnimCtrl() pulses them. */
+.scroll-arrow
+{
+    position: absolute;
+    cursor: pointer;
+    animation: 0.5s cubic-in-out infinite alternate arrow-pulse;
+}
+
+@keyframes arrow-pulse
+{
+    from { opacity: 0.5; }
+    to   { opacity: 1; }
+}
+
+/* ---- the list ---------------------------------------------------------- */
+
+/* A row's place, over its art, for the pointer. */
+.item-row
+{
+    position: absolute;
+    cursor: pointer;
+}
+
+/* Each line the height of the dim bar, 28 of the game's pixels, so it sits
+ * in the middle of the bar. */
+.item-name,
+.item-count
+{
+    position: absolute;
+    font-size: 2.05em;
+    line-height: 1.366;
+    letter-spacing: 0.04em;
+    color: #eadb9e;
+    font-effect: outline(1dp #1c1006);
+    white-space: nowrap;
+}
+
+.item-count
+{
+    text-align: center;
+}
+
+/* On the lit bar, as the game prints it: near white. */
+.item-name.lit,
+.item-count.lit
+{
+    color: #fff1ea;
+    font-effect: outline(1dp #4a1e08);
+}
+
+/* ---- the description --------------------------------------------------- */
+
+/* One line to each of the window's strips, 26 of the game's pixels. */
+.item-description
+{
+    position: absolute;
+    font-size: 1.85em;
+    line-height: 1.405;
+    color: #ddd6c8;
+    font-effect: outline(1dp #0c0806);
+}
+
+/* ---- the game's windows ------------------------------------------------ */
+
+/* DrawCmnWindow()'s: black glass between gold rails. */
+.menu-window
+{
+    position: absolute;
+    background-color: #050302e8;
+    border-top: 0.2em #b8913e;
+    border-bottom: 0.2em #b8913e;
+    decorator: vertical-gradient(#1a120af0 #050302f0);
+}
+
+.window-text
+{
+    position: absolute;
+    font-size: 1.9em;
+    line-height: 1.35em;
+    color: #f2ebe0;
+}
+
+.window-choice
+{
+    position: absolute;
+    text-align: center;
+    font-size: 2em;
+    line-height: 1.5em;
+    font-style: italic;
+    letter-spacing: 0.1em;
+    color: #e3c27a;
+    font-effect: outline(1dp #1c1006);
+    cursor: pointer;
+}
+
+/* DrawCmnSelCsr()'s amber bar under the answer. */
+.window-choice.selected
+{
+    color: #fff2c8;
+    decorator: image(images/cursor_bar.png);
+    font-effect: outline(1dp #3a1c04), glow(0dp 4dp 0dp 0dp #ffb04a70);
+}

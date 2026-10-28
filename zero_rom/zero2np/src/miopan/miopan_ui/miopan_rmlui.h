@@ -82,11 +82,14 @@ SDL_Window *GetWindow();
 
 /* Images made at run time -- a save's room picture -- shown with
  * <img src="gen:NAME">.  `name` includes the prefix; `rgba` is width x height
- * straight-alpha RGBA.  RmlUi keeps the first texture it makes for a name, so
- * a name is one picture for good: different pixels need a different name. */
+ * straight-alpha RGBA, or already premultiplied when `premultiplied` -- which
+ * is how a picture that adds to what is under it, as the game's additive
+ * sprites do, is given: its colour with no alpha.  RmlUi keeps the first
+ * texture it makes for a name, so a name is one picture for good: different
+ * pixels need a different name. */
 constexpr const char *kGeneratedPrefix = "gen:";
 void SetGeneratedImage(const std::string &name, const Uint8 *rgba, int width,
-                       int height);
+                       int height, bool premultiplied = false);
 bool HasGeneratedImage(const std::string &name);
 
 /*

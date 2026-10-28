@@ -1,0 +1,130 @@
+/*
+ * The in-game menu's pages, composed as the game composes them over its shoji
+ * backdrop (miopan_rml_menu_art.h): the game's own plates, frames and icons
+ * placed in its 640 x 448 picture, and RmlUi's text over them.  The stage is
+ * that picture; its font-size is ten of the picture's pixels down, so the text
+ * here is sized in em and follows the picture.  Each page adds its own sheet.
+ *
+ * The colours are the plates': the gold of their lettering, the ink on the
+ * play-data sheet, the pale italic of the status plate's digits.
+ */
+
+.stage
+{
+    position: absolute;
+    animation: 0.15s linear-in-out fade-in;
+    opacity: 1;
+    transition: opacity 0.12s linear-in-out;
+}
+
+/* Handing over to another page or closing the menu: the game fades its own
+ * page out, and takes no input. */
+.stage.closing
+{
+    opacity: 0;
+}
+
+.art
+{
+    position: absolute;
+}
+
+/* A holder for pieces placed on the stage.  It has to be positioned itself,
+ * or RmlUi paints what it holds with the in-flow content, under every piece
+ * of art placed before it; it has no size, so it takes no clicks. */
+.layer
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+}
+
+/* ---- the gold lettering of the game's plates --------------------------- */
+
+.menu-title,
+.page-label
+{
+    position: absolute;
+    font-style: italic;
+    letter-spacing: 0.12em;
+    color: #e3c27a;
+    font-effect: outline(1dp #1c1006), glow(0dp 3dp 0dp 0dp #e8902e40);
+}
+
+.menu-title
+{
+    font-size: 2.6em;
+    line-height: 1.2em;
+    color: #f2d58e;
+}
+
+/* ---- the status plate (miopan_rml_menu_status.cpp) --------------------- */
+
+.plate
+{
+    position: absolute;
+}
+
+.plate-num
+{
+    position: absolute;
+    font-style: italic;
+    font-size: 1.55em;
+    line-height: 1.1em;
+    color: #eee2c6;
+    font-effect: outline(1dp #1c1006);
+}
+
+/* ---- the caption window along the bottom ------------------------------ */
+
+/* DrawCmnWindow()'s: black glass between gold rails. */
+.caption
+{
+    position: absolute;
+    box-sizing: border-box;
+    padding: 2.2em 2.4em 0 2.4em;
+    background-color: #050302d0;
+    border-top: 0.2em #b8913e;
+    border-bottom: 0.2em #b8913e;
+    decorator: vertical-gradient(#1a120ad8 #050302e0);
+}
+
+.caption p
+{
+    font-size: 1.9em;
+    line-height: 1.35em;
+    color: #f2ebe0;
+}
+
+/* ---- button hints, where the game puts its own ------------------------ */
+
+.menu-prompts
+{
+    position: absolute;
+    text-align: right;
+    font-size: 1.6em;
+    font-style: italic;
+    color: #e3c27a;
+    font-effect: outline(1dp #1c1006);
+}
+
+.menu-prompts .prompt
+{
+    margin-left: 0.9em;
+}
+
+.menu-prompts .prompt:hover
+{
+    color: #fff2c8;
+}
+
+.menu-prompts .key
+{
+    font-style: normal;
+    font-size: 0.75em;
+    color: #f2ebe0;
+    border-color: #b8913e;
+    background-color: #1b1213e0;
+}

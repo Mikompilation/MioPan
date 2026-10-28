@@ -1,6 +1,8 @@
 #include "miopan_rmlui.h"
 #include "miopan_rml_options.h"
 #include "miopan_rml_load.h"
+#include "miopan_rml_menu_item.h"
+#include "miopan_rml_menu_top.h"
 #include "miopan_rml_pause.h"
 #include "miopan_rml_save.h"
 #include "miopan_rml_savepoint.h"
@@ -78,6 +80,8 @@ struct DrawCommand
     Rml::Rectanglei scissor_region;
     Rml::Matrix4f transform;
     Rml::Vector2f translation;
+    /* Sampled with clamped edges: see TextureRecord::clamp. */
+    bool clamp;
 };
 
 /* Matches rmlui.vert.hlsl's cbuffer. */
@@ -95,6 +99,11 @@ struct TextureRecord
 {
     int refs;
     bool released;
+    /* An image made at run time -- a sprite cut out of a pak, a save's room
+     * picture.  None is ever tiled, and each is a cut-out whose far edge has
+     * nothing to do with its near one, so it is sampled clamped: wrapping,
+     * the filter would blend each edge with the opposite one. */
+    bool clamp = false;
 };
 }
 
@@ -123,6 +132,7 @@ struct RmlState
     SDL_GPUShader *fragment_shader = nullptr;
     SDL_GPUGraphicsPipeline *pipeline = nullptr;
     SDL_GPUSampler *sampler = nullptr;
+    SDL_GPUSampler *clamp_sampler = nullptr;
     SDL_GPUTexture *white_texture = nullptr;
 
     /* Shared by every present, cycled on each upload. */
@@ -482,6 +492,10 @@ public:
         command.scissor_region = g_rml.scissor_region;
         command.transform = g_rml.transform;
         command.translation = translation;
+        /* Looked up here, on the game thread, so the presenter never reads
+         * the texture records. */
+        const auto record = g_rml.textures.find(texture);
+        command.clamp = record != g_rml.textures.end() && record->second.clamp;
         frame.commands.push_back(command);
         frame.vertices.insert(frame.vertices.end(), geometry->vertices.begin(),
                               geometry->vertices.end());
@@ -516,7 +530,7 @@ public:
             if (texture != nullptr)
             {
                 dimensions = {image->second.width, image->second.height};
-                g_rml.textures[texture] = TextureRecord{0, false};
+                g_rml.textures[texture] = TextureRecord{0, false, true};
             }
             return reinterpret_cast<Rml::TextureHandle>(texture);
         }
@@ -679,7 +693,11 @@ bool CreateGpuResources(SDL_GPUTextureFormat format)
     sampler.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
     sampler.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
     g_rml.sampler = SDL_CreateGPUSampler(g_rml.device, &sampler);
-    if (g_rml.sampler == nullptr)
+    sampler.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    sampler.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    sampler.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+    g_rml.clamp_sampler = SDL_CreateGPUSampler(g_rml.device, &sampler);
+    if (g_rml.sampler == nullptr || g_rml.clamp_sampler == nullptr)
     {
         SDL_Log("MioPan RmlUi: SDL_CreateGPUSampler failed: %s",
                 SDL_GetError());
@@ -1086,6 +1104,10 @@ void ReleaseGpuResources()
     {
         SDL_ReleaseGPUSampler(g_rml.device, g_rml.sampler);
     }
+    if (g_rml.clamp_sampler != nullptr)
+    {
+        SDL_ReleaseGPUSampler(g_rml.device, g_rml.clamp_sampler);
+    }
     if (g_rml.pipeline != nullptr)
     {
         SDL_ReleaseGPUGraphicsPipeline(g_rml.device, g_rml.pipeline);
@@ -1169,11 +1191,15 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device, SDL_GPUTextureFormat format
     MioPanRmlSave::Init(g_rml.context);
     MioPanRmlSavePoint::Init(g_rml.context);
     MioPanRmlSetup::Init(g_rml.context);
+    MioPanRmlMenuTop::Init(g_rml.context);
+    MioPanRmlMenuItem::Init(g_rml.context);
     return true;
 }
 
 void Shutdown()
 {
+    MioPanRmlMenuItem::Shutdown();
+    MioPanRmlMenuTop::Shutdown();
     MioPanRmlSetup::Shutdown();
     MioPanRmlSavePoint::Shutdown();
     MioPanRmlSave::Shutdown();
@@ -1231,6 +1257,8 @@ void Frame()
     MioPanRmlSave::Frame();
     MioPanRmlSavePoint::Frame();
     MioPanRmlSetup::Frame();
+    MioPanRmlMenuTop::Frame();
+    MioPanRmlMenuItem::Frame();
     g_rml.context->Update();
 
     DrawSnapshot &frame = g_rml.frame;
@@ -1338,7 +1366,7 @@ SDL_Window *GetWindow()
 }
 
 void SetGeneratedImage(const std::string &name, const Uint8 *rgba, int width,
-                       int height)
+                       int height, bool premultiplied)
 {
     if (rgba == nullptr || width <= 0 || height <= 0)
     {
@@ -1348,6 +1376,10 @@ void SetGeneratedImage(const std::string &name, const Uint8 *rgba, int width,
     image.width = width;
     image.height = height;
     image.rgba.assign(rgba, rgba + (size_t)width * height * 4);
+    if (premultiplied)
+    {
+        return;
+    }
 
     /* Premultiplied, as LoadTexture() leaves what it decodes. */
     for (size_t i = 0; i < image.rgba.size(); i += 4)
@@ -1463,8 +1495,8 @@ void RenderDrawData(const DrawSnapshot *snapshot,
         }
         SDL_SetGPUScissor(render_pass, &scissor);
 
-        const SDL_GPUTextureSamplerBinding binding = {command.texture,
-                                                      g_rml.sampler};
+        const SDL_GPUTextureSamplerBinding binding = {
+            command.texture, command.clamp ? g_rml.clamp_sampler : g_rml.sampler};
         SDL_BindGPUFragmentSamplers(render_pass, 0, &binding, 1);
 
         VertexUniforms uniforms{};

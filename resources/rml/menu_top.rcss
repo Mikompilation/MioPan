@@ -1,0 +1,63 @@
+/*
+ * The menu hub, as menu_top.c lays it out: the pages down the left on the
+ * game's row frames, dim and lit; the status plate and the play-data sheet
+ * to their right; the chapter's pillar down the far edge.
+ */
+
+/* One page's row: the lit frame only under the cursor. */
+.page
+{
+    position: absolute;
+    cursor: pointer;
+}
+
+.page .bar-dim,
+.page .bar-lit
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+}
+
+.page .bar-lit,
+.page.selected .bar-dim
+{
+    display: none;
+}
+
+.page.selected .bar-lit
+{
+    display: block;
+}
+
+.page-label
+{
+    top: 0;
+    font-size: 2.1em;
+    line-height: 1.55em;
+}
+
+.page.selected .page-label
+{
+    color: #fff2c8;
+    font-effect: outline(1dp #3a1c04), glow(0dp 4dp 0dp 0dp #ffb04a70);
+}
+
+/* ---- the play-data sheet ---------------------------------------------- */
+
+/* Ink on the sheet, beside its own printed labels. */
+.sheet-num
+{
+    position: absolute;
+    font-size: 2.05em;
+    line-height: 1.1em;
+    letter-spacing: 0.04em;
+    color: #3d342b;
+}
+
+.sheet-num.date
+{
+    text-align: center;
+}

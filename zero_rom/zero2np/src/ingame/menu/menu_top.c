@@ -72,6 +72,7 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat           */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_top.h" // the RmlUi hub (port)
 
 #include <string.h>                             /* memset                 */
 
@@ -158,6 +159,8 @@ static void   MenuTopCaptionDisp(int off_x, int off_y, u_char alpha);
 static void   MenuTopChapterTitleDisp(int off_x, int off_y, u_char alpha);
 static void   MenuTopWindowDisp(int off_x, int off_y, u_char alpha);
 static void   DebugMenuTopDebugSwitchPad(void);
+static void   MenuTopRmlPad(void);
+static int    MenuTopRmlDisp(void);
 
 static void         *chapter_title_tex_addr;                /* sdata 3f2fb8 */
 static MENU_TOP_DISP menu_top_disp;                         /* bss   4b63d8 */
@@ -274,7 +277,13 @@ void MenuTop(void)                                                      /* 274 *
     }
 
     if (menu_wrk.step == MENU_TOP_STEP_MAIN) {                          /* 290 */
-        MenuTopPad();                                                   /* 292 */
+        /* PORT: the RmlUi hub's input in place of the pad's. */
+        if (MioPan_RmlMenuTopIsShown() != 0) {
+            MenuTopRmlPad();
+        }
+        else {
+            MenuTopPad();                                               /* 292 */
+        }
 
         DebugMenuTopDebugSwitchPad();                                   /* 296 */
     }
@@ -562,8 +571,10 @@ void MenuTopDisp(void)                                                  /* 688 *
         alpha = MenuTopAnimCtrl();                                      /* 700 */
 
         /* AnimCtrl still has to run on the frame the fade lands, to move the
-         * step on; only the drawing stops. */
-        if (menu_top_disp.anim_step != MENU_TOP_ANIM_END) {             /* 702 */
+         * step on; only the drawing stops.  PORT: the RmlUi hub in place of
+         * the plates, the fades above still pacing it. */
+        if ((MenuTopRmlDisp() == 0) &&
+            (menu_top_disp.anim_step != MENU_TOP_ANIM_END)) {           /* 702 */
             MenuTopTitleDisp(0, 0, alpha);                              /* 704 */
 
             MenuTopSelectDisp(0, 0, alpha);                             /* 706 */
@@ -1063,4 +1074,68 @@ static void DebugMenuTopDebugSwitchPad(void)                             /* 1339
             DebugAllMapDisp();                                           /* 1381 */
         }
     }
+}
+
+/* ==========================================================================
+ *  PORT DEVIATION: the RmlUi hub (miopan_rml_menu_top.h).  The screen walks
+ *  the open pages itself; choosing one and leaving are MenuTopPad()'s own
+ *  two exits, cues and all.
+ * ======================================================================== */
+
+static void MenuTopRmlPad(void)
+{
+    menu_wrk.cursor = MioPan_RmlMenuTopCursor();
+
+    switch (MioPan_RmlMenuTopConsumeCommand())
+    {
+    case MIOPAN_RML_MENU_TOP_CHOSEN:
+        /* As CROSS: only once the page has finished fading in. */
+        if (menu_top_disp.anim_step != MENU_TOP_ANIM_SHOW) {
+            break;
+        }
+        SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        menu_wrk.top_cursor = (u_char)menu_wrk.cursor;
+        menu_top_disp.anim_step = MENU_TOP_ANIM_OUT;
+        menu_top_disp.anim_timer = 0;
+        menu_top_disp.move_flg = 1;
+        menu_wrk.step = MENU_TOP_STEP_MOVE;
+        MenuTopBackGroundLoadStart();
+        break;
+
+    /* As TRIANGLE, which may cut the fade short. */
+    case MIOPAN_RML_MENU_TOP_BACK:
+        SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        menu_top_disp.anim_step = MENU_TOP_ANIM_OUT;
+        menu_top_disp.anim_timer = 0;
+        menu_top_disp.move_flg = 0;
+        menu_wrk.step = MENU_TOP_STEP_EXIT;
+        MenuOutReq();
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* The screen up for this frame: the pages CheckMenuCondition() opens,
+ * whether the hub is on its way out, and the chapter's plate as
+ * MenuTopChapterTitleDisp() picks it -- chapter n's three strips start at
+ * menu_top[35 + 3n], Mission Mode's at the eleventh's. */
+static int MenuTopRmlDisp(void)
+{
+    unsigned open = 0;
+    int      i;
+    int      chapter_sprite;
+
+    for (i = 0; i < MENU_TOP_CSR_NUM; i++) {
+        if (CheckMenuCondition(i) != 0) {
+            open |= 1u << i;
+        }
+    }
+    chapter_sprite = (CheckIngameMission() != 0)
+                         ? MT_CHAPTER_MISSION
+                         : 35 + 3 * ingame_wrk.mChapterNo.Get();
+    return MioPan_RmlMenuTopShow(menu_wrk.cursor, open,
+                                 menu_wrk.step != MENU_TOP_STEP_MAIN,
+                                 chapter_title_tex_addr, chapter_sprite);
 }
