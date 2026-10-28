@@ -1725,7 +1725,7 @@ int DeclareCaptureSlot(unsigned int addr, int logical_w, int logical_h);
  * and the two divisors are not interchangeable.
  *
  *   TME=1, MODULATE   Cv = (Ct * Cf) >> 7, so Cf == 0x80 is "unchanged" and
- *                     the divisor is 128.
+ *                     the divisor is 128; clamp the product, not Cf.
  *   TME=0, untextured Cv = Cf, written straight to the framebuffer, so the
  *                     divisor is 255.
  *
@@ -1734,7 +1734,7 @@ int DeclareCaptureSlot(unsigned int addr, int logical_w, int logical_h);
  */
 float Ps2ColorToFloat(unsigned char value)
 {
-    return std::min(1.0f, (float)value / 128.0f);
+    return (float)value / 128.0f;
 }
 
 float Ps2UntexturedColorToFloat(unsigned char value)

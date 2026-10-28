@@ -36,6 +36,8 @@ float4 main(PSInput input) : SV_Target0
     }
 
     float4 col = texel * input.uColor;
+    // GS MODULATE permits colours above 1; clamp the product before blending.
+    col.rgb = saturate(col.rgb);
 
     // The GS ran its alpha test on the fragment straight out of the texture
     // function, before the colour was touched by anything else -- so this sits

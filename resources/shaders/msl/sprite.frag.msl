@@ -98,150 +98,151 @@ struct main0_in
 fragment main0_out main0(main0_in in [[stage_in]], constant type_MikuPanUniforms& MikuPanUniforms [[buffer(0)]], texture2d<float> uTexture [[texture(0)]], sampler uTextureSampler [[sampler(0)]])
 {
     main0_out out = {};
-    float4 _85 = uTexture.sample(uTextureSampler, in.in_var_TEXCOORD0);
-    float4 _133;
+    float4 _86 = uTexture.sample(uTextureSampler, in.in_var_TEXCOORD0);
+    float4 _126;
     if (MikuPanUniforms.uPadFlags.z != 0)
     {
-        float2 _95 = float2(1.0) / precise::max(MikuPanUniforms.uTextureSize.xy, float2(1.0));
-        float _99 = _95.x;
-        float _117 = _95.y;
-        _133 = ((((_85 * 0.4000000059604644775390625) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(_99, 0.0))) * 0.1500000059604644775390625)) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(-_99, 0.0))) * 0.1500000059604644775390625)) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(0.0, _117))) * 0.1500000059604644775390625)) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(0.0, -_117))) * 0.1500000059604644775390625);
+        float2 _96 = float2(1.0) / precise::max(MikuPanUniforms.uTextureSize.xy, float2(1.0));
+        float _98 = _96.x;
+        float _112 = _96.y;
+        _126 = ((((_86 * 0.4000000059604644775390625) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(_98, 0.0))) * 0.1500000059604644775390625)) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(-_98, 0.0))) * 0.1500000059604644775390625)) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(0.0, _112))) * 0.1500000059604644775390625)) + (uTexture.sample(uTextureSampler, (in.in_var_TEXCOORD0 + float2(0.0, -_112))) * 0.1500000059604644775390625);
     }
     else
     {
-        _133 = _85;
+        _126 = _86;
     }
-    float _167;
+    float _160;
     do
     {
-        float _139 = fast::clamp(MikuPanUniforms.uAlphaSharpen.x, 0.0, 1.0);
-        if (_139 <= 0.0)
+        float _132 = fast::clamp(MikuPanUniforms.uAlphaSharpen.x, 0.0, 1.0);
+        if (_132 <= 0.0)
         {
-            _167 = _133.w;
+            _160 = _126.w;
             break;
         }
-        float2 _148 = fwidth(in.in_var_TEXCOORD0 * precise::max(MikuPanUniforms.uTextureSize.xy, float2(1.0)));
-        float _151 = 1.0 / precise::max(length(_148), 9.9999999747524270787835121154785e-07);
-        if (_151 <= 1.0)
+        float2 _141 = fwidth(in.in_var_TEXCOORD0 * precise::max(MikuPanUniforms.uTextureSize.xy, float2(1.0)));
+        float _144 = 1.0 / precise::max(length(_141), 9.9999999747524270787835121154785e-07);
+        if (_144 <= 1.0)
         {
-            _167 = _133.w;
+            _160 = _126.w;
             break;
         }
-        float _155 = fwidth(_133.w);
-        float _157 = fast::clamp(_155 * 8.0, 0.0, 1.0);
-        if (_157 <= 0.0)
+        float _148 = fwidth(_126.w);
+        float _150 = fast::clamp(_148 * 8.0, 0.0, 1.0);
+        if (_150 <= 0.0)
         {
-            _167 = _133.w;
+            _160 = _126.w;
             break;
         }
-        _167 = mix(_133.w, fast::clamp(((_133.w - 0.5) * _151) + 0.5, 0.0, 1.0), _157 * _139);
+        _160 = mix(_126.w, fast::clamp(((_126.w - 0.5) * _144) + 0.5, 0.0, 1.0), _150 * _132);
         break;
     } while(false);
-    float4 _168 = _133;
-    _168.w = _167;
-    bool _175;
+    float4 _161 = _126;
+    _161.w = _160;
+    bool _168;
     if (MikuPanUniforms.uAlphaSharpen.y > 0.0)
     {
-        _175 = _167 < MikuPanUniforms.uAlphaSharpen.y;
+        _168 = _160 < MikuPanUniforms.uAlphaSharpen.y;
     }
     else
     {
-        _175 = false;
+        _168 = false;
     }
-    if (_175)
+    if (_168)
     {
         discard_fragment();
     }
-    float4 _178 = _168 * in.in_var_TEXCOORD2;
-    float _179 = _178.w;
-    bool _219;
+    float4 _171 = _161 * in.in_var_TEXCOORD2;
+    float3 _173 = fast::clamp(_171.xyz, float3(0.0), float3(1.0));
+    float _174 = _171.w;
+    bool _220;
     do
     {
         if (MikuPanUniforms.uAlphaTest.x == 0.0)
         {
-            _219 = false;
+            _220 = false;
             break;
         }
-        int _189 = int(MikuPanUniforms.uAlphaTest.z);
-        if (_189 == 0)
+        int _184 = int(MikuPanUniforms.uAlphaTest.z);
+        if (_184 == 0)
         {
-            _219 = true;
+            _220 = true;
             break;
         }
-        if (_189 == 1)
+        if (_184 == 1)
         {
-            _219 = false;
+            _220 = false;
             break;
         }
-        if (_189 == 2)
+        if (_184 == 2)
         {
-            _219 = (isunordered(_179, MikuPanUniforms.uAlphaTest.y) || _179 >= MikuPanUniforms.uAlphaTest.y);
+            _220 = !(_174 < MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_189 == 3)
+        if (_184 == 3)
         {
-            _219 = (isunordered(_179, MikuPanUniforms.uAlphaTest.y) || _179 > MikuPanUniforms.uAlphaTest.y);
+            _220 = !(_174 <= MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_189 == 4)
+        if (_184 == 4)
         {
-            _219 = _179 != MikuPanUniforms.uAlphaTest.y;
+            _220 = !(_174 == MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_189 == 5)
+        if (_184 == 5)
         {
-            _219 = (isunordered(_179, MikuPanUniforms.uAlphaTest.y) || _179 < MikuPanUniforms.uAlphaTest.y);
+            _220 = !(_174 >= MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_189 == 6)
+        if (_184 == 6)
         {
-            _219 = (isunordered(_179, MikuPanUniforms.uAlphaTest.y) || _179 <= MikuPanUniforms.uAlphaTest.y);
+            _220 = !(_174 > MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        _219 = (isunordered(_179, MikuPanUniforms.uAlphaTest.y) || _179 == MikuPanUniforms.uAlphaTest.y);
+        _220 = !(_174 != MikuPanUniforms.uAlphaTest.y);
         break;
     } while(false);
-    if (_219)
+    if (_220)
     {
         discard_fragment();
     }
-    float4 _269;
+    float4 _270;
     if (MikuPanUniforms.uFogColor.w < 0.0)
     {
-        float3 _238 = mix(MikuPanUniforms.uFogColor.xyz, _178.xyz, float3(floor(in.in_var_TEXCOORD1.x * 255.0) * 0.0039215688593685626983642578125));
-        _269 = float4(_238.x, _238.y, _238.z, _178.w);
+        float3 _239 = mix(MikuPanUniforms.uFogColor.xyz, _173.xyz, float3(floor(in.in_var_TEXCOORD1.x * 255.0) * 0.0039215688593685626983642578125));
+        _270 = float4(_239.x, _239.y, _239.z, _171.w);
     }
     else
     {
-        float3 _240 = _178.xyz;
-        float3 _267;
+        float3 _241 = _173.xyz;
+        float3 _268;
         do
         {
             if (MikuPanUniforms.uFogColor.w <= 0.0)
             {
-                _267 = _240;
+                _268 = _241;
                 break;
             }
-            _267 = mix(MikuPanUniforms.uFogColor.xyz, _240, float3(fast::clamp(floor((MikuPanUniforms.uFog.z + (MikuPanUniforms.uFog.w / precise::max(in.in_var_TEXCOORD3.x, 9.9999999747524270787835121154785e-07))) * 255.0) * 0.0039215688593685626983642578125, MikuPanUniforms.uFog.x, MikuPanUniforms.uFog.y)));
+            _268 = mix(MikuPanUniforms.uFogColor.xyz, _241, float3(fast::clamp(floor((MikuPanUniforms.uFog.z + (MikuPanUniforms.uFog.w / precise::max(in.in_var_TEXCOORD3.x, 9.9999999747524270787835121154785e-07))) * 255.0) * 0.0039215688593685626983642578125, MikuPanUniforms.uFog.x, MikuPanUniforms.uFog.y)));
             break;
         } while(false);
-        _269 = float4(_267.x, _267.y, _267.z, _178.w);
+        _270 = float4(_268.x, _268.y, _268.z, _171.w);
     }
-    float4 _282;
+    float4 _283;
     if (MikuPanUniforms.uParams1.y > 0.001000000047497451305389404296875)
     {
-        float3 _280 = mix(_269.xyz, fast::clamp(float3(0.3764705955982208251953125) - _269.xyz, float3(0.0), float3(1.0)), float3(fast::clamp(MikuPanUniforms.uParams1.y, 0.0, 1.0)));
-        _282 = float4(_280.x, _280.y, _280.z, _269.w);
+        float3 _281 = mix(_270.xyz, fast::clamp(float3(0.3764705955982208251953125) - _270.xyz, float3(0.0), float3(1.0)), float3(fast::clamp(MikuPanUniforms.uParams1.y, 0.0, 1.0)));
+        _283 = float4(_281.x, _281.y, _281.z, _270.w);
     }
     else
     {
-        _282 = _269;
+        _283 = _270;
     }
-    if (_282.w <= 0.0)
+    if (_283.w <= 0.0)
     {
         discard_fragment();
     }
-    out.out_var_SV_Target0 = _282;
+    out.out_var_SV_Target0 = _283;
     return out;
 }
 
