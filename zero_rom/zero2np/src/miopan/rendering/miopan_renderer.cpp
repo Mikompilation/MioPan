@@ -1146,6 +1146,7 @@ struct CaptureSlot
     Uint32 tex_h;
     int logical_w;
     int logical_h;
+    uint64_t capture_order;
     bool valid;         /* something has been captured into it this session */
 };
 
@@ -1156,6 +1157,7 @@ const unsigned int kCaptureAddrScene = 0xFFFFFFFEu;
 const unsigned int kCaptureSrcLive = 0xFFFFFFFFu;
 
 thread_local std::vector<CaptureSlot> g_capture_slots;
+uint64_t g_capture_order;
 
 /* One requested capture, in draw order: before replaying g_draws[draw_index],
  * copy `src_slot` -- or the live colour target, when it is -1 -- into
@@ -6874,6 +6876,23 @@ int FindCaptureSlotIndex(unsigned int addr, int logical_w, int logical_h)
  * UpdateViewExtend(), the one point in the frame where no queued draw holds a
  * slot texture yet.
  */
+int FindLatestCaptureSlot(unsigned int addr, int logical_w = 0)
+{
+    int latest = -1;
+    for (size_t i = 0; i < g_capture_slots.size(); i++)
+    {
+        const CaptureSlot &slot = g_capture_slots[i];
+        if (slot.addr == addr && slot.texture != nullptr && slot.valid &&
+            (logical_w == 0 || slot.logical_w == logical_w) &&
+            (latest < 0 || slot.capture_order >
+                               g_capture_slots[(size_t)latest].capture_order))
+        {
+            latest = (int)i;
+        }
+    }
+    return latest;
+}
+
 int DeclareCaptureSlot(unsigned int addr, int logical_w, int logical_h)
 {
     if (logical_w <= 0 || logical_h <= 0)
@@ -11625,8 +11644,9 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
                 target.store_op = SDL_GPU_STOREOP_RESOLVE;
             }
 
-            SDL_GPURenderPass *pass =
-                SDL_BeginGPURenderPass(cmd, &target, 1, depth_ptr);
+            SDL_GPURenderPass *pass = nullptr;
+            if (segment_end > segment_start || next_point >= capture_count)
+                pass = SDL_BeginGPURenderPass(cmd, &target, 1, depth_ptr);
             if (pass != nullptr)
             {
                 DrawQueuedSprites(pass, cmd, render_width, render_height,
@@ -11634,15 +11654,13 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
                                   animated_vertices_ready, segment_start,
                                   segment_end);
                 SDL_EndGPURenderPass(pass);
-            }
-
-            /* Everything after the first pass adds to the frame rather than
-             * restarting it. */
-            target.load_op = SDL_GPU_LOADOP_LOAD;
-            if (depth_ptr != nullptr)
-            {
-                depth.load_op = SDL_GPU_LOADOP_LOAD;
-                depth.stencil_load_op = SDL_GPU_LOADOP_LOAD;
+                // A capture alone must not consume the new frame's clear.
+                target.load_op = SDL_GPU_LOADOP_LOAD;
+                if (depth_ptr != nullptr)
+                {
+                    depth.load_op = SDL_GPU_LOADOP_LOAD;
+                    depth.stencil_load_op = SDL_GPU_LOADOP_LOAD;
+                }
             }
 
             /* Every capture registered at this break.  Consuming at least one
@@ -14669,16 +14687,7 @@ void MioPan_RendererCaptureGsBlock(unsigned int dst_addr,
     int src_slot = -1;
     if (src_addr != kCaptureSrcLive)
     {
-        for (size_t i = 0; i < g_capture_slots.size(); i++)
-        {
-            if (g_capture_slots[i].addr == src_addr &&
-                g_capture_slots[i].texture != nullptr &&
-                g_capture_slots[i].valid)
-            {
-                src_slot = (int)i;
-                break;
-            }
-        }
+        src_slot = FindLatestCaptureSlot(src_addr);
         if (src_slot < 0)
         {
             return;
@@ -14695,6 +14704,7 @@ void MioPan_RendererCaptureGsBlock(unsigned int dst_addr,
      * slot copy, the source's validity were checked above, so the recorded
      * copy cannot fail after this point. */
     g_capture_slots[(size_t)dst_slot].valid = true;
+    g_capture_slots[(size_t)dst_slot].capture_order = ++g_capture_order;
 }
 
 /*
@@ -15093,16 +15103,7 @@ int CaptureSlotForTex0(const sceGsTex0 *tex0)
         return -1;
     }
 
-    for (size_t i = 0; i < g_capture_slots.size(); i++)
-    {
-        const CaptureSlot &slot = g_capture_slots[i];
-        if (slot.addr == tex0->TBP0 && slot.texture != nullptr && slot.valid &&
-            slot.logical_w == (int)tex0->TBW * 64)
-        {
-            return (int)i;
-        }
-    }
-    return -1;
+    return FindLatestCaptureSlot((unsigned int)tex0->TBP0, (int)tex0->TBW * 64);
 }
 
 /* GS CLAMP with WMS = WMT = CLAMP, which is CopySprDToSpr2()'s default and
@@ -15443,6 +15444,7 @@ static void DrawTexturedQuadImpl(const sceGsTex0 *tex0,
              * RecordGsCapture() to set it left every draw in the slot's first
              * frame seeing valid == false. */
             g_capture_slots[(size_t)slot_index].valid = true;
+            g_capture_slots[(size_t)slot_index].capture_order = ++g_capture_order;
         }
         else
         {
@@ -15980,6 +15982,7 @@ void MioPan_RendererDrawFinderMask(int alpha)
      * capture precedes this draw in the ordered stream, so by the time the GPU
      * reaches the draw the slot holds the frame. */
     g_capture_slots[(size_t)slot_index].valid = true;
+    g_capture_slots[(size_t)slot_index].capture_order = ++g_capture_order;
 
     DrawCommand &command = g_draws.back();
     command.finder_mask = true;
