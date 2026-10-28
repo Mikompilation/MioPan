@@ -183,7 +183,7 @@ typedef struct MioPan_ConfigDeveloper
 #define MIOPAN_TITLE_CHANGE_PASS      0     /* another scene after `passes`    */
 #define MIOPAN_TITLE_CHANGE_VISIT     1     /* another scene per title visit   */
 
-#define MIOPAN_TITLE_SCENE_MAX        16
+#define MIOPAN_TITLE_SCENE_MAX        32
 #define MIOPAN_TITLE_NAME_MAX         32
 
 typedef struct MioPan_ConfigTitleScene
@@ -219,6 +219,13 @@ typedef struct MioPan_ConfigTitle
 
 /* A scene as a fresh one starts: room 40, framed by itself on load. */
 void MioPan_ConfigTitleSceneDefault(MioPan_ConfigTitleScene *scene);
+
+/* The built-in scenes -- the list a miopan.ini without scenes of its own
+ * gets -- for a list that has its own.  Missing counts the ones it does not
+ * have (a scene in the same room under the same name counts as had); Add
+ * appends them, up to MIOPAN_TITLE_SCENE_MAX, and returns how many went in. */
+int MioPan_ConfigTitleBuiltinMissing(void);
+int MioPan_ConfigTitleAddBuiltin(void);
 
 /*
  * The title settings as text, exactly as miopan.ini carries them, for the

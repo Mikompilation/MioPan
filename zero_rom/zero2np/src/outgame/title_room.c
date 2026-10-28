@@ -70,6 +70,7 @@
 #include "../graphics/graph3d/g3dLight.h"       // G3DLIGHTTYPE_FORCE_DWORD
 #include "../graphics/graph3d/gra3d.h"          // camera / gra3dDraw
 #include "../graphics/graph3d/gra3dSGDData.h"   // sgdGetBoundingBox
+#include "../graphics/motion/accessory.h"       // acsInitRopeWork
 #include "../graphics/obj_draw_ctrl.h"          // obj_draw_ctrl
 #include "../ingame/ingame.h"                   // SetIngameListnerInfo
 #include "../ingame/map/MapDoor.h"              // MapDoorRelease
@@ -446,7 +447,15 @@ static void TitleRoomBeginLoad(void)
 
 /* Drop what is resident.  Safe mid-load: a buffer whose registration files
  * have not landed yet has nothing to delete, and the loads still in flight
- * finish into memory the next MapLoadInit() writes over. */
+ * finish into memory the next MapLoadInit() writes over.
+ *
+ * The ropes -- hanging cloths, bell cords, anything MapObjReg.c registers
+ * with acsRopeSetWork() -- are let go by hand.  MapDrawDeleteRoom() clears
+ * the room's reg_id[] before MapObjBornDelete() reads it to find them, so a
+ * room change never frees its rope slots: in a game IngameWrkInit() sweeps
+ * them on every way in, but the title changes rooms on its own, and the
+ * tenth rope overran rope_spring[]'s nine.  Nothing else on the title holds
+ * one. */
 static void TitleRoomRelease(void)
 {
     if (title_room.load != TR_IDLE)
@@ -457,6 +466,7 @@ static void TitleRoomRelease(void)
         MapDoorRelease();
         EffectSndEnd();
         MapObjItemOn();
+        acsInitRopeWork();
     }
 
     title_room.load = TR_IDLE;

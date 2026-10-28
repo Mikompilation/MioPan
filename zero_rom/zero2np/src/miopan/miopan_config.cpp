@@ -16,6 +16,19 @@
 #include <string>
 #include <vector>
 
+/* One built-in title scene: a name, a room, and the eye, target and field of
+ * view at each end.  The rest is the same for all of them -- in the rotation,
+ * placed by hand, thirty seconds from A to B and four at each end, there and
+ * back. */
+#define TITLE_SCENE(name, room, ax, ay, az, atx, aty, atz, afov,             \
+                    bx, by, bz, btx, bty, btz, bfov)                          \
+    {                                                                         \
+        name, 1, room, 1,                                                     \
+        { ax, ay, az }, { atx, aty, atz }, afov,                              \
+        { bx, by, bz }, { btx, bty, btz }, bfov,                              \
+        30.0f, 4.0f, MIOPAN_TITLE_MOTION_PINGPONG, MIOPAN_TITLE_EASING_SMOOTH, \
+    }
+
 /* Defaults.  The window size is the one EnsureRenderer() used before this
  * existed -- twice the ROM's 640x448 -- so a first run with no file behaves
  * exactly as the port did before settings were persisted at all. */
@@ -137,33 +150,133 @@ MioPan_Config miopan_config = {
         /* Off: the room is the thing to look at while the title sits idle,
          * and the movie would take it away every fifteen seconds. */
         /* .attract_movie     = */ 0,
-        /* .scene_count       = */ 1,
+        /* .scene_count       = */ 21,
         /* .scenes            = */ {
-            {
-                /* RKS00, the lantern courtyard outside the Kurosawa house: a
-                 * slow truck across it, both ends looking at the same point
-                 * among the lanterns, so the shot turns as it travels.  Chosen
-                 * by eye in the running game; at z -2600 the path clears the
-                 * railing along the south side, which a post of crosses the
-                 * lens just past x 11280. */
-                /* .name              = */ "Lantern courtyard",
-                /* .enabled           = */ 1,
-                /* .room              = */ 40,
-                /* .camera_set        = */ 1,
-                /* .a_eye             = */ { 8500.0f, -900.0f, -2600.0f },
-                /* .a_target          = */ { 9874.0f, -750.0f, 581.0f },
-                /* .a_fov             = */ 50.0f,
-                /* .b_eye             = */ { 11200.0f, -900.0f, -2600.0f },
-                /* .b_target          = */ { 9874.0f, -750.0f, 581.0f },
-                /* .b_fov             = */ 50.0f,
-                /* .travel_seconds    = */ 30.0f,
-                /* .hold_seconds      = */ 4.0f,
-                /* .motion            = */ MIOPAN_TITLE_MOTION_PINGPONG,
-                /* .easing            = */ MIOPAN_TITLE_EASING_SMOOTH,
-            },
+            /* Every scene but the courtyard starts from one of the room's
+             * own map cameras -- the shots the game frames Mio with -- and
+             * moves a little way from there.  Each path was rendered at nine
+             * points along it, at 16:9 and at 5120x1417, and nothing crosses
+             * the lens at either: no post, wall, net or lantern passes in
+             * front of it. */
+
+            /* RKS00, the lantern courtyard outside the Kurosawa house: a slow
+             * truck across it, both ends looking at the same point among the
+             * lanterns, so the shot turns as it travels.  At eye height the
+             * lanterns along the path passed right by the lens on a wide
+             * window; at y -2700 the camera goes over them. */
+            TITLE_SCENE("Lantern courtyard", 40,
+                         8500.0f, -2700.0f, -2600.0f,   9874.0f, -800.0f,   581.0f,  50.0f,
+                        11200.0f, -2700.0f, -2600.0f,   9874.0f, -800.0f,   581.0f,  50.0f),
+
+            /* The village. */
+
+            /* RY04: in towards a shrine gate between two stone lanterns. */
+            TITLE_SCENE("Shrine gate", 4,
+                        18040.0f,  4960.0f, 35511.0f,  18985.0f,  4088.0f, 39038.0f,  44.7f,
+                        18368.0f,  4658.0f, 36733.0f,  18985.0f,  4088.0f, 39038.0f,  44.7f),
+            /* RY06: down from above the torii onto the stone stairs, the
+             * lanterns and the jizo along them. */
+            TITLE_SCENE("Torii stairs", 6,
+                        -5818.0f,  1235.0f, 27649.0f,  -6471.0f,  1488.0f, 29573.0f,  47.0f,
+                        -5818.0f,  1835.0f, 27649.0f,  -6471.0f,  1488.0f, 29573.0f,  47.0f),
+            /* RY08: between two of the map's own cameras on the steps up
+             * through the stone lanterns. */
+            TITLE_SCENE("Lantern steps", 8,
+                        -6101.0f, -1164.0f, 33311.0f,  -7436.0f, -1344.0f, 34861.0f,  49.3f,
+                        -6597.0f,  -864.0f, 33518.0f,  -7812.0f, -1239.0f, 35128.0f,  46.4f),
+            /* RY09: in among the trees towards the wooden grave markers. */
+            TITLE_SCENE("Grave markers", 9,
+                        -10729.0f,  778.0f, 14855.0f, -11349.0f,   767.0f, 16502.0f,  56.7f,
+                        -10975.0f,  774.0f, 15510.0f, -11349.0f,   767.0f, 16502.0f,  56.7f),
+            /* RY11: in towards a great gate lit by its two lanterns. */
+            TITLE_SCENE("Lantern gate", 11,
+                        19304.0f,  4487.0f, 53810.0f,  18845.0f,  4344.0f, 56118.0f,  39.0f,
+                        19071.0f,  4414.0f, 54985.0f,  18845.0f,  4344.0f, 56118.0f,  39.0f),
+            /* RY13: the overlook's braziers against the dusk, through the
+             * frame of a broken torii. */
+            TITLE_SCENE("Braziers at dusk", 65,
+                        -1317.0f, -3564.0f, 11871.0f,   1005.0f, -3723.0f, 11998.0f,  44.1f,
+                         -918.0f, -3591.0f, 11892.0f,   1005.0f, -3723.0f, 11998.0f,  44.1f),
+
+            /* The Osaka house. */
+
+            /* ROS00: along a lattice with red paper lanterns behind it. */
+            TITLE_SCENE("Red lanterns", 13,
+                        10279.0f,  -713.0f,  6012.0f,  10288.0f,  -693.0f,  4174.0f,  58.8f,
+                         9479.0f,  -713.0f,  6008.0f,   9488.0f,  -693.0f,  4170.0f,  58.8f),
+            /* ROS02: down past a mosquito net hung over the bedding. */
+            TITLE_SCENE("Mosquito net", 15,
+                         4833.0f, -1546.0f,  4964.0f,   5119.0f,  -200.0f,  3249.0f,  40.1f,
+                         4833.0f,  -946.0f,  4964.0f,   5119.0f,  -200.0f,  3249.0f,  40.1f),
+
+            /* The Tachibana house. */
+
+            /* RTB04: in towards the altar shelves and their candles. */
+            TITLE_SCENE("Candle altar", 23,
+                        20091.0f,  -458.0f,  6628.0f,  20839.0f,  -915.0f,  9365.0f,  48.7f,
+                        20325.0f,  -601.0f,  7485.0f,  20839.0f,  -915.0f,  9365.0f,  48.7f),
+            /* RTB06: two corners of the room's own four-corner camera, across
+             * the shapes under sheets and the candles between them. */
+            TITLE_SCENE("Draped room", 25,
+                        19785.0f, -1214.0f, 12864.0f,  21140.0f,  -778.0f, 11610.0f,  45.3f,
+                        21472.0f, -1061.0f, 13207.0f,  20852.0f,  -880.0f, 11468.0f,  52.7f),
+
+            /* The Kiryu house. */
+
+            /* RRY04: in towards the doll heads and kimono on their stands. */
+            TITLE_SCENE("Doll room", 34,
+                         3947.0f,  -865.0f, 13962.0f,   5235.0f,  -710.0f, 13021.0f,  50.0f,
+                         4510.0f,  -798.0f, 13551.0f,   5235.0f,  -710.0f, 13021.0f,  50.0f),
+            /* RRY05: in towards the film projector. */
+            TITLE_SCENE("Projector", 35,
+                         8469.0f,  -875.0f, 10953.0f,   7149.0f,  -500.0f, 12158.0f,  53.9f,
+                         8108.0f,  -772.0f, 11283.0f,   7149.0f,  -500.0f, 12158.0f,  53.9f),
+            /* RRY06: down onto the red-draped tiers of dolls and candles. */
+            TITLE_SCENE("Doll altar", 36,
+                         9998.0f, -1642.0f, 12946.0f,   8796.0f,  -573.0f, 14295.0f,  44.7f,
+                         9998.0f, -1092.0f, 12946.0f,   8796.0f,  -573.0f, 14295.0f,  44.7f),
+
+            /* The Kurosawa house. */
+
+            /* RKS01: in towards a round window full of moonlight. */
+            TITLE_SCENE("Moon window", 41,
+                         8893.0f, -1243.0f,  6816.0f,   8916.0f, -1420.0f,  8528.0f,  47.0f,
+                         8905.0f, -1336.0f,  7711.0f,   8916.0f, -1420.0f,  8528.0f,  47.0f),
+            /* RKS06: a little way into the candle-lit library.  Further in,
+             * a shelf crowds the left of a wide window. */
+            TITLE_SCENE("Library", 46,
+                        21957.0f, -1251.0f,  -736.0f,  20551.0f, -1456.0f,  -983.0f,  41.3f,
+                        21616.0f, -1301.0f,  -796.0f,  20551.0f, -1456.0f,  -983.0f,  41.3f),
+            /* RKS07: down the aisle of glowing memorial tablets to the altar. */
+            TITLE_SCENE("Memorial tablets", 47,
+                        14016.0f, -1515.0f,  4931.0f,  14311.0f, -1750.0f,  7855.0f,  60.2f,
+                        14136.0f, -1611.0f,  6121.0f,  14311.0f, -1750.0f,  7855.0f,  60.2f),
+            /* RKS12: in towards the tiers of hina dolls and their lanterns. */
+            TITLE_SCENE("Hina dolls", 52,
+                         5300.0f, -4109.0f,  6020.0f,   5911.0f, -3408.0f,  8298.0f,  49.3f,
+                         5548.0f, -3824.0f,  6946.0f,   5911.0f, -3408.0f,  8298.0f,  49.3f),
+            /* RKH00: down the hall to the offering table. */
+            TITLE_SCENE("Offering hall", 55,
+                         2070.0f,  -627.0f,  1714.0f,   1996.0f,  -334.0f,  5069.0f,  53.3f,
+                         2044.0f,  -523.0f,  2909.0f,   1996.0f,  -334.0f,  5069.0f,  53.3f),
+
+            /* Underground. */
+
+            /* RKC00: across the cave shrine, its candles and red spider
+             * lilies.  The map camera at the far end puts a jizo against the
+             * lens of a wide window, so the path stops short of it. */
+            TITLE_SCENE("Cave shrine", 56,
+                         1399.0f,  -636.0f,  2331.0f,   2351.0f,  -671.0f,  4158.0f,  47.0f,
+                         2526.0f,  -636.0f,  2333.0f,   2254.0f,  -671.0f,  4114.0f,  47.0f),
+            /* RCH06: down over the field of candles and the seal. */
+            TITLE_SCENE("Candle field", 64,
+                         -547.0f, -1650.0f,  3367.0f,   -706.0f,  -496.0f,  1268.0f,  41.3f,
+                         -547.0f,  -950.0f,  3367.0f,   -706.0f,  -496.0f,  1268.0f,  41.3f),
         },
     },
 };
+
+#undef TITLE_SCENE
 
 namespace
 {
@@ -1161,6 +1274,27 @@ const MioPan_ConfigTitleScene kTitleSceneDefault = {
     /* .easing         = */ MIOPAN_TITLE_EASING_SMOOTH,
 };
 
+/* The scenes this build ships with: the defaults' list, kept by
+ * ConfigLoadOnce() before the file replaces it.  A miopan.ini that has scenes
+ * of its own never sees the defaults otherwise, and the overlay offers these
+ * back to it. */
+MioPan_ConfigTitle g_title_builtin;
+
+/* A scene counts as already in the list when one in the same room has its
+ * name -- its camera may have been moved since. */
+bool TitleHasScene(const MioPan_ConfigTitle &t, const MioPan_ConfigTitleScene &s)
+{
+    for (int i = 0; i < t.scene_count; i++)
+    {
+        if (t.scenes[i].room == s.room &&
+            SDL_strcasecmp(t.scenes[i].name, s.name) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Nothing between this file and outgame/title_room.c clamps these, and a room
  * number off the end of the table would load whatever file sits there.  The
  * room list itself is the game's, so only its length is checked here;
@@ -1443,6 +1577,8 @@ const char *MioPan_ConfigPath(void)
 
 static void ConfigLoadOnce(void)
 {
+    g_title_builtin = miopan_config.title;
+
     const char *path = MioPan_ConfigPath();
     if (path == nullptr)
     {
@@ -1979,6 +2115,32 @@ int MioPan_ConfigSetDebugMenuEnabled(int enabled)
 void MioPan_ConfigTitleSceneDefault(MioPan_ConfigTitleScene *scene)
 {
     *scene = kTitleSceneDefault;
+}
+
+int MioPan_ConfigTitleBuiltinMissing(void)
+{
+    int missing = 0;
+    for (int i = 0; i < g_title_builtin.scene_count; i++)
+    {
+        missing += TitleHasScene(miopan_config.title, g_title_builtin.scenes[i]) ? 0 : 1;
+    }
+    return missing;
+}
+
+int MioPan_ConfigTitleAddBuiltin(void)
+{
+    MioPan_ConfigTitle &t = miopan_config.title;
+    int added = 0;
+
+    for (int i = 0; i < g_title_builtin.scene_count && t.scene_count < MIOPAN_TITLE_SCENE_MAX; i++)
+    {
+        if (!TitleHasScene(t, g_title_builtin.scenes[i]))
+        {
+            t.scenes[t.scene_count++] = g_title_builtin.scenes[i];
+            added++;
+        }
+    }
+    return added;
 }
 
 int MioPan_ConfigTitleText(char *buf, int size)

@@ -232,6 +232,26 @@ void DrawSceneList()
     ImGui::EndDisabled();
     ImGui::SameLine();
 
+    const int missing = MioPan_ConfigTitleBuiltinMissing();
+    ImGui::BeginDisabled(full || missing == 0);
+    if (ImGui::Button("Add built-in##scene_builtin"))
+    {
+        const int before = t.scene_count;
+        const int added = MioPan_ConfigTitleAddBuiltin();
+        char note[96];
+
+        std::snprintf(note, sizeof(note), "Added %d built-in scene%s.", added,
+                      added == 1 ? "" : "s");
+        ClipNote(note);
+        Select(before < t.scene_count ? before : t.scene_count - 1);
+    }
+    Tooltip(missing == 0 ? "Every scene the game ships with is already in the list."
+            : full       ? "The list is full.  Delete a scene to make room."
+                         : "The scenes the game ships with that this list does not\n"
+                           "have yet, added after these.");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+
     ImGui::BeginDisabled(t.scene_count <= 1);
     if (ImGui::Button("Delete##scene_delete"))
     {
