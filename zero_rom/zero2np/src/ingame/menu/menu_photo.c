@@ -126,6 +126,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdio.h>                              /* printf                     */
 
@@ -416,8 +417,29 @@ void MenuPhoto(void)                                                    /* 309 *
  *
  * uncompress_flg is raised by every arm that moved the cursor; the tail
  * clears photo_flg so MenuPhotoLargePhotoDisp() files a fresh decompress. */
+/* PORT: the mouse.  The 2 x 8 thumbnail grid down the left (columns at
+ * MENU_PHOTO_S_X and _X2, rows MENU_PHOTO_S_STEP apart), stepped to the pad's
+ * way so the large picture follows; a click opens the shot's menu, as SQUARE
+ * does. */
+static void MenuPhotoMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekGrid(menu_photo_ctrl.csr_yoko, menu_photo_ctrl.csr_tate,
+                             (float)MENU_PHOTO_S_X, (float)MENU_PHOTO_S_Y - 2.0f,
+                             (float)(MENU_PHOTO_S_X2 - MENU_PHOTO_S_X) - 2.0f,
+                             (float)MENU_PHOTO_S_STEP,
+                             (float)(MENU_PHOTO_S_X2 - MENU_PHOTO_S_X),
+                             (float)MENU_PHOTO_S_STEP, MENU_PHOTO_CSR_YOKO_NUM,
+                             MENU_PHOTO_CSR_TATE_NUM, MIOPAN_MENU_SQUARE);
+}
+
 static void MenuPhotoPad(void)                                          /* 372 */
 {
+    MenuPhotoMouse();
+
     int    sel_num;
     u_char uncompress_flg;
 
@@ -528,6 +550,8 @@ static void MenuPhotoPad(void)                                          /* 372 *
  * close. */
 static void MenuNonPhotoPad(void)                                       /* 474 */
 {
+    MioPan_MenuMouseBack();   /* PORT: the only way is back */
+
     if (*paddat[PAD_ACT_CANCEL] == 1) {                                 /* 478 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 479 */
@@ -546,8 +570,23 @@ static void MenuPhotoOutReq(void)                                       /* 490 *
 /* The per-photo pop-up.  Backing out does not close it here: it starts the
  * close fade at its far end (timer 10) and MenuPhotoSubMenuDisp() runs it
  * down and puts `step` back. */
+/* PORT: the mouse.  The shot's menu: three rows 35 apart from y 96 on the
+ * right (menu_photo 195..200). */
+static void MenuPhotoSubMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    menu_photo_ctrl.sub_csr = MioPan_MenuMouseList(
+        menu_photo_ctrl.sub_csr, 453.0f, 94.0f, 164.0f, 35.0f, 0.0f, 35.0f,
+        MENU_PHOTO_SUB_NUM, 0, 0);
+}
+
 static void MenuPhotoSubPad(void)                                       /* 502 */
 {
+    MenuPhotoSubMouse();
+
     if ((pad[0].rpt & PAD_RPT_UP) || GetPadAnalogRpt(PAD_ANALOG_UP)) {  /* 506 */
         SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 507 */
@@ -608,8 +647,24 @@ static void MenuPhotoDelPad(void)                                       /* 533 *
 
 /* The sort menu.  Every cursor move clears sort_flg, so a row always sorts
  * one way the first time it is picked and the other way the second. */
+/* PORT: the mouse.  The sort menu: three rows 35 apart from y 131
+ * (menu_photo 209..214), stepped to the pad's way because a move is what
+ * resets the sort direction. */
+static void MenuPhotoSortMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(menu_photo_ctrl.sort_csr, 469.0f, 129.0f, 148.0f,
+                             35.0f, 0.0f, 35.0f, MENU_PHOTO_SORT_NUM,
+                             MIOPAN_MENU_UP, MIOPAN_MENU_DOWN);
+}
+
 static void MenuPhotoSortPad(void)                                      /* 562 */
 {
+    MenuPhotoSortMouse();
+
     if ((pad[0].rpt & PAD_RPT_UP) || GetPadAnalogRpt(PAD_ANALOG_UP)) {  /* 566 */
         SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 567 */

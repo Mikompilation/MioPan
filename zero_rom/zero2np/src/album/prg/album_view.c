@@ -72,6 +72,7 @@
 #include "../../system/eeiop/fileload.h"            // FileLoadReqEE / FileLoadIsEnd2
 #include "../../system/os/system.h"                 // GetLanguage / SystemBankPlay
 #include "../../system/pad/pad.h"                   // GetPadAnalogRpt
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* ALBUM_VIEW_CTRL::step. */
 #define ALBUM_VIEW_STEP_INIT        0   /* seed the fade, request the pak  */
@@ -305,8 +306,23 @@ int AlbumViewMain(void)                                                 /* 249 *
 /* LEFT / RIGHT walk the list, TRIANGLE leaves.  Both walks are gated on the
  * album holding more than one photo -- not on disp_photo_num, which is what
  * the modulo below divides by. */
+/* PORT: the mouse.  One picture at a time: a click on the left half of the
+ * screen goes back a picture and on the right half on, as LEFT and RIGHT do;
+ * the wheel walks them too. */
+static void AlbumViewTopMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(-1000.0f, 0.0f, 1320.0f, 448.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(320.0f, 0.0f, 1320.0f, 448.0f, MIOPAN_MENU_RIGHT);
+}
+
 static void AlbumViewTopPad(void)                                       /* 294 */
 {
+    AlbumViewTopMouse();
+
     int current_album;
 
     current_album = GetCurrentAlbum();                                  /* 299 */

@@ -110,6 +110,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                             /* memset                     */
 
@@ -404,8 +405,30 @@ static void MenuMemoModeMoveReq(u_char next_mode)                       /* 374 *
     menu_memo_disp.sub_anim_timer = 0;                                  /* 381 */
 }
 
+/* PORT: the mouse.  Up to eight rows MENU_MEMO_ROW_STEP apart under the
+ * memo frames (MenuMemoListDisp), stepped to the pad's way. */
+static void MenuMemoMouse(void)
+{
+    int disp_num = menu_memo_ctrl.ref_ctrl.data_num;
+
+    if (MENU_MEMO_DISP_NUM < disp_num)
+    {
+        disp_num = MENU_MEMO_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(menu_wrk.cursor, MENU_MEMO_ROW_X,
+                             MENU_MEMO_ROW_TOP - 2.0f, MENU_MEMO_ROW_W,
+                             MENU_MEMO_ROW_STEP - 1.0f, 0.0f, MENU_MEMO_ROW_STEP,
+                             disp_num, MIOPAN_MENU_UP, MIOPAN_MENU_DOWN);
+}
+
 static void MenuMemoPad(void)                                           /* 389 */
 {
+    MenuMemoMouse();
+
     int disp_num;
     int memo_label;
 
@@ -484,8 +507,22 @@ static void MenuMemoOutReq(void)                                        /* 456 *
 /* The reader's pad.  Right / R1 / CROSS turn forward and left / L1 back, both
  * wrapping round the ends; the cue only fires if the page actually moved,
  * which is what latching page_num up front is for. */
+/* PORT: the mouse.  The memo fills the screen; the left half turns back a
+ * page and the right half forward, as LEFT and CROSS do. */
+static void MenuMemoReadMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(-1000.0f, -1000.0f, 1320.0f, 3000.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(320.0f, -1000.0f, 1320.0f, 3000.0f, MIOPAN_MENU_CROSS);
+}
+
 static void MenuMemoContentDispPad(void)                                /* 470 */
 {
+    MenuMemoReadMouse();
+
     int memo_label;
     int msg_id_data;
     int page_num;
@@ -540,6 +577,8 @@ static void MenuMemoContentDispPad(void)                                /* 470 *
 /* With nothing collected there is nowhere to go but back. */
 static void MenuMemoNotHavePad(void)                                    /* 524 */
 {
+    MioPan_MenuMouseBack();   /* PORT: the only way is back */
+
     if (*paddat[1] == 1) {                                              /* 528 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 529 */

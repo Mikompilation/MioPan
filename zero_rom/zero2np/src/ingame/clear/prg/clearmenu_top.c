@@ -56,6 +56,7 @@
 #include "../../../system/eeiop/snd3d.h"            /* SND_3D_SET             */
 #include "../../../system/os/system.h"              /* GetLanguage / SystemBankPlay */
 #include "../../../system/pad/pad.h"                /* pad / paddat           */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* The message group every clear-menu string comes out of.  Bank 0x24 is
  * shared with game_result_top.o, which draws its unlock lines from ids 6..17
@@ -252,8 +253,24 @@ void ClearMenuTopMain(void)                                             /* 223 *
  * This is the whole of the difference from savepoint_top.o: there, CROSS
  * switches on csr and sends "leave" straight to SavePointEndReq(); here every
  * row goes through the confirm window. */
+/* PORT: the mouse.  The three choices, 30 apart under the cursor's frame
+ * (ClearMenuTopCsrDisp: x 184, 272 wide, from y 142); the cursor is set
+ * straight, as the pad does. */
+static void ClearMenuTopMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    clear_menu_top_ctrl.csr = (char)MioPan_MenuMouseList(
+        clear_menu_top_ctrl.csr, 184.0f, 140.0f, 272.0f, 30.0f, 0.0f, 30.0f,
+        CLEAR_MENU_TOP_CSR_NUM, 0, 0);
+}
+
 static void ClearMenuTopPad(void)                                       /* 283 */
 {
+    ClearMenuTopMouse();
+
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0)) {                  /* 287 */
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 288 */
 

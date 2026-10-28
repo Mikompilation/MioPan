@@ -32,6 +32,7 @@
 #include "../system/eeiop/stream_auto.h"    // StreamAutoPlay / AllStop
 #include "../system/os/system.h"            // GetLanguage / GetPALMode
 #include "../system/pad/pad.h"              // paddat
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../system/pad/vib_manage.h"       // SetVibrate
 
 /* Per-language mission paks. */
@@ -208,6 +209,8 @@ static int MisStSubLoadWait(void)
  * short of the 0x5f the state ends on -- so a skip still fades out. */
 static int MisStSubExec(void)
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click is the CROSS that skips the intro */
+
     int iTime;
 
     iTime = MisDispGetTime();                                           /* 223 */
@@ -433,8 +436,20 @@ int MisEnSubEnd(void)
     return -1;                                                          /* 460 */
 }
 
+/* PORT: the mouse.  The result screens close on TRIANGLE; a click anywhere
+ * is it (right click already is, as everywhere). */
+static void MisEnMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) != 0 && MioPan_MenuMouseClicked() != 0)
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_TRIANGLE);
+    }
+}
+
 int MisEnSubMiss(void)
 {
+    MisEnMouse();
+
     SpCmnDrawScreen(MisEnScreenPtr, MIS_SCREEN_ADDR);                   /* 467 */
     MisEnSubAllDisp(MisAnimTime);                                       /* 470 */
 
@@ -450,6 +465,8 @@ int MisEnSubMiss(void)
  * there is nothing to cross-fade with yet. */
 int MisEnSubExec(void)
 {
+    MisEnMouse();
+
     SpCmnDrawScreen(MisEnScreenPtr, MIS_SCREEN_ADDR);                   /* 485 */
     MisDispClear(0x80, MisClearTime, MisTotalScore, MisBestShot,
                  MisEnTexPtr, MisEnClearChrTexPtr);                     /* 490 */
@@ -483,6 +500,8 @@ int MisEnSubExec(void)
  * comes second. */
 int MisEnSubAllClear(void)
 {
+    MisEnMouse();
+
     SpCmnDrawScreen(MisEnScreenPtr, MIS_SCREEN_ADDR);                   /* 527 */
     MisEnSubAllDisp(MisAnimTime);                                       /* 530 */
 
@@ -505,6 +524,8 @@ int MisEnSubAllClear(void)
 
 int MisEnSubAllClearS(void)
 {
+    MisEnMouse();
+
     SpCmnDrawScreen(MisEnScreenPtr, MIS_SCREEN_ADDR);                   /* 553 */
     MisEnSubAllDisp(MisAnimTime);                                       /* 556 */
 

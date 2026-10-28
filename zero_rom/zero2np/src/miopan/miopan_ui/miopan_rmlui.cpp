@@ -1007,53 +1007,12 @@ void DispatchEvent(const SDL_Event &event)
     }
 }
 
-/* Any key, mouse button or pad button down.  Read from SDL's state rather than
- * counted from events, so a release that happened while the window was in the
- * background cannot leave it stuck. */
-bool AnyControlHeld()
-{
-    int key_count = 0;
-    const bool *keys = SDL_GetKeyboardState(&key_count);
-    for (int i = 0; keys != nullptr && i < key_count; i++)
-    {
-        if (keys[i])
-        {
-            return true;
-        }
-    }
-    if (SDL_GetMouseState(nullptr, nullptr) != 0)
-    {
-        return true;
-    }
-
-    bool held = false;
-    int pad_count = 0;
-    SDL_JoystickID *pads = SDL_GetGamepads(&pad_count);
-    for (int i = 0; pads != nullptr && i < pad_count && !held; i++)
-    {
-        /* Only pads something has opened -- the input layer's -- report. */
-        SDL_Gamepad *pad = SDL_GetGamepadFromID(pads[i]);
-        for (int button = 0; pad != nullptr && button < SDL_GAMEPAD_BUTTON_COUNT;
-             button++)
-        {
-            if (SDL_GetGamepadButton(pad, (SDL_GamepadButton)button))
-            {
-                held = true;
-                break;
-            }
-        }
-    }
-    SDL_free(pads);
-    return held;
-}
-
-/* The game reads nothing while a document is up, and goes on reading nothing
- * until every control is let go: a menu closes on a press, and the game would
- * otherwise see that same press the moment it was handed the pad back. */
+/* The game reads nothing while a document is up.  A menu closes on a press,
+ * and the input layer keeps that press from the game until it is let go
+ * (MioPan_InputSetMenuSuppressed), so the hold ends with the document. */
 void UpdateControlHold()
 {
-    const bool holding =
-        MioPanRml::WantsInput() || (g_rml.holding_controls && AnyControlHeld());
+    const bool holding = MioPanRml::WantsInput();
     if (holding != g_rml.holding_controls)
     {
         g_rml.holding_controls = holding;

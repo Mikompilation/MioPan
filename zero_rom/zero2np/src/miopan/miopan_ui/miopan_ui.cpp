@@ -8,6 +8,7 @@
 #include "../rendering/miopan_renderer.h"
 #include "../miopan_config.h"
 #include "../io/miopan_input.h"
+#include "../io/miopan_menu_mouse.h"
 #include "../io/miopan_paths.h"
 #include "iop_voice.h"
 
@@ -1413,12 +1414,14 @@ void UpdateUiMouse()
 
     /* A cursor left sitting over the game is hidden until the mouse moves.
      * Fullscreen with the bar down, it is hidden moving too: there is no other
-     * window to point at, and the bar coming up is what brings it back.
+     * window to point at, and the bar coming up is what brings it back --
+     * unless one of the game's menus has the mouse, which is something to
+     * point at.
      * Through ImGui rather than SDL_HideCursor(), because the SDL backend
      * re-shows the cursor every frame for whatever shape ImGui asks for. */
     const bool fullscreen_play =
         MioPan_RendererGetWindowMode() == MIOPAN_WINDOW_MODE_BORDERLESS &&
-        !g_show_main_menu_bar;
+        !g_show_main_menu_bar && MioPan_MenuMouseClaimed() == 0;
     if (!g_mouse_claimed && !g_ui_mouse_busy && !g_pointer_over_ui &&
         (fullscreen_play || MioPan_InputCursorIdle()))
     {

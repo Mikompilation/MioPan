@@ -65,6 +65,7 @@
 #include "../../../system/eeiop/snd3d.h"            /* SND_3D_SET             */
 #include "../../../system/os/system.h"              /* SystemBankPlay         */
 #include "../../../system/pad/pad.h"                /* paddat                 */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Constants.  The ROM writes all of these as literals; the names are the
@@ -465,6 +466,8 @@ int GameResultTopMain(void)                                             /* 333 *
  * SystemBankPlay() tail, so only the second one's line number survives. */
 static int GameResultTopPad(void)                                       /* 410 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     int res;
 
     res = 0;

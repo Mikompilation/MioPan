@@ -52,6 +52,7 @@
 #include "../../../system/eeiop/sndbank.h"          /* SndBankPlay            */
 #include "../../../system/os/system.h"              /* GetLanguage            */
 #include "../../../system/pad/pad.h"                /* paddat/GetPadAnalogRpt */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Module state
@@ -361,6 +362,8 @@ static int GetKazaPuzzle2PinWheelWingColor(int pinwheel_label, int wing_label) /
 
 static void KazaPuzzle2StartMsgPad(void)                                /* 575 */
 {                                                                       /* 576 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 580 */
         KazaPuzzle2ReqNextSubStep(1);                                   /* 581 */
     } else if (*paddat[1] == 1) {                                       /* 584 */
@@ -368,8 +371,53 @@ static void KazaPuzzle2StartMsgPad(void)                                /* 575 *
     }
 }
 
+/* PORT: the mouse.  The four outer wheels, each under its selection glow
+ * (puzzle_kaza_tex 17..20, 149x150, inset so the centre wheel between them
+ * takes no click).  Pointing at one moves the cursor there, with the pad's
+ * cue; a click turns it, as CROSS does. */
+static void KazaPuzzle2MouseSel(void)
+{
+    static const float wheel_x[2][2] = { { 155.0f, 331.0f }, { 154.0f, 331.0f } };
+    static const float wheel_y[2]    = { 31.0f, 208.0f };
+    MioPan_MenuMouse mouse;
+    int tate;
+    int yoko;
+
+    if (MioPan_MenuMouseBegin(0, &mouse) == 0)
+    {
+        return;
+    }
+    for (tate = 0; tate < 2; tate++)
+    {
+        for (yoko = 0; yoko < 2; yoko++)
+        {
+            if (MioPan_MenuMouseIn(wheel_x[tate][yoko] + 15.0f,
+                                   wheel_y[tate] + 15.0f, 119.0f, 120.0f) == 0)
+            {
+                continue;
+            }
+            if ((tate != kaza_pzl_ctrl.csr_tate || yoko != kaza_pzl_ctrl.csr_yoko)
+                && (mouse.moved != 0 || mouse.left != 0))
+            {
+                kaza_pzl_ctrl.snd_id = SndBankPlay(GetPzlSndBankID(), 0, 0, 0,
+                                                   0x3200, 0x1000, 0,
+                                                   (SND_3D_SET *)0);
+                kaza_pzl_ctrl.csr_tate = (char)tate;
+                kaza_pzl_ctrl.csr_yoko = (char)yoko;
+            }
+            if (MioPan_MenuMouseClicked() != 0)
+            {
+                MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+            }
+            return;
+        }
+    }
+}
+
 static void KazaPuzzle2PinWheelSelPad(void)                             /* 594 */
 {                                                                       /* 595 */
+    KazaPuzzle2MouseSel();
+
     if (((pad[0].rpt & 0x8000) != 0) || (GetPadAnalogRpt(2) != 0) ||    /* 599 */
         ((pad[0].rpt & 0x2000) != 0) || (GetPadAnalogRpt(3) != 0)) {
         kaza_pzl_ctrl.snd_id = SndBankPlay(GetPzlSndBankID(), 0, 0, 0,
@@ -433,6 +481,8 @@ static void KazaPuzzle2ExitReq(void)
 
 static void KazaPuzzle2ClearPad(void)                                   /* 708 */
 {                                                                       /* 709 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 713 */
         KazaPuzzle2ExitReq();                                           /* 714 */
     } else if (*paddat[1] == 1) {                                       /* 717 */
@@ -451,6 +501,8 @@ static void KazaPuzzle2ClearPad(void)                                   /* 708 *
  * ------------------------------------------------------------------------ */
 static void KazaPuzzle2CondErrorPad(void)                               /* 733 */
 {                                                                       /* 734 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     int msg_state;
 
     msg_state = MesStatusCheck();                                       /* 738 */

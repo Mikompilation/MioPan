@@ -44,6 +44,7 @@
 #include "../system/eeiop/stream_auto.h"    // StreamAutoPlay / StreamAutoFadeOut
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -264,8 +265,24 @@ void SetupMenuMain(void)                                                /* 290 *
  * into the settings column, CROSS on Exit opens the window.  TRIANGLE does not
  * leave -- it moves the cursor onto Exit, so backing out is always two
  * presses. */
+/* PORT: the mouse.  Story, Mission and Exit, 40 apart (setup_tex 12, 11 and
+ * 9 + 10).  The Exit window is the game's Yes / No, which the mouse layer
+ * answers by itself. */
+static void SetupMenuMainMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    setup_menu_ctrl.menu_csr = (char)MioPan_MenuMouseList(
+        setup_menu_ctrl.menu_csr, 135.0f, 42.0f, 372.0f, 38.0f, 0.0f, 40.0f,
+        SETUP_MENU_CSR_MAX, 0, 0);
+}
+
 static void SetupMenuPad(void)                                          /* 338 */
 {
+    SetupMenuMainMouse();
+
     if (((pad[0].rpt & 0x1000U) != 0) || (GetPadAnalogRpt(0) != 0))     /* 342 */
     {
         SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);  /* 343 */
@@ -325,8 +342,52 @@ static void SetupMenuExitReq(void)                                      /* 377 *
 
 /* The settings column.  UP/DOWN walk the five rows, LEFT/RIGHT change the row
  * under the cursor, CROSS on the last row commits, TRIANGLE goes back up. */
+/* PORT: the mouse.  The settings column: costume, the two accessories and the
+ * difficulty 30 apart from y 181, then Game Start / Mission Select (setup_tex
+ * 37) -- the rows SetupMenuCursorDisp() brackets.  Pointing at a row moves
+ * the cursor there; clicking a setting steps it on, as RIGHT does, and
+ * clicking the last row starts.  The difficulty row is passed over where the
+ * pad passes over it. */
+static void SetupMenuSetupMouse(void)
+{
+    MioPan_MenuMouse mouse;
+    const int no_difficulty = (setup_menu_ctrl.menu_csr == SETUP_MENU_CSR_MISSION) ||
+                              (ingame_wrk.clear_save_flg == 0);
+    int row;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, &mouse) == 0)
+    {
+        return;
+    }
+    for (row = 0; row < SETUP_MENU_SETUP_CSR_MAX; row++)
+    {
+        const int start = row == SETUP_MENU_SETUP_CSR_START;
+        const float y = start ? 298.0f : 179.0f + (float)row * 30.0f;
+
+        if ((row == SETUP_MENU_SETUP_CSR_DIFFICULTY && no_difficulty) ||
+            MioPan_MenuMouseIn(start ? 175.0f : 95.0f, y, start ? 295.0f : 470.0f,
+                               start ? 38.0f : 30.0f) == 0)
+        {
+            continue;
+        }
+        if (mouse.moved && setup_menu_ctrl.setup_csr != row)
+        {
+            setup_menu_ctrl.setup_csr = (char)row;
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+        }
+        if (MioPan_MenuMouseClicked() != 0)
+        {
+            setup_menu_ctrl.setup_csr = (char)row;
+            MioPan_MenuMousePress(start ? MIOPAN_MENU_CROSS : MIOPAN_MENU_RIGHT);
+        }
+        break;
+    }
+}
+
 static void SetupMenuSetupSelPad(void)                                  /* 397 */
 {
+    SetupMenuSetupMouse();
+
     int i;
     int csr_back_up;
 

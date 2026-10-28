@@ -43,6 +43,7 @@
 #include "../../system/eeiop/snd3d.h"               /* SND_3D_SET             */
 #include "../../system/os/system.h"                 /* GetLanguage            */
 #include "../../system/pad/pad.h"                   /* pad / paddat           */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* The message group every save-point string comes out of. */
 #define SAVEPOINT_MSG_TYPE          0x4b
@@ -212,8 +213,24 @@ void SavePointTopMain(void)                                             /* 222 *
  * the confirm window for save and album but takes "leave" immediately;
  * TRIANGLE is a shortcut straight to the "leave" row -- note that it only
  * *selects* it, leaving SavePointTopMain()'s step-3 arm to act on it. */
+/* PORT: the mouse.  Save / album / leave, 30 apart under the cursor's frame
+ * (SavePointTopCsrDisp: x 184, 272 wide, from y 142); the cursor is set
+ * straight, as the pad does. */
+static void SavePointTopMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    savepoint_top_ctrl.csr = (char)MioPan_MenuMouseList(
+        savepoint_top_ctrl.csr, 184.0f, 140.0f, 272.0f, 30.0f, 0.0f, 30.0f,
+        SAVEPOINT_TOP_CSR_NUM, 0, 0);
+}
+
 static void SavePointTopPad(void)                                       /* 282 */
 {
+    SavePointTopMouse();
+
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0)) {                  /* 286 */
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 287 */
 

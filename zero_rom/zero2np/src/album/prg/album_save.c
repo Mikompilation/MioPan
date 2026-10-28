@@ -99,6 +99,7 @@
 #include "../../system/mc/prg/mc_set_data.h"        // path / size / data-area
 #include "../../system/os/system.h"                 // SystemBankPlay
 #include "../../system/pad/pad.h"                   // GetPadAnalogRpt
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                                 // memset
 
@@ -403,8 +404,24 @@ static void AlbumSaveModeMain(void)                                     /* 335 *
 /* UP or DOWN toggles the slot, CROSS commits it and CIRCLE leaves the page.
  * The extra SetAlbumTitleFlg(0) the load screen does not have takes the title
  * plate down a frame early, before AlbumSaveModeMain() would do it. */
+/* PORT: the mouse.  The two card slots, 38 apart under the cursor's frame
+ * (AlbumSlotSelWinDisp: x 160, 320 wide, from y 182); the cursor is set
+ * straight, as the pad's toggle does, and a click is CROSS. */
+static void AlbumSaveSlotSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    album_save_ctrl.slot_csr = (char)MioPan_MenuMouseList(
+        album_save_ctrl.slot_csr, 160.0f, 180.0f, 320.0f, 38.0f, 0.0f, 38.0f,
+        ALBUM_SAVE_SLOT_MAX, 0, 0);
+}
+
 static void AlbumSaveSlotSelPad(void)                                   /* 368 */
 {
+    AlbumSaveSlotSelMouse();
+
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0) ||                  /* 372 */
         (pad[0].rpt & 0x4000) || GetPadAnalogRpt(1)) {                  /* 378 */
 
@@ -722,8 +739,35 @@ static void AlbumSaveMcSaveAlbumSelWait(void)                           /* 708 *
 
 /* LEFT / RIGHT walk all five albums -- no skipping, because any of them can be
  * written -- so the cue plays unconditionally. */
+/* PORT: the mouse.  The five album plates (album_tex 390..394, 157 wide:
+ * three from y 107, two from y 203, the top row cut where the bottom row
+ * starts); the cursor is set straight, as the pad's walk does, and a click
+ * is CROSS. */
+static void AlbumSaveAlbumSelMouse(void)
+{
+    static const float plate[ALBUM_SAVE_ALBUM_MAX][2] =
+    {
+        {  71.0f, 107.0f }, { 241.0f, 107.0f }, { 411.0f, 107.0f },
+        { 154.0f, 203.0f }, { 334.0f, 203.0f },
+    };
+    int i;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < ALBUM_SAVE_ALBUM_MAX; i++)
+    {
+        album_save_ctrl.album_sel_csr = (char)MioPan_MenuMouseItem(
+            album_save_ctrl.album_sel_csr, i, plate[i][0], plate[i][1],
+            157.0f, i < 3 ? 96.0f : 107.0f);
+    }
+}
+
 static void AlbumSaveMcSaveAlbumSelPad(void)                            /* 728 */
 {
+    AlbumSaveAlbumSelMouse();
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2)) {                  /* 732 */
 
         SystemBankPlay(0, 1, 0, 0, NULL, 0x3200, 0x1000);               /* 733 */
@@ -1037,6 +1081,8 @@ static void AlbumSaveMcErrorConfWait(void)                              /* 1068 
  * -- GCC cross-jumped the pair into one tail. */
 static void AlbumSaveMcErrorConfPad(void)                               /* 1106 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1110 */
 
         SystemBankPlay(3, 1, 0, 0, NULL, 0x3200, 0x1000);               /* 1113 */
@@ -1057,6 +1103,8 @@ static void AlbumSaveMcErrorConfPad(void)                               /* 1106 
  * AlbumSaveMcErrorConfPad() a second time. */
 static void AlbumSaveMcEndConf(void)                                    /* 1128 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1132 */
         SystemBankPlay(3, 1, 0, 0, NULL, 0x3200, 0x1000);               /* 1135 */
 

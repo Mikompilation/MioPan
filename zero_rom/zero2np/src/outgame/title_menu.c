@@ -27,6 +27,7 @@
 #include "../main/gphase.h"                 // SetNextGPhase / GID_*
 #include "../system/os/system.h"            // SystemBankPlay / ChangeVideoMode / GetLanguage
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h" // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -55,8 +56,42 @@ void TitleMenuMain(void)
  *
  * paddat[] entries are logical action labels: 9 is cnt[0] (UP), 8 is cnt[1]
  * (DOWN), 0 is cnt[5] (CROSS) and 1 is cnt[4] (TRIANGLE). */
+/* PORT: the mouse.  The menu shows one entry at a time between two arrows
+ * (DispTitleMenuCursor): the arrows step it, the entry itself enters, and the
+ * wheel turns it -- never UP / DOWN, which are the video-mode override. */
+static void TitleMenuMouse(void)
+{
+    const int csr = title_menu_ctrl.csr;
+    float left;
+    float right;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+
+    /* The debug entries have no arrows; they get the ASCII caption's span. */
+    if ((u_char)(csr - 6) >= 2)
+    {
+        left = (float)title_left_x_tbl[csr][GetLanguage()];
+        right = (float)title_right_x_tbl[csr][GetLanguage()];
+    }
+    else
+    {
+        left = 200.0f;
+        right = 420.0f;
+    }
+
+    MioPan_MenuMouseButton(left - 8.0f, 347.0f, 36.0f, 45.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(right - 8.0f, 347.0f, 36.0f, 45.0f, MIOPAN_MENU_RIGHT);
+    MioPan_MenuMouseButton(left + 28.0f, 349.0f, right - left - 36.0f, 43.0f,
+                           MIOPAN_MENU_CROSS);
+}
+
 static void TitleMenuPad(void)
 {
+    TitleMenuMouse();
+
     if (((pad[0].rpt & 0x8000U) != 0) || (GetPadAnalogRpt(2) != 0))     /* 108 */
     {
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 109 */

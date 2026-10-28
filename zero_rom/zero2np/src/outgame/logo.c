@@ -33,6 +33,7 @@
 #include "../system/eeiop/fileload.h"       // FileLoadReqEE / FileLoadIsEnd2
 #include "../common/ol_load.h"              // ol_loadGetHeap / ol_loadFreeHeap
 #include "../common/variable.h"            // key_now[] - per-button current state
+#include "../miopan/io/miopan_menu_mouse.h" // the mouse in menus (port)
 
 #include "../graphics/graph3d/ctl/fixed_array.h"   // fixed_array<> template (inlined per TU)
 
@@ -211,6 +212,14 @@ int LogoMain(int logo_label, int in_time, int wait_time, int out_time)
 
         if (logo_wrk.mode == 1)
         {
+            /* PORT: the mouse -- a click skips the logo as a face button
+             * does. */
+            if (MioPan_MenuMouseBegin(MIOPAN_MM_NO_BACK, 0) != 0 &&
+                MioPan_MenuMouseClicked() != 0)
+            {
+                MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+            }
+
             logo_wrk.cnt = logo_wrk.cnt + 1;
             alp = 0x80;
             if ((wait_time < logo_wrk.cnt) ||

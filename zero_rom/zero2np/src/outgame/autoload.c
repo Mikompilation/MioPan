@@ -41,6 +41,7 @@
 #include "../system/mc/prg/mc_set_data.h"   // path/size/Develop/Get/LiberateDataMemoryArea
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                         // memset
 
@@ -310,6 +311,8 @@ static void AutoLoadMcLoadWait(void)
 /* Confirmed by CROSS or by 150 frames going past, whichever comes first. */
 static void AutoLoadMcLoadConf(void)
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1)                                                /* 403 */
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 404 */
@@ -326,6 +329,8 @@ static void AutoLoadMcLoadConf(void)
 
 static void AutoLoadMcErrorConf(void)
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1)                                                /* 425 */
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 426 */
@@ -376,6 +381,8 @@ static void AutoLoadMcDefStartConf(void)
 
 static void AutoLoadMcEmptyError(void)
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1)                                                /* 486 */
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 487 */

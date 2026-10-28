@@ -45,6 +45,7 @@
 #include "msg_disp_dat.h"           // msg_disp_data[] per-type def/win ids
 #include "msg_win_dat.h"            // msg_win_data[] default window rects
 #include "../../system/pad/pad.h"   // paddat pad-data table
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 // gInterlace lives in g2d_draw.c (declared in g2d_draw.h, included above).
 
@@ -2363,6 +2364,12 @@ int PrintMsg_Arrange(int msg_type, int msg_id, int x, int y, int col_label, int 
 // ──────────────────────────────────────────────────────────────────────
 // PrintChoice: render a choice prompt window plus the YES/NO or 3-way
 // selection row, with a moving cursor at index csr.
+/* PORT: the three-answer choice PrintChoice() drew last, centred on x 160,
+ * 320 and 480 -- the mouse's targets for it.  0 width when none was drawn. */
+float msg_choice3_y;
+float msg_choice3_w;
+float msg_choice3_half;
+
 void PrintChoice(DISP_STR *msg, MSG_WIN_DAT *win, int choice_msg, int *choice, int csr)
 {
     DISP_STR msg_wrk;
@@ -2433,6 +2440,10 @@ void PrintChoice(DISP_STR *msg, MSG_WIN_DAT *win, int choice_msg, int *choice, i
     else if (choice_num == 3)
     {
         choice_y = (short int)(msg_wrk.pos_y + 0x30);
+        /* PORT: where the three answers are, for the mouse (ev_macro.c). */
+        msg_choice3_y = (float)choice_y;
+        msg_choice3_w = (float)(max_length + 0x28);
+        msg_choice3_half = (float)(max_length / 2) + 20.0f;
         DrawCmnSelCsr(0, ((float)csr * 160.0f + 160.0f - (float)(max_length / 2)) - 20.0f,
                       (float)choice_y, 0x80, (float)(max_length + 0x28), 0);
         DrawCmnSelFrame(0, (160.0f - (float)(max_length / 2)) - 20.0f, (float)choice_y, 0x80,
@@ -2450,6 +2461,18 @@ void PrintChoice(DISP_STR *msg, MSG_WIN_DAT *win, int choice_msg, int *choice, i
         printf("ERROR!! PrintChoice(), The number of choices is illegal\n");
     }
     return;
+}
+
+int MioPan_MsgChoice3Box(int index, float *x, float *y, float *w)
+{
+    if (msg_choice3_w <= 0.0f || index < 0 || index > 2)
+    {
+        return 0;
+    }
+    *x = 160.0f * (float)(index + 1) - msg_choice3_half;
+    *y = msg_choice3_y;
+    *w = msg_choice3_w;
+    return 1;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -3202,6 +3225,15 @@ void MesPassCheck()
 // button during a blink (sta&0x10) or end (sta&0x40) state.
 static void MesKeyCheck()
 {
+    /* PORT: the mouse.  While the page marker blinks, a click anywhere is the
+     * CROSS it waits for. */
+    if ((msdat.sta & 0x10) != 0 &&
+        MioPan_MenuMouseBegin(MIOPAN_MM_NO_BACK, 0) != 0 &&
+        MioPan_MenuMouseClicked() != 0)
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
+
     if ((msdat.sta & 0x10) != 0 && *paddat[3] == 1)
     {
         msdat.sta = msdat.sta | 1;
@@ -3216,6 +3248,14 @@ static void MesKeyCheck()
 // MesStatusCheck: report the windowed-message display state.
 int MesStatusCheck()
 {
+    /* PORT: the mouse.  Every wait on a windowed message asks here, and a page
+     * that waits (state 1) waits for CROSS -- so a click anywhere is it. */
+    if (msg_disp_ctrl.disp_state == 1 &&
+        MioPan_MenuMouseBegin(MIOPAN_MM_NO_BACK, 0) != 0 &&
+        MioPan_MenuMouseClicked() != 0)
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
     return (int)msg_disp_ctrl.disp_state;
 }
 

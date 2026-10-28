@@ -22,6 +22,9 @@
 
 #include "tim_dat/caption_dat.h"    // caption_tex[] caption-icon sprites
 #include "tim_dat/cap_group_dat.h"  // cap_btn_group_ctrl[] / cap_world_pos_x/y[][]
+#include "tim_dat/btn_sprt_dat.h"  // btn_tex[] (port: the hint boxes)
+
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 // ──────────────────────────────────────────────────────────────────────
 // Draw caption `cap_label` (label 0 selects the default caption at index 3).
@@ -50,6 +53,65 @@ void DrawCmnCaption(u_char cap_label, float x, float y, u_char alp, u_int pri)
     cap_ds.pri = pri;
     cap_ds.alpha = alp;
     DispSprD(&cap_ds);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// PORT: the mouse.  Each button of a group, with the caption after it, is a
+// box to click for that button.  The icons are btn_tex 0 CROSS, 1 SQUARE,
+// 2 CIRCLE and 3 TRIANGLE; 5 and 6 are the shoulder pairs L1 R1 and L2 R2,
+// whose icon splits down the middle; 4, the d-pad, takes no click.  A box
+// runs to the end of the caption that follows it, or to the next button.
+
+static void CapGroupMouseNote(BTN_GROUP *btn_group, CAP_GROUP *cap_group,
+                              int x, int y, u_char language)
+{
+    static const int btn_press[7] =
+    {
+        MIOPAN_MENU_CROSS, MIOPAN_MENU_SQUARE, MIOPAN_MENU_CIRCLE,
+        MIOPAN_MENU_TRIANGLE, -1, MIOPAN_MENU_L1, MIOPAN_MENU_L2,
+    };
+    float bx;
+    float bw;
+    float end;
+    float cx;
+    int   label;
+    int   i;
+    int   j;
+
+    for (i = 0; -1 < btn_group[i].btn_label; i++)
+    {
+        label = btn_group[i].btn_label;
+        if (label > 6 || btn_press[label] < 0)
+        {
+            continue;
+        }
+        bx = (float)(x + btn_group[i].x[(char)language]);
+        bw = (float)btn_tex[label].w;
+        if (label == 5 || label == 6)
+        {
+            MioPan_MenuMouseNoteHint(btn_press[label], bx, (float)y, bw * 0.5f, 28.0f);
+            MioPan_MenuMouseNoteHint(label == 5 ? MIOPAN_MENU_R1 : MIOPAN_MENU_R2,
+                                     bx + bw * 0.5f, (float)y, bw * 0.5f, 28.0f);
+            continue;
+        }
+        end = bx + bw;
+        for (j = 0; -1 < cap_group[j].cap_label; j++)
+        {
+            cx = (float)(x + cap_group[j].x[(char)language]);
+            if (cx >= bx)
+            {
+                end = cx + (float)caption_tex[cap_group[j].cap_label == 0
+                                                  ? 3 : cap_group[j].cap_label].w;
+                break;
+            }
+        }
+        if (-1 < btn_group[i + 1].btn_label
+            && (float)(x + btn_group[i + 1].x[(char)language]) < end)
+        {
+            end = (float)(x + btn_group[i + 1].x[(char)language]);
+        }
+        MioPan_MenuMouseNoteHint(btn_press[label], bx, (float)y, end - bx, 28.0f);
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -93,6 +155,11 @@ void DrawCmnCapGroup(int group_label, int x, int y, u_char alp, u_int pri)
                            (float)y, alp, pri);
             i = i + 1;
         } while (-1 < cap_group[i].cap_label);
+    }
+
+    if (alp != 0)
+    {
+        CapGroupMouseNote(btn_group, cap_group, x, y, GetLanguage());   // PORT
     }
 }
 

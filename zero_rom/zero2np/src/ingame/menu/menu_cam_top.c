@@ -112,6 +112,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay             */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -417,8 +418,47 @@ int MenuCamTopMain(void)                                                /* 256 *
  *  RIGHT are what cross between them.
  * ------------------------------------------------------------------------ */
 
+/* PORT: the mouse.  The portrait and the three row plates beside it, the
+ * boxes MenuCamTopCsrBaseDisp() lights (its sqar_dat[]), are items 0..3; the
+ * cursor is set straight, as the pad's arms do, and a click is CROSS. */
+static void MenuCamTopMouse(void)
+{
+    static const float box[4][4] =
+    {
+        {  33.0f,  79.0f, 119.0f, 229.0f },
+        { 459.0f,  79.0f, 150.0f,  58.0f },
+        { 476.0f, 173.0f, 133.0f,  62.0f },
+        { 459.0f, 271.0f, 150.0f,  58.0f },
+    };
+    int cursor;
+    int i;
+
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    cursor = menu_cam_top_ctrl.csr_yoko == MENU_CAM_TOP_CSR_CAMERA
+                 ? 0 : menu_cam_top_ctrl.csr_tate + 1;
+    for (i = 0; i < 4; i++)
+    {
+        cursor = MioPan_MenuMouseItem(cursor, i, box[i][0], box[i][1],
+                                      box[i][2], box[i][3]);
+    }
+    if (cursor == 0)
+    {
+        menu_cam_top_ctrl.csr_yoko = MENU_CAM_TOP_CSR_CAMERA;
+    }
+    else
+    {
+        menu_cam_top_ctrl.csr_yoko = MENU_CAM_TOP_CSR_MENU;
+        menu_cam_top_ctrl.csr_tate = (char)(cursor - 1);
+    }
+}
+
 static void MenuCamTopPad(void)                                         /* 294 */
 {
+    MenuCamTopMouse();
+
     if ((pad[0].rpt & PAD_RPT_UP) || GetPadAnalogRpt(PAD_ANALOG_UP)) {  /* 298 */
         if (menu_cam_top_ctrl.csr_yoko == MENU_CAM_TOP_CSR_MENU) {      /* 299 */
             SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr,
@@ -578,8 +618,23 @@ static void MenuCamTopOutReq(void)                                      /* 433 *
  * film types and load the first one the player is carrying, so the equipped
  * film IS the cursor.  Which cue plays is decided afterwards, by asking
  * whether the equipped type actually changed. */
+/* PORT: the mouse.  The film is the cursor, so the plate's halves -- between
+ * the selector's brackets (menu_camera_tex 124, 125) -- step it back and on,
+ * and so does the wheel. */
+static void MenuCamTopFilmSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(462.0f, 196.0f, 77.0f, 45.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(539.0f, 196.0f, 77.0f, 45.0f, MIOPAN_MENU_RIGHT);
+}
+
 static void MenuCamTopFilmSelPad(void)                                  /* 449 */
 {
+    MenuCamTopFilmSelMouse();
+
     int i;
     int equip_film;
     int before_equip_film;
@@ -657,8 +712,32 @@ static void MenuCamTopFilmSelPad(void)                                  /* 449 *
 /* The addition-function selector.  LEFT/RIGHT step add_csr to the next slot
  * the player owns; four steps is the identity, so `i < 4` is "the cursor
  * actually moved" and is what gates the cue. */
+/* PORT: the mouse.  The four slots ADD_FUNC_STEP apart under the selection
+ * box (menu_camera_tex 136..141); only the ones the player owns take the
+ * cursor, which is set straight as the pad's walk does. */
+static void MenuCamTopAddFuncSelMouse(void)
+{
+    int i;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < ADD_FUNC_NUM; i++)
+    {
+        if (m_plyr_camera.camera_power_up.mAdditionFlg.IsUp(i) != 0)
+        {
+            menu_cam_top_ctrl.add_csr = (char)MioPan_MenuMouseItem(
+                menu_cam_top_ctrl.add_csr, i, 463.0f + (float)i * ADD_FUNC_STEP,
+                100.0f, ADD_FUNC_STEP, 42.0f);
+        }
+    }
+}
+
 static void MenuCamTopAdditionalFunctionSelPad(void)                    /* 533 */
 {
+    MenuCamTopAddFuncSelMouse();
+
     int i;
 
     if ((pad[0].rpt & PAD_RPT_LEFT) || GetPadAnalogRpt(PAD_ANALOG_LEFT)) { /* 539 */
@@ -705,8 +784,33 @@ static void MenuCamTopAdditionalFunctionSelPad(void)                    /* 533 *
 
 /* The camera-part selector.  Same cursor walk as its sibling, plus CROSS,
  * which toggles the part on or off. */
+/* PORT: the mouse.  The four part slots EQUIP_FUNC_STEP apart (menu_camera_tex
+ * 151..156); only owned parts take the cursor, and a click is CROSS, which
+ * puts the part on or takes it off. */
+static void MenuCamTopEquipFuncSelMouse(void)
+{
+    int i;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < EQUIP_FUNC_NUM; i++)
+    {
+        if (m_plyr_camera.camera_power_up.mCamPartsFlg.IsUp(i) != 0)
+        {
+            menu_cam_top_ctrl.equip_csr = (char)MioPan_MenuMouseItem(
+                menu_cam_top_ctrl.equip_csr, i,
+                447.0f + (float)i * EQUIP_FUNC_STEP, 296.0f, EQUIP_FUNC_STEP,
+                42.0f);
+        }
+    }
+}
+
 static void MenuCamTopEquipFuncSelPad(void)                             /* 579 */
 {
+    MenuCamTopEquipFuncSelMouse();
+
     int                   i;
     fixed_array<char, EQUIP_SPECIAL_NUM> equip_special;
 

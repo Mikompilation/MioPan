@@ -38,6 +38,7 @@
 #include "../system/mc/prg/mc_set_data.h"       // path / size / data-area / accessors
 #include "../system/os/system.h"                // GetLanguage / SystemBankPlay
 #include "../system/pad/pad.h"                  // pad / paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #define LOAD_GAME_DATA_MAX 5        /* memory-card save slots */
 
@@ -555,8 +556,29 @@ static void LoadGameMcLoadFileSel(void)
 /* The cursor skips empty slots: it steps up to five times looking for one
  * whose play-data flag is set, and only plays the move SE if it actually
  * landed somewhere new. */
+/* PORT: the mouse.  The five slots, 118 apart (SAVE_LOAD_DATA_PITCH), each
+ * bracketed by the cursor at save_load_tex 16..17 when chosen; empty slots are
+ * passed over, as the pad passes over them. */
+static int LoadGameSlotEmpty(int slot)
+{
+    return GetMemoryCardPlayDataFlg(slot) != 1;
+}
+
+static void LoadGameMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    load_game_ctrl.csr = (char)MioPan_MenuMouseList(
+        load_game_ctrl.csr, 24.0f, 106.0f, 118.0f, 117.0f, 118.0f, 0.0f,
+        LOAD_GAME_DATA_MAX, 0, LoadGameSlotEmpty);
+}
+
 static void LoadGameMcLoadFileSelPad(void)
 {                                                                       /* 700 */
+    LoadGameMouse();
+
     int i;
     int cursor_back_up;
 
@@ -875,6 +897,8 @@ static void LoadGameMcErrorConfWait(void)
 /* Either button backs all the way out to the title menu. */
 static void LoadGameMcErrorConfPad(void)
 {                                                                       /* 1094 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1)                                                /* 1098 */
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 1099 */
@@ -904,6 +928,8 @@ static void LoadGameMcEndConf(void)
  * unlocks); a first playthrough goes straight into the mission load. */
 static void LoadGameMcEndConfPad(void)
 {                                                                       /* 1131 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     char move_flg;
 
     move_flg = 0;

@@ -30,6 +30,7 @@
 #include "../../main/gphase.h"                      /* SetNextGPhase          */
 #include "../../system/os/system.h"                 /* SystemBankPlay         */
 #include "../../system/pad/pad.h"                   /* paddat                 */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* The message group every save-point string comes out of. */
 #define SAVEPOINT_MSG_TYPE          0x4b
@@ -83,6 +84,8 @@ void SavePointFadeInMain(void)                                          /* 92 */
  * from the menu's own exit row. */
 static void SavePointFadeInMsgDispPad(void)                             /* 116 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[3] == 1) {                                              /* 120 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 121 */
 

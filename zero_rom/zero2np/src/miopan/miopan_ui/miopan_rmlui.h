@@ -28,8 +28,9 @@ class Context;
  *
  * While a modal document is visible the UI has the controls: keys, the pad
  * and the mouse go to RmlUi and the game reads nothing (MioPan_InputSetMenu-
- * Suppressed), and that hold outlasts the document until every key and pad
- * button is up, so the press that closed a menu never lands in the game.  The
+ * Suppressed).  When the document goes, the game's buttons still down stay
+ * the menu's until each is let go, so the press that closed a menu never
+ * lands in the game while everything else answers at once.  The
  * pad arrives as keys: the d-pad and left stick as the arrows (repeating while
  * held), Cross as Enter, Triangle / Circle / START as Escape, L1 / R1 as Page
  * Up / Page Down and SELECT as Tab.

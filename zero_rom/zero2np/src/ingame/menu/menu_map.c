@@ -117,6 +117,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -502,8 +503,79 @@ static void MenuMapSnapLoadExe(void)                                    /* 496 *
  * change start the next dissolve -- and GCC cross-jumped all four tails into
  * one.  The R1 arm carries a six-line gap (629..634) where its three
  * siblings have none; nothing of it survives in the object. */
+/* PORT: the mouse.  Dragging carries the sheet under the crosshair the way
+ * the d-pad scrolls it, at either zoom (the big one doubles the offset's
+ * travel, CalMapDispStartPos), inside the same bounds; the wheel zooms in and
+ * out with CROSS's toggle.  The floor and area changes are the captions'. */
+static void MenuMapMouse(void)
+{
+    static int   drag;
+    static float drag_x;
+    static float drag_y;
+    MioPan_MenuMouse mouse;
+    float scale;
+    float dx;
+    float dy;
+    float size;
+
+    if (MioPan_MenuMouseBegin(0, &mouse) == 0
+        || (u_char)menu_map_ctrl.plyr_map >= MAP_LABEL_NUM)
+    {
+        drag = 0;
+        return;
+    }
+    if ((mouse.wheel > 0 && menu_map_disp.map_scall_flg == MENU_MAP_SCALL_NORMAL)
+        || (mouse.wheel < 0 && menu_map_disp.map_scall_flg == MENU_MAP_SCALL_BIG))
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
+    if (MioPan_MenuMouseClicked() != 0)
+    {
+        drag   = 1;
+        drag_x = mouse.x;
+        drag_y = mouse.y;
+        return;
+    }
+    if (drag == 0 || mouse.left_held == 0)
+    {
+        drag = 0;
+        return;
+    }
+    scale = menu_map_disp.map_scall_flg == MENU_MAP_SCALL_BIG ? 2.0f : 1.0f;
+    dx = (mouse.x - drag_x) / scale;
+    dy = (mouse.y - drag_y) / scale;
+    drag_x = mouse.x;
+    drag_y = mouse.y;
+
+    /* Each way clamps only the bound it runs toward, as the pad does. */
+    menu_map_disp.map_off_x += dx;
+    size = (float)map_size_dat[menu_map_disp.disp_map_label].w
+           * map_scall_dat[menu_map_disp.disp_map_label].normal;
+    if (dx > 0.0f && menu_map_disp.map_off_x > MENU_MAP_SCROLL_MAX_X)
+    {
+        menu_map_disp.map_off_x = MENU_MAP_SCROLL_MAX_X;
+    }
+    else if (dx < 0.0f && menu_map_disp.map_off_x < MENU_MAP_SCROLL_MIN_X - size)
+    {
+        menu_map_disp.map_off_x = MENU_MAP_SCROLL_MIN_X - size;
+    }
+    menu_map_disp.map_off_y += dy;
+    size = (float)map_size_dat[menu_map_disp.disp_map_label].h
+           * map_scall_dat[menu_map_disp.disp_map_label].normal;
+    if (dy > 0.0f && menu_map_disp.map_off_y > MENU_MAP_SCROLL_MAX_Y)
+    {
+        menu_map_disp.map_off_y = MENU_MAP_SCROLL_MAX_Y;
+    }
+    else if (dy < 0.0f && menu_map_disp.map_off_y < MENU_MAP_SCROLL_MIN_Y - size)
+    {
+        menu_map_disp.map_off_y = MENU_MAP_SCROLL_MIN_Y - size;
+    }
+}
+
 static void MenuMapPad(void)                                            /* 531 */
 {
+    MenuMapMouse();
+
     int    i;
     float  map_size_w;
     float  map_size_h;

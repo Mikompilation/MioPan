@@ -49,6 +49,7 @@
 #include "../../../system/eeiop/snd_buffer.h"       /* SndBufIsPlaying        */
 #include "../../../system/eeiop/sndbank.h"          /* SndBankPlay            */
 #include "../../../system/pad/pad.h"                /* paddat/GetPadAnalogRpt */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Module state
@@ -247,8 +248,36 @@ static int SixPuzzleClearCheck(void)                                    /* 361 *
  *  already selected (i == 5), which is what stops the carousel turning when
  *  the player is down to a single book.
  * ------------------------------------------------------------------------ */
+/* PORT: the mouse.  The puzzle draws its own button captions, one plate a
+ * row from x 52 (puzzle_roku_tex 0x1c..0x20): CROSS at y 58, TRIANGLE at 83
+ * and CIRCLE at 108 on both screens, so a click on a row presses its
+ * button. */
+static void SixPuzzleCaptionMouse(void)
+{
+    MioPan_MenuMouseButton(48.0f, 56.0f, 144.0f, 25.0f, MIOPAN_MENU_CROSS);
+    MioPan_MenuMouseButton(48.0f, 81.0f, 144.0f, 25.0f, MIOPAN_MENU_TRIANGLE);
+    MioPan_MenuMouseButton(48.0f, 106.0f, 144.0f, 25.0f, MIOPAN_MENU_CIRCLE);
+}
+
+/* The carousel window (puzzle_roku_tex 0x0d, x 206..436): the arrows at
+ * either side turn it as LEFT and RIGHT do, the book between them is CROSS,
+ * and the wheel turns it too. */
+static void SixPuzzleBookSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    SixPuzzleCaptionMouse();
+    MioPan_MenuMouseButton(206.0f, 61.0f, 52.0f, 203.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(258.0f, 61.0f, 126.0f, 203.0f, MIOPAN_MENU_CROSS);
+    MioPan_MenuMouseButton(384.0f, 61.0f, 52.0f, 203.0f, MIOPAN_MENU_RIGHT);
+}
+
 static void SixPuzzleBookSelPad(void)                                   /* 387 */
 {                                                                       /* 388 */
+    SixPuzzleBookSelMouse();
+
     int i;
 
     if (((pad[0].rpt & 0x8000) != 0) || (GetPadAnalogRpt(2) != 0)) {    /* 393 */
@@ -322,8 +351,49 @@ static void SixPuzzleBookSelPad(void)                                   /* 387 *
  *  pre-selected.  O takes the most recently placed book back off the shelf,
  *  and once there is nothing left to take back it opens the quit prompt.
  * ------------------------------------------------------------------------ */
+/* PORT: the mouse.  The five shelf slots under their cursor plates
+ * (puzzle_roku_tex 3..7, from y 134).  Pointing at one moves the cursor there
+ * as the pad's arms do, cue and pulse restart included; a click is CROSS.
+ * The captions work as on the carousel. */
+static void SixPuzzleBookShelfMouse(void)
+{
+    static const float slot_x[5] = { 171.0f, 231.0f, 287.0f, 340.0f, 395.0f };
+    static const float slot_w[5] = { 63.0f, 62.0f, 59.0f, 59.0f, 64.0f };
+    MioPan_MenuMouse mouse;
+    int i;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, &mouse) == 0)
+    {
+        return;
+    }
+    SixPuzzleCaptionMouse();
+    for (i = 0; i < 5; i++)
+    {
+        if (MioPan_MenuMouseIn(slot_x[i], 134.0f, slot_w[i], 173.0f) == 0)
+        {
+            continue;
+        }
+        if (i != six_pzl_ctrl.book_shelf_csr
+            && (mouse.moved != 0 || mouse.left != 0))
+        {
+            six_pzl_ctrl.snd_id = SndBankPlay(GetPzlSndBankID(), 4, 0, 0,
+                                              0x3200, 0x1000, 0,
+                                              (SND_3D_SET *)0);
+            six_pzl_ctrl.book_shelf_csr   = (char)i;
+            six_pzl_disp.shelf_anim_timer = 0;
+        }
+        if (MioPan_MenuMouseClicked() != 0)
+        {
+            MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+        }
+        return;
+    }
+}
+
 static void SixPuzzleBookShelfPad(void)                                 /* 476 */
 {                                                                       /* 477 */
+    SixPuzzleBookShelfMouse();
+
     int i;
     int j;
 
@@ -405,6 +475,8 @@ static void SixPuzzleBookShelfPad(void)                                 /* 476 *
  * page turn is the feedback. */
 static void SixPuzzleBookReadPad(void)                                  /* 570 */
 {                                                                       /* 571 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 575 */
         MesSetNextPage();                                               /* 577 */
     } else if (*paddat[1] == 1) {                                       /* 580 */
@@ -418,6 +490,8 @@ static void SixPuzzleBookReadPad(void)                                  /* 570 *
 /* Either button closes the riddle; only O gets a cue. */
 static void SixPuzzleMsgReadPad(void)                                   /* 593 */
 {                                                                       /* 594 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] != 1) {                                              /* 598 */
         if (*paddat[1] != 1) {                                          /* 601 */
             return;
@@ -434,6 +508,8 @@ static void SixPuzzleMsgReadPad(void)                                   /* 593 *
 
 static void SixPuzzleClearPad(void)                                     /* 618 */
 {                                                                       /* 619 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 623 */
         SixPuzzleExitReq();                                             /* 625 */
     } else if (*paddat[1] == 1) {                                       /* 629 */
@@ -444,6 +520,8 @@ static void SixPuzzleClearPad(void)                                     /* 618 *
 /* Wrong order: deal the books out again and go back to the shelf. */
 static void SixPuzzleFailurePad(void)                                   /* 641 */
 {                                                                       /* 642 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if ((*paddat[0] == 1) || (*paddat[1] == 1)) {                       /* 646 */
         SixPuzzleReturnFirstState();                                    /* 654 */
         SixPuzzleReqNextSubStep(1);                                     /* 657 */

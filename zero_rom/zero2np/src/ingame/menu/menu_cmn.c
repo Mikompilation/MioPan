@@ -71,6 +71,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET             */
 #include "../../system/os/eecdvd.h"             /* LoadReq / IsLoadEndAll */
 #include "../../system/pad/pad.h"               /* pad / paddat           */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../../system/os/system.h"             /* SystemBankPlay         */
 
 /* --------------------------------------------------------------------------
@@ -343,6 +344,8 @@ int MenuRefMovePageDown(MENU_REF_CTRL *ref_ctrl, int *cursor,
  * one shared tail carries the second arm's `res = 1` line. */
 int MenuCmnConfirmPad(void)                                             /* 369 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     int res = 0;
 
     if (*paddat[0] == 1) {                                              /* 375 */

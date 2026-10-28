@@ -32,6 +32,7 @@
 #include "../system/eeiop/sndbank.h"        // SndBankPlay
 #include "../system/os/system.h"            // SystemBankPlay / GetLanguage
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -99,8 +100,25 @@ void NewGameMain(void)
 
 /* With two items the LEFT and RIGHT bodies are identical, so GCC merged them;
  * the two remaining line markers (164, 170) are what is left of the pair. */
+/* PORT: the mouse.  The two difficulties sit side by side (title_top 23 and
+ * 24, NewGameDifficultyDisp); pointing at one selects it, clicking starts. */
+static void NewGameMouse(void)
+{
+    int csr = new_game_ctrl.cursor;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    csr = MioPan_MenuMouseItem(csr, 0, 202.0f, 378.0f, 106.0f, 44.0f);
+    csr = MioPan_MenuMouseItem(csr, 1, 329.0f, 378.0f, 113.0f, 44.0f);
+    new_game_ctrl.cursor = (char)csr;
+}
+
 static void NewGameDifficultySelPad(void)
 {
+    NewGameMouse();
+
     if (((pad[0].rpt & 0x8000U) != 0) ||
         (GetPadAnalogRpt(2) != 0) ||                                    /* 164 */
         ((pad[0].rpt & 0x2000U) != 0) ||

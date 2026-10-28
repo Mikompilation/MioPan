@@ -22,6 +22,7 @@
 #include "tim_dat/btn_sprt_dat.h"   // btn_tex[] selection/cursor pieces
 
 #include "../../sdk/libgraph.h"     // SCE GS register value builders (SCE_GS_SET_*)
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                 // memset
 
@@ -247,6 +248,9 @@ void DrawCmnSelFrame(u_int pri, float x, float y, u_char alpha, float w)
 
 void DrawCmnSelYes(u_int pri, float x, float y, u_char alpha)
 {
+    /* PORT: every Yes / No in the game is drawn by these two cells, so they
+     * report where they are and the mouse can answer them (miopan_menu_mouse.h). */
+    MioPan_MenuMouseNoteYesNo(0, x, y);
     DrawCmnSelFrame(pri, x, y, alpha, 0.0);
     PrintMsg_Arrange(7, 1, (int)(x + (float)((u_short)btn_tex[7].w >> 1)),
                      (int)(y + 2.0), 0, (u_int)alpha, pri, 0, 0, 2);
@@ -257,6 +261,7 @@ void DrawCmnSelYes(u_int pri, float x, float y, u_char alpha)
 
 void DrawCmnSelNo(u_int pri, float x, float y, u_char alpha)
 {
+    MioPan_MenuMouseNoteYesNo(1, x, y);     /* PORT: see DrawCmnSelYes */
     DrawCmnSelFrame(pri, x, y, alpha, 0.0);
     PrintMsg_Arrange(7, 2, (int)(x + (float)((u_short)btn_tex[7].w >> 1)),
                      (int)(y + 2.0), 0, (u_int)alpha, pri, 0, 0, 2);
@@ -270,6 +275,10 @@ void DrawCmnSelCsr(u_int pri, float x, float y, u_char alpha, float w, u_char fl
 {
     DISP_SPRT sel_ds;
     float     scr;
+
+    /* PORT: which Yes / No cell the cursor sits on is the screen's answer;
+     * see DrawCmnSelYes. */
+    MioPan_MenuMouseNoteCursor(x, y, w);
 
     scr = 1.0;
     if (w != 0.0)

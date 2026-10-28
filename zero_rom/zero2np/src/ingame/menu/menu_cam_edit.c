@@ -130,6 +130,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay             */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                             /* memset                     */
 
@@ -589,8 +590,24 @@ int MenuCamEditMain(void)                                               /* 446 *
  *  The page's own menu -- three rows, and what CROSS on each opens
  * ------------------------------------------------------------------------ */
 
+/* PORT: the mouse.  The three row labels (menu_camera_tex 0xe0..0xe2, from
+ * y 68 MENU_ROW_PITCH apart); the cursor is set straight, as the pad does. */
+static void MenuCamEditSelMenuMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    menu_cam_edit_ctrl.menu_csr = (char)MioPan_MenuMouseList(
+        menu_cam_edit_ctrl.menu_csr, MENU_ROW_X, MENU_ROW_TOP + 1.0f,
+        MENU_ROW_W, MENU_ROW_PITCH, 0.0f, MENU_ROW_PITCH,
+        MENU_CAM_EDIT_ROW_NUM, 0, 0);
+}
+
 static void MenuCamEditSelMenuPad(void)                                 /* 482 */
 {
+    MenuCamEditSelMenuMouse();
+
     if ((pad[0].rpt & PAD_RPT_UP) || GetPadAnalogRpt(PAD_ANALOG_UP)) {  /* 486 */
         SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 487 */
@@ -727,8 +744,32 @@ static void MenuCamEditMoveTop(void)                                    /* 593 *
  * lenses fitted plus one (the first empty one), capped at three; without
  * camera part 1 there is only slot 0, and both arms snap the cursor back to
  * it rather than wrapping. */
+/* PORT: the mouse.  The tray's slots, SLOT_PITCH apart under their frames
+ * (MenuCamEditSelEquipLensPosFrameDisp, 62 square from SLOT_FRAME_X); only
+ * the ones the pad can reach take the cursor, and a click is CROSS. */
+static void MenuCamEditSelLensEquipPosMouse(void)
+{
+    int csr_range;
+
+    csr_range = GetEquipReinforcedLensNum() + 1;
+    if (csr_range > EQUIP_SPECIAL_NUM)
+    {
+        csr_range = EQUIP_SPECIAL_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    menu_cam_edit_ctrl.equip_pos_csr = (char)MioPan_MenuMouseList(
+        menu_cam_edit_ctrl.equip_pos_csr, SLOT_FRAME_X + 6.0f,
+        SLOT_FRAME_Y - 3.0f, SLOT_PITCH, 62.0f, SLOT_PITCH, 0.0f, csr_range,
+        0, 0);
+}
+
 static void MenuCamEditSelLensEquipPosPad(void)                         /* 610 */
 {
+    MenuCamEditSelLensEquipPosMouse();
+
     int csr_range;
 
     csr_range = GetEquipReinforcedLensNum() + 1;                        /* 615 */
@@ -786,8 +827,31 @@ static void MenuCamEditSelLensEquipPosPad(void)                         /* 610 *
  * makes no sound.  Both movement arms then share one SystemBankPlay() with
  * the CROSS arm's error cue, cross-jumped because they differ only in the
  * cue number. */
+/* PORT: the mouse.  Up to three lens rows ROW_PITCH apart on their beds
+ * (ROW_BG_X, from LENS_ROW_TOP), stepped to the pad's way so the list
+ * scrolls; the wheel scrolls too. */
+static void MenuCamEditEquipLensSelMouse(void)
+{
+    int disp_num = menu_cam_edit_ctrl.ref_ctrl.data_num;
+
+    if (disp_num > MENU_CAM_EDIT_LIST_DISP_NUM)
+    {
+        disp_num = MENU_CAM_EDIT_LIST_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(menu_cam_edit_ctrl.lens_csr, ROW_BG_X,
+                             LENS_ROW_TOP - 2.0f, ROW_BG_W, ROW_PITCH, 0.0f,
+                             ROW_PITCH, disp_num, MIOPAN_MENU_UP,
+                             MIOPAN_MENU_DOWN);
+}
+
 static void MenuCamEditEquipLensSelPad(void)                            /* 663 */
 {
+    MenuCamEditEquipLensSelMouse();
+
     int  i;
     int  disp_num;
     int  data_pos_back_up;
@@ -926,8 +990,46 @@ static void MenuCamEditEquipLensSelPad(void)                            /* 663 *
  *  spelled out in full.
  * ------------------------------------------------------------------------ */
 
+/* PORT: the mouse.  The three basic rows (from BASE_ROW_TOP) and up to three
+ * lens rows (from LENS_ROW_TOP), stepped to with UP / DOWN.  The pad's ladder
+ * runs through every lens, not just the ones on screen -- UP on the first
+ * lens row scrolls until the list is at its top before it crosses -- so the
+ * seek counts from 3 + data_pos in the lens half, which is how many presses
+ * the crossing really takes. */
+static void MenuCamEditItemSelMouse(void)
+{
+    int disp_num = menu_cam_edit_ctrl.ref_ctrl.data_num;
+    int ladder;
+
+    if (disp_num > MENU_CAM_EDIT_LIST_DISP_NUM)
+    {
+        disp_num = MENU_CAM_EDIT_LIST_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    ladder = menu_cam_edit_ctrl.edit_sel_csr;
+    if (ladder >= MENU_CAM_BASIC_NUM)
+    {
+        ladder = MENU_CAM_BASIC_NUM + menu_cam_edit_ctrl.ref_ctrl.data_pos;
+    }
+    if (MioPan_MenuMouseSeekList(ladder, ROW_BG_X, BASE_ROW_TOP - 2.0f,
+                                 ROW_BG_W, ROW_PITCH, 0.0f, ROW_PITCH,
+                                 MENU_CAM_BASIC_NUM, MIOPAN_MENU_UP,
+                                 MIOPAN_MENU_DOWN) < 0)
+    {
+        MioPan_MenuMouseSeekList(
+            ladder - MENU_CAM_BASIC_NUM - menu_cam_edit_ctrl.ref_ctrl.disp_start_pos,
+            ROW_BG_X, LENS_ROW_TOP - 2.0f, ROW_BG_W, ROW_PITCH, 0.0f,
+            ROW_PITCH, disp_num, MIOPAN_MENU_UP, MIOPAN_MENU_DOWN);
+    }
+}
+
 static void MenuCamEditItemSelPad(void)                                 /* 789 */
 {
+    MenuCamEditItemSelMouse();
+
     int disp_num;
 
     disp_num = menu_cam_edit_ctrl.ref_ctrl.data_num;                    /* 793 */
@@ -1412,6 +1514,8 @@ static void MenuCamPowerUp(void)                                        /* 1195 
  * real empty cases in the ROM's jump table rather than a default. */
 static void MenuCamEditErrorPad(void)                                   /* 1249 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     char pad_flg;
 
     pad_flg = 0;

@@ -142,6 +142,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -819,8 +820,33 @@ static void MenuFileMode(void)                                          /* 682 *
  * skipping any tab the player holds nothing in -- the bounded loop gives up
  * after five tries and leaves load_flg clear, which is what happens if the
  * player somehow has nothing at all. */
+/* PORT: the mouse.  Six rows 35 apart from y 116 (MenuFileTopListFrameDisp),
+ * stepped to the pad's way so the picture cross-fades; the L1 / R1 arrows
+ * either side of the tab head (MenuFileTopArrowDisp) change the file type. */
+static void MenuFileTopMouse(void)
+{
+    const int file_type = menu_file_ctrl.tag_csr;
+    int disp_num = menu_file_ctrl.ref_ctrl[file_type].data_num;
+
+    if (MENU_FILE_DISP_NUM < disp_num)
+    {
+        disp_num = MENU_FILE_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(25.0f, 52.0f, 40.0f, 34.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(563.0f, 52.0f, 40.0f, 34.0f, MIOPAN_MENU_RIGHT);
+    MioPan_MenuMouseSeekList(menu_file_ctrl.top_csr[file_type], 73.0f, 114.0f,
+                             310.0f, 34.0f, 0.0f, 35.0f, disp_num,
+                             MIOPAN_MENU_UP, MIOPAN_MENU_DOWN);
+}
+
 static void MenuFileTopPad(void)                                        /* 774 */
 {
+    MenuFileTopMouse();
+
     int    file_type;
     int    file_id;
     int    disp_num;
@@ -927,8 +953,23 @@ static void MenuFileTopPad(void)                                        /* 774 *
  * auto-repeat, and both wrap: page 0 goes back to the last page and the last
  * page goes forward to 0.  The cue only fires if the page actually changed,
  * which is why the count is latched before the move and compared after. */
+/* PORT: the mouse, for the three viewers.  The page fills the screen, so its
+ * halves are the page turns: the left half goes back, the right half forward
+ * (`forward` -- the reader turns on CROSS as well as RIGHT). */
+static void MenuFilePageMouse(int forward)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(-1000.0f, -1000.0f, 1320.0f, 3000.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(320.0f, -1000.0f, 1320.0f, 3000.0f, forward);
+}
+
 static void MenuFilePocketBookPad(void)                                 /* 866 */
 {
+    MenuFilePageMouse(MIOPAN_MENU_CROSS);
+
     int file_type;
     int file_id;
     int page_num;
@@ -987,6 +1028,8 @@ static void MenuFilePocketBookPad(void)                                 /* 866 *
  * confirm button here because looking at it IS reading it. */
 static void MenuFilePhotoGraphPad(void)                                 /* 919 */
 {
+    MenuFilePageMouse(MIOPAN_MENU_RIGHT);
+
     u_char load_flg;
     int    file_type;
     int    file_id;
@@ -1055,6 +1098,8 @@ static void MenuFilePhotoGraphPad(void)                                 /* 919 *
  * number; the ROM has both written out in full. */
 static void MenuFileMapPad(void)                                        /* 981 */
 {
+    MenuFilePageMouse(MIOPAN_MENU_RIGHT);
+
     u_char load_flg;
     int    file_type;
     int    file_id;
@@ -1122,6 +1167,8 @@ static void MenuFileMapPad(void)                                        /* 981 *
 /* Nothing to walk: the only thing this mode can do is leave. */
 static void MenuFileNoHavePad(void)                                     /* 1042 */
 {
+    MioPan_MenuMouseBack();   /* PORT: the only way is back */
+
     if (*paddat[1] == 1) {                                              /* 1046 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 1047 */

@@ -21,6 +21,7 @@
 #include "../main/gphase.h"                 // SetNextGPhase / GID_TITLE_MENU
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat
+#include "../miopan/io/miopan_menu_mouse.h" // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -37,6 +38,13 @@ void TitleTopMain(void)
  * counters are hold counts, so `== 1` is "pressed this frame". */
 static void TitleTopPad(void)
 {
+    /* PORT: a click anywhere is the press START asks for. */
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_NO_BACK, 0) != 0)
+    {
+        MioPan_MenuMouseButton(-1000.0f, -1000.0f, 3000.0f, 3000.0f,
+                               MIOPAN_MENU_CROSS);
+    }
+
     if ((*paddat[7] == 1) || (*paddat[0] == 1))                         /* 70 */
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 71 */

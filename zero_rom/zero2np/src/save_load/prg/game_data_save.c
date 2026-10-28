@@ -56,6 +56,7 @@
 #include "../../system/mc/prg/mc_set_data.h"    // path / size / data-area / accessors
 #include "../../system/os/system.h"             // GetLanguage / SystemBankPlay
 #include "../../system/pad/pad.h"               // pad / paddat / GetPadAnalogRpt
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                             // memset
 
@@ -739,8 +740,45 @@ static void GameDataSaveMcSaveFileSel(void)                             /* 870 *
 /* The cursor's range is "used slots + 1", clamped to five -- so the player can
  * overwrite any existing save or start one new one, but cannot skip past the
  * first empty slot to a later empty one. */
+/* PORT: the mouse.  The five slots, 118 apart (SAVE_LOAD_DATA_PITCH); as
+ * with the pad, only the slots in use and the first free one can take the
+ * cursor. */
+static int game_data_save_mouse_range;
+
+static int GameDataSaveSlotOutOfRange(int slot)
+{
+    return slot >= game_data_save_mouse_range;
+}
+
+static void GameDataSaveMouse(void)
+{
+    int i;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    game_data_save_mouse_range = 1;
+    for (i = 0; i < GAME_DATA_SAVE_DATA_MAX; i++)
+    {
+        if (GetMemoryCardPlayDataFlg(i) == 1)
+        {
+            game_data_save_mouse_range++;
+        }
+    }
+    if (game_data_save_mouse_range > GAME_DATA_SAVE_DATA_MAX)
+    {
+        game_data_save_mouse_range = GAME_DATA_SAVE_DATA_MAX;
+    }
+    game_data_save_ctrl.csr = (char)MioPan_MenuMouseList(
+        game_data_save_ctrl.csr, 24.0f, 106.0f, 118.0f, 117.0f, 118.0f, 0.0f,
+        GAME_DATA_SAVE_DATA_MAX, 0, GameDataSaveSlotOutOfRange);
+}
+
 static void GameDataSaveMcSaveFileSelPad(void)                          /* 885 */
 {
+    GameDataSaveMouse();
+
     int i;
     int csr_range;
 
@@ -1046,6 +1084,8 @@ static void GameDataSaveMcErrorConfWait(void)                           /* 1249 
 /* Both buttons do the same thing -- there is nothing to choose. */
 static void GameDataSaveMcErrorConfPad(void)                            /* 1287 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1291 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 1292 */
         GameDataSaveOutReq();                                           /* 1294 */
@@ -1060,6 +1100,8 @@ static void GameDataSaveMcErrorConfPad(void)                            /* 1287 
  * ErrorConfPad, but it is its own function in the ROM. */
 static void GameDataSaveMcEndConf(void)                                 /* 1309 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1313 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 1314 */
         GameDataSaveOutReq();                                           /* 1316 */

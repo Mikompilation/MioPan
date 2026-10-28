@@ -35,6 +35,7 @@
 #include "../system/eeiop/stream_auto.h"    // StreamAutoAllPause
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / padIsConnected / ...
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../miopan/miopan_config.h"        // MioPan_ConfigDebugMenuEnabled (port)
 
 /* PAUSE_CTRL::step */
@@ -147,8 +148,23 @@ int MisPauseMain(void)                                                  /* 179 *
 
 /* The menu itself.  START resumes outright; SELECT drops into the debug
  * phase. */
+/* PORT: the mouse.  The rows sit 30 apart under the cursor bar
+ * (MisPauseMenuCsrDisp: x 162, width 316, from y 184). */
+static void MisPauseMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    pause_ctrl.csr = (char)MioPan_MenuMouseList(
+        pause_ctrl.csr, 162.0f, 182.0f, 316.0f, 30.0f, 0.0f, 30.0f,
+        MISPAUSE_CSR_MAX, 0, 0);
+}
+
 static void MisPausePad(void)                                           /* 226 */
 {
+    MisPauseMouse();
+
     if (((pad[0].rpt & 0x1000U) != 0) || (GetPadAnalogRpt(0) != 0))     /* 230 */
     {
         SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);  /* 231 */

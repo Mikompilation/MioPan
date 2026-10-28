@@ -113,6 +113,7 @@
 #include "../../system/mc/prg/mc_set_data.h"        // path / size / data-area
 #include "../../system/os/system.h"                 // SystemBankPlay
 #include "../../system/pad/pad.h"                   // GetPadAnalogRpt
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                                 // memset
 
@@ -389,8 +390,24 @@ static void AlbumLoadModeMain(void)                                     /* 304 *
  * Committing is what binds the port for every later card call --
  * MemoryCardSetAccessPort() -- so the rest of the machine can pass slot_csr
  * around without re-deciding. */
+/* PORT: the mouse.  The two card slots, 38 apart under the cursor's frame
+ * (AlbumSlotSelWinDisp: x 160, 320 wide, from y 182); the cursor is set
+ * straight, as the pad's toggle does, and a click is CROSS. */
+static void AlbumLoadSlotSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    album_load_ctrl.slot_csr = (char)MioPan_MenuMouseList(
+        album_load_ctrl.slot_csr, 160.0f, 180.0f, 320.0f, 38.0f, 0.0f, 38.0f,
+        ALBUM_LOAD_SLOT_MAX, 0, 0);
+}
+
 static void AlbumLoadSlotSelPad(void)                                   /* 337 */
 {
+    AlbumLoadSlotSelMouse();
+
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0) ||                  /* 341 */
         (pad[0].rpt & 0x4000) || GetPadAnalogRpt(1)) {                  /* 347 */
 
@@ -683,8 +700,38 @@ static void AlbumLoadMcLoadAlbumSelWait(void)                           /* 628 *
  * album on the card the loop comes back to where it started and no sound is
  * made at all.  Same shape outgame/setup_menu.c's locked-row walk has, minus
  * its error cue. */
+/* PORT: the mouse.  The five album plates (album_tex 390..394, 157 wide:
+ * three from y 107, two from y 203, the top row cut where the bottom row
+ * starts); only the albums on the card take the cursor, which is set
+ * straight as the pad's walk does, and a click is CROSS. */
+static void AlbumLoadAlbumSelMouse(void)
+{
+    static const float plate[ALBUM_LOAD_ALBUM_MAX][2] =
+    {
+        {  71.0f, 107.0f }, { 241.0f, 107.0f }, { 411.0f, 107.0f },
+        { 154.0f, 203.0f }, { 334.0f, 203.0f },
+    };
+    int i;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < ALBUM_LOAD_ALBUM_MAX; i++)
+    {
+        if (album_load_ctrl.album_flg[i] == 1)
+        {
+            album_load_ctrl.album_sel_csr = (char)MioPan_MenuMouseItem(
+                album_load_ctrl.album_sel_csr, i, plate[i][0], plate[i][1],
+                157.0f, i < 3 ? 96.0f : 107.0f);
+        }
+    }
+}
+
 static void AlbumLoadMcLoadAlbumSelPad(void)                            /* 643 */
 {
+    AlbumLoadAlbumSelMouse();
+
     int  i;
     char csr_back_up;
 
@@ -974,6 +1021,8 @@ static void AlbumLoadMcErrorConfWait(void)                              /* 963 *
  * copy's line numbers survive. */
 static void AlbumLoadMcErrorConfPad(void)                               /* 996 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1000 */
 
         SystemBankPlay(3, 1, 0, 0, NULL, 0x3200, 0x1000);               /* 1003 */
@@ -993,6 +1042,8 @@ static void AlbumLoadMcErrorConfPad(void)                               /* 996 *
  * album_edit.o to decompress the album that just arrived. */
 static void AlbumLoadMcEndConf(void)                                    /* 1018 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1022 */
         SystemBankPlay(3, 1, 0, 0, NULL, 0x3200, 0x1000);               /* 1023 */
 

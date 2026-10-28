@@ -71,6 +71,7 @@
 #include "../../system/eeiop/fileload.h"        /* FileLoadReqEE          */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat           */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                             /* memset                 */
 
@@ -293,8 +294,37 @@ void MenuTop(void)                                                      /* 274 *
  *
  * The three anim_step guards are the ROM's own, repeated per arm -- TRIANGLE
  * deliberately has none, so the menu can be cancelled mid-fade. */
+/* PORT: the mouse.  The rows the hub shows, 35 apart from y 68 in display
+ * order -- the rows CheckMenuCondition() hides take no place (see
+ * MenuTopSelectDisp).  Only while the page is fully in, as for the pad. */
+static void MenuTopMouse(void)
+{
+    int i;
+    int disp_row = 0;
+
+    if (menu_top_disp.anim_step != MENU_TOP_ANIM_SHOW ||
+        MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < MENU_TOP_CSR_NUM; i++)
+    {
+        if (CheckMenuCondition(i) == 0)
+        {
+            continue;
+        }
+        menu_wrk.cursor = MioPan_MenuMouseItem(
+            menu_wrk.cursor, i, MENU_TOP_ROW_X,
+            (float)disp_row * MENU_TOP_ROW_PITCH + MENU_TOP_ROW_TOP - 2.0f,
+            MENU_TOP_ROW_W, MENU_TOP_ROW_PITCH - 1.0f);
+        disp_row++;
+    }
+}
+
 static void MenuTopPad(void)                                            /* 314 */
 {
+    MenuTopMouse();
+
     int i;
 
     if ((pad[0].rpt & PAD_RPT_UP) || GetPadAnalogRpt(PAD_ANALOG_UP)) {  /* 320 */

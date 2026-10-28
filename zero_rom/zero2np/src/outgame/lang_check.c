@@ -34,6 +34,7 @@
 #include "../system/mc/prg/mc_set_data.h"   // path/size/Develop/Get/LiberateDataMemoryArea
 #include "../system/os/system.h"            // SystemBankPlay
 #include "../system/pad/pad.h"              // paddat
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                         // memset
 
@@ -291,6 +292,8 @@ static void LangCheckMcLoadWait(void)
 /* CROSS or 150 frames, then commit the language that came off the card. */
 static void LangCheckMcLoadConf(void)
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1)                                                /* 387 */
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 388 */

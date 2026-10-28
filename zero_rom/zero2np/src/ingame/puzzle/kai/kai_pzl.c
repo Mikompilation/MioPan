@@ -61,6 +61,7 @@
 #include "../../../system/eeiop/sndbank.h"          /* SndBankPlay            */
 #include "../../../system/os/system.h"              /* SystemBankPlay         */
 #include "../../../system/pad/pad.h"                /* paddat/GetPadAnalogRpt */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Module state
@@ -442,8 +443,65 @@ static void KaiPzlCheckKai(int id, int kai_lr)                          /* 543 *
  *  row 0, which becomes kai_lr 2 -- the iRotL delta.  That is what the ROM
  *  does; the words themselves come from the message file.
  * ------------------------------------------------------------------------ */
+/* PORT: the mouse.  The menu sits in message window 0x43, laid out as
+ * KaiPuzzleDrawMsg() lays it out: the two turns share the line 0x17 under
+ * the prompt (left word from KaiPzlGetCen(1), right word ending
+ * KaiPzlGetMsgLen(1) on), the quit line is 0x2e under it.  Pointing at one
+ * sets the cursor as the pad's arms do, with their cue; a click is CROSS. */
+static void KaiPzlProcMouse(void)
+{
+    MioPan_MenuMouse mouse;
+    MSG_WIN_DAT      win_dat;
+    DISP_STR         ds;
+    int              cx;
+    int              left_x;
+    int              right_end;
+    int              target;
+    int              current;
+
+    if (MioPan_MenuMouseBegin(0, &mouse) == 0 || KaiPzlIsFade())
+    {
+        return;
+    }
+    SetMsgWinDefData(&win_dat, 0x43);
+    SetMsgDefData(&ds, 0x43);
+    cx        = (int)(win_dat.x + win_dat.w * 0.5f);
+    left_x    = KaiPzlGetCen(1, cx);
+    right_end = left_x + KaiPzlGetMsgLen(1) + 2;
+
+    if (MioPan_MenuMouseIn((float)left_x, (float)(ds.pos_y + 0x17 - 2),
+                           (float)(right_end - left_x), 23.0f))
+    {
+        target = mouse.x < (float)(left_x + right_end) * 0.5f ? 2 : 1;
+    }
+    else if (MioPan_MenuMouseIn((float)KaiPzlGetCen(2, cx),
+                                (float)(ds.pos_y + 0x2e - 2),
+                                (float)(KaiPzlGetMsgLen(2) + 2), 23.0f))
+    {
+        target = 4;
+    }
+    else
+    {
+        return;
+    }
+
+    current = (KaiPzlKaiCsl & 4) != 0 ? 4 : ((KaiPzlKaiCsl & 1) != 0 ? 1 : 2);
+    if (target != current && (mouse.moved != 0 || mouse.left != 0))
+    {
+        SndBankPlay(GetPzlSndBankID(), 0, 0, 0, 0x3200, 0x1000, 0,
+                    (SND_3D_SET *)0);
+        KaiPzlKaiCsl = target == 4 ? ((KaiPzlKaiCsl & 3) | 4) : target;
+    }
+    if (MioPan_MenuMouseClicked() != 0)
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
+}
+
 int KaiPzlProc(void)                                            /* 555 */
 {                                                                       /* 556 */
+    KaiPzlProcMouse();
+
     int csr;
     int kai;
     int flg;
@@ -568,6 +626,8 @@ int KaiPzlClear(void)                                           /* 676 */
 /* Mode 5: a result message.  Bit 5 keeps it on screen through the teardown. */
 int KaiPzlDrawMsg(void)                                         /* 700 */
 {                                                                       /* 701 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     KaiPuzzleDrawMsgOne((u_char)KaiPzlFadeSt[4], KaiPzlMsgNo, (DISP_STR *)0); /* 703 */
 
     if ((!KaiPzlIsFade()) && (*paddat[0] == 1)) {                       /* 289 / 709 */

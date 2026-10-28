@@ -54,6 +54,7 @@
 #include "../../../system/eeiop/sndbank.h"          /* SndBankPlay            */
 #include "../../../system/os/system.h"              /* GetPALMode             */
 #include "../../../system/pad/pad.h"                /* paddat/GetPadAnalogRpt */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Module state
@@ -263,8 +264,75 @@ static int HinaPuzzleClearCheck(void)                                   /* 383 *
  *  holds one of the two fixed dolls.  Failure restores the cursor and plays
  *  sample 3; success plays sample 0.
  * ------------------------------------------------------------------------ */
+/* PORT: the mouse.  The board's cells, each a 113x107 doll at hina_pos_x /
+ * _y; the shelves are only 83 apart, so the hit boxes are trimmed to the
+ * pitch.  Pointing at a doll the cursor may rest on takes the cursor there,
+ * with the pad's cue; clicking a doll, or the empty slot beside the one the
+ * cursor is on, slides it as CROSS does. */
+static int HinaPuzzleMouseCell(int tate, int yoko)
+{
+    return MioPan_MenuMouseIn(hina_pos_x[tate][yoko] + 8.0f,
+                              hina_pos_y[tate][yoko] + 12.0f, 97.0f, 83.0f);
+}
+
+static void HinaPuzzleDollSelMouse(void)
+{
+    MioPan_MenuMouse mouse;
+    char blank_tate;
+    char blank_yoko;
+    int  i;
+    int  j;
+    int  k;
+    int  no;
+
+    if (MioPan_MenuMouseBegin(0, &mouse) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < 4; i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            no = hina_pzl_ctrl.hina_pos[i][j];
+            if (no == -1 || no == -2)
+            {
+                continue;
+            }
+            for (k = 0; k < 2 && no != no_move_hina[k]; k++)
+            {
+            }
+            if (k < 2 || HinaPuzzleMouseCell(i, j) == 0)
+            {
+                continue;
+            }
+            if ((i != hina_pzl_ctrl.csr_tate || j != hina_pzl_ctrl.csr_yoko)
+                && (mouse.moved != 0 || mouse.left != 0))
+            {
+                hina_pzl_ctrl.csr_tate = (char)i;
+                hina_pzl_ctrl.csr_yoko = (char)j;
+                hina_pzl_ctrl.snd_id = SndBankPlay(GetPzlSndBankID(), 0, 0, 0,
+                                                   0x3200, 0x1000, 0,
+                                                   (SND_3D_SET *)0);
+            }
+            if (MioPan_MenuMouseClicked() != 0)
+            {
+                MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+            }
+            return;
+        }
+    }
+    HinaPuzzleGetBlankPos(&blank_tate, &blank_yoko);
+    if (HinaPuzzleMouseCell(blank_tate, blank_yoko) != 0
+        && MioPan_MenuMouseClicked() != 0)
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
+}
+
 static void HinaPuzzleDollSelPad(void)                                  /* 410 */
 {                                                                       /* 411 */
+    HinaPuzzleDollSelMouse();
+
     int  i;
     char before_csr;
 
@@ -594,6 +662,8 @@ static void HinaPuzzleExitSelPad(void)                                  /* 749 *
 /* Either button leaves; the puzzle is over either way. */
 static void HinaPuzzleClearPad(void)                                    /* 794 */
 {                                                                       /* 795 */
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 799 */
         HinaPuzzleExitReq();                                            /* 801 */
     } else if (*paddat[1] == 1) {                                       /* 804 */

@@ -34,6 +34,7 @@
 #include "../../../system/eeiop/stream_auto.h"      // StreamAutoAllPause
 #include "../../../system/os/system.h"              // SystemBankPlay / SND_3D_SET
 #include "../../../system/pad/pad.h"                // paddat / pad / VibrateRequest
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../../../miopan/miopan_config.h"          // MioPan_ConfigDebugMenuEnabled (port)
 #include "../../../miopan/miopan_ui/miopan_rml_pause.h"  // the RmlUi pause screen (port)
 
@@ -55,7 +56,10 @@ static PAUSE_CTRL pause_ctrl;       /* bss 4bbaf8 */
  * game's message strings have no "Options" to add a row with.  This file still
  * owns the phase: the paused frame, the controller-unplugged step, and what
  * each choice does, since the screen answers in PauseMain()'s own codes.  The
- * panel below runs as it always did whenever RmlUi is unavailable. */
+ * panel below runs as it always did whenever RmlUi is unavailable.
+ * pause_rml is 0 for that panel, 1 while the screen is up, and
+ * PAUSE_RML_CLOSED once it has answered, until the phase is left. */
+#define PAUSE_RML_CLOSED 2
 static int pause_rml;
 
 static void PauseCtrlInit(void);
@@ -120,6 +124,9 @@ int PauseMain(void)
         pause_ctrl.step = 2;                                            /* 194 */
     }
 
+    if (pause_rml == PAUSE_RML_CLOSED) {
+        return 0;
+    }
     if (pause_rml != 0) {
         /* The unplugged message is the game's, and it needs the pad to answer
          * it, so the screen steps aside for it. */
@@ -131,8 +138,10 @@ int PauseMain(void)
 
         ret = MioPan_RmlPauseConsumeResult();
         if (ret != 0) {
+            /* The phase only changes on a later frame; until it does, the
+             * ROM panel must not draw in the screen's place. */
             MioPan_RmlPauseClose();
-            pause_rml = 0;
+            pause_rml = PAUSE_RML_CLOSED;
         }
         return ret;
     }
@@ -162,8 +171,24 @@ int PauseMain(void)
     return ret;                                                         /* 217 */
 }
 
+/* PORT: the mouse, for this panel when it runs (RmlUi unavailable): the rows
+ * sit 30 apart under the cursor bar (PauseMenuCsrDisp: x 162, width 316,
+ * from y 184). */
+static void PauseMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    pause_ctrl.csr = (char)MioPan_MenuMouseList(
+        pause_ctrl.csr, 162.0f, 182.0f, 316.0f, 30.0f, 0.0f, 30.0f,
+        PAUSE_MENU_COUNT, 0, 0);
+}
+
 static int PausePad(void)
 {
+    PauseMouse();
+
     int ret;
 
     ret = 0;
@@ -286,9 +311,10 @@ void PauseDispMain(void)
 {
     PauseCaptureDataDisp();                                             /* 370 */
 
-    /* The RmlUi screen draws its own panel over the paused frame. */
+    /* The RmlUi screen draws its own panel over the paused frame -- and once
+     * it has closed, nothing is drawn over it while the phase winds down. */
     if (pause_rml != 0) {
-        if (pause_ctrl.step == 2) {
+        if (pause_rml != PAUSE_RML_CLOSED && pause_ctrl.step == 2) {
             PausePadErrorMsgDisp(0, 0, 0x80);
         }
         return;

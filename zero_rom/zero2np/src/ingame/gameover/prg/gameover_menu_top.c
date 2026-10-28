@@ -44,6 +44,7 @@
 #include "../../../system/eeiop/snd3d.h"            /* SND_3D_SET             */
 #include "../../../system/os/system.h"              /* GetLanguage / SystemBankPlay */
 #include "../../../system/pad/pad.h"                /* pad / paddat           */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* The message group every game-over string comes out of. */
 #define GAMEOVER_MSG_TYPE           0x23
@@ -223,8 +224,24 @@ void GameOverMenuTopMain(void)                                          /* 223 *
 /* UP/DOWN walk the three rows; CROSS opens the confirm window on whichever is
  * selected, and TRIANGLE jumps the cursor to the exit row without confirming
  * anything.  csr + 2 rather than csr - 1 so the modulo stays positive. */
+/* PORT: the mouse.  Load / album / leave, 30 apart under the cursor's frame
+ * (GameOverMenuTopCsrDisp: x 184, 272 wide, from y 142); the cursor is set
+ * straight, as the pad does. */
+static void GameOverMenuTopMouse(void)
+{
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    gameover_menu_top_ctrl.csr = (char)MioPan_MenuMouseList(
+        gameover_menu_top_ctrl.csr, 184.0f, 140.0f, 272.0f, 30.0f, 0.0f, 30.0f,
+        GAMEOVER_MENU_TOP_CSR_NUM, 0, 0);
+}
+
 static void GameOverMenuTopPad(void)                                    /* 283 */
 {
+    GameOverMenuTopMouse();
+
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0)) {                  /* 287 */
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 288 */
 

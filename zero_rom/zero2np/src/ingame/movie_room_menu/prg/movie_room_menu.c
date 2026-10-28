@@ -85,6 +85,7 @@
 #include "../../../system/eeiop/fileload.h"     /* FileLoadReqEE             */
 #include "../../../system/os/system.h"          /* SystemBankPlay            */
 #include "../../../system/pad/pad.h"            /* GetPadAnalogRpt           */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include "../../item/prg/item.h"                /* ItemGet / ItemLost        */
 #include "../../menu/anim_2d.h"                 /* ALPHA_ANIM_TBL / POS_*    */
@@ -411,6 +412,8 @@ static void MovieRoomMenuFilmSelAnimCtrl(char *anim_step,
  * ------------------------------------------------------------------------ */
 static void MovieRoomMenuMsgDispPad(void)                              /* 517 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                             /* 521 */
         SystemBankPlay(SE_DECIDE, 1, 0, 0, NULL, 0x3200, 0x1000);      /* 522 */
 
@@ -430,8 +433,24 @@ static void MovieRoomMenuMsgDispPad(void)                              /* 517 */
  *  played whether or not the strip can actually move, so a single reel still
  *  clicks when the player presses left or right.
  * ------------------------------------------------------------------------ */
+/* PORT: the mouse.  The strip shows one reel inside REEL_STRIP_SCISSOR
+ * (x 192..453, y 58..294): its outer thirds scroll back and on, the reel in
+ * the middle is CROSS, and the wheel scrolls too. */
+static void MovieRoomMenuFilmSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(192.0f, 58.0f, 70.0f, 236.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(262.0f, 58.0f, 121.0f, 236.0f, MIOPAN_MENU_CROSS);
+    MioPan_MenuMouseButton(383.0f, 58.0f, 70.0f, 236.0f, MIOPAN_MENU_RIGHT);
+}
+
 static void MovieRoomMenuFilmSelPad(void)                              /* 541 */
 {
+    MovieRoomMenuFilmSelMouse();
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2)) {                 /* 545 */
 
         if (movie_room_menu_disp.move_anim_step != 2) return;          /* 546 */
@@ -565,6 +584,8 @@ static void MovieRoomMenuExitConfPad(void)                             /* 650 */
  * ------------------------------------------------------------------------ */
 static void MovieRoomMenuNoHaveFilmPad(void)                           /* 689 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                             /* 693 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, NULL, 0x3200, 0x1000);      /* 696 */
         movie_room_menu_ctrl.step = 2;
@@ -584,8 +605,34 @@ static void MovieRoomMenuNoHaveFilmPad(void)                           /* 689 */
  *  differ, and GCC cross-jumped every arm the two halves share -- which is
  *  why the have_num != 0 half has almost no line numbers of its own.
  * ------------------------------------------------------------------------ */
+/* PORT: the mouse.  Change / take out / leave across the bottom, centred
+ * 170 apart from x 140 (two, 207 apart from 155, with no other reel to
+ * change to), as MovieRoomMenuFilmSetDisp() lays them out; the cursor is set
+ * straight, as the pad does. */
+static void MovieRoomMenuFilmSetMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    if (movie_room_menu_ctrl.have_num != 0)
+    {
+        movie_room_menu_ctrl.conf_csr = (u_char)MioPan_MenuMouseList(
+            movie_room_menu_ctrl.conf_csr, 140.0f - 80.0f, 387.0f, 160.0f,
+            29.0f, 170.0f, 0.0f, 3, 0, 0);
+    }
+    else
+    {
+        movie_room_menu_ctrl.conf_csr = (u_char)MioPan_MenuMouseList(
+            movie_room_menu_ctrl.conf_csr, 155.0f - 90.0f, 387.0f, 180.0f,
+            29.0f, 207.0f, 0.0f, 2, 0, 0);
+    }
+}
+
 static void MovieRoomMenuFilmSetPad(void)                              /* 707 */
 {
+    MovieRoomMenuFilmSetMouse();
+
     if (movie_room_menu_ctrl.have_num != 0) {                          /* 709 */
 
         if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2)) {             /* 711 */

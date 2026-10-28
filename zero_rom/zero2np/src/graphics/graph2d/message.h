@@ -162,6 +162,8 @@ int     PrintMsg_TW(DISP_STR *disp_addr, MSG_WIN_DAT *win_ctrl);
 int     PrintMsg_Arrange(int msg_type, int msg_id, int x, int y, int col_label, int alpha, int pri, int x_wide, int y_wide, int arrange);
 
 void    PrintChoice(DISP_STR *msg, MSG_WIN_DAT *win, int choice_msg, int *choice, int csr);
+/* PORT: answer `index` of the three-answer choice drawn last; 0 when none. */
+int     MioPan_MsgChoice3Box(int index, float *x, float *y, float *w);
 u_char  GetMsgWinData(DISP_STR *disp_wrk, MSG_WIN_DAT *win, int *win_x, int *win_y);
 
 /* message-table queries */

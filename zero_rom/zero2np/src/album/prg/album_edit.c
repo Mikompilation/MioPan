@@ -139,6 +139,7 @@
 #include "../../ingame/photo/photo_make.h"          // UncompressPhoto / DrawPhoto*
 #include "../../system/os/system.h"                 // SystemBankPlay
 #include "../../system/pad/pad.h"                   // GetPadAnalogRpt
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* ---- geometry ----------------------------------------------------------- *
  * Sixteen slots per album, laid out two rows of eight.  Everything about the
@@ -570,8 +571,76 @@ static void AlbumEditModeTop(void)                                      /* 491 *
  * and GCC cross-jumped them, so only DOWN's body carries line numbers.
  * LEFT and RIGHT wrap inside the row: the row index (photo_no / 8) * 8 is
  * preserved and the column steps by a real signed % 8. */
+/* PORT: the mouse.  Each album's grid, two rows of eight thumbnails
+ * ALBUM_EDIT_THUMBNAIL_STEP_X / _Y apart from (207, 80) for A and (36, 338)
+ * for B (AlbumEditThumbnailDisp).  Pointing at a slot of the current album
+ * takes the cursor there and clicking the slot it is on enlarges it (the
+ * view button); clicking the other album's grid flips to it, as L1 / R1 do. */
+static int AlbumEditGridHit(int data_label)
+{
+    static const int grid_x[2] = { 207, 36 };
+    static const int grid_y[2] = { 80, 338 };
+    int i;
+    int j;
+
+    for (i = 0; i < ALBUM_EDIT_THUMBNAIL_ROW; i++)
+    {
+        for (j = 0; j < ALBUM_EDIT_THUMBNAIL_COL; j++)
+        {
+            if (MioPan_MenuMouseIn((float)(grid_x[data_label] - 2
+                                           + j * ALBUM_EDIT_THUMBNAIL_STEP_X),
+                                   (float)(grid_y[data_label] - 2
+                                           + i * ALBUM_EDIT_THUMBNAIL_STEP_Y),
+                                   ALBUM_EDIT_THUMBNAIL_STEP_X,
+                                   ALBUM_EDIT_THUMBNAIL_STEP_Y))
+            {
+                return i * ALBUM_EDIT_THUMBNAIL_COL + j;
+            }
+        }
+    }
+    return -1;
+}
+
+static void AlbumEditTopMouse(void)
+{
+    MioPan_MenuMouse mouse;
+    int current_album = GetCurrentAlbum();
+    int hit;
+
+    if (MioPan_MenuMouseBegin(0, &mouse) == 0)
+    {
+        return;
+    }
+    hit = AlbumEditGridHit(current_album);
+    if (hit < 0)
+    {
+        if (AlbumEditGridHit(current_album ^ 1) >= 0
+            && MioPan_MenuMouseClicked() != 0)
+        {
+            MioPan_MenuMousePress(MIOPAN_MENU_L1);
+        }
+        return;
+    }
+    if (hit == GetAlbumPhotoNo())
+    {
+        if (MioPan_MenuMouseClicked() != 0)
+        {
+            MioPan_MenuMousePress(MIOPAN_MENU_CIRCLE);
+        }
+        return;
+    }
+    if (MioPan_MenuMouseClicked() != 0 || mouse.moved != 0)
+    {
+        SystemBankPlay(ALBUM_EDIT_SE_MOVE, 1, 0, 0, NULL, 0x3200, 0x1000);
+        SetAlbumPhotoNo((char)hit);
+        AlbumEditUncompressPhotoReq();
+    }
+}
+
 static void AlbumEditTopPad(void)                                       /* 506 */
 {
+    AlbumEditTopMouse();
+
     int current_album = GetCurrentAlbum();                              /* 506 */
     int photo_no      = GetAlbumPhotoNo();                              /* 508 */
     int i;
@@ -730,8 +799,45 @@ static void AlbumEditModeMenu(void)                                     /* 705 *
  * tries.  The cue plays only if the cursor actually ended up somewhere else,
  * which is also what happens when exactly one row is usable -- so a lone row
  * is silent rather than giving the error cue. */
+/* PORT: the mouse.  Only the usable rows are drawn, stacked
+ * ALBUM_EDIT_MENU_STEP_Y apart from 0xee - 0x11 per row (AlbumEditMenuDisp),
+ * so row i sits wherever its place among the drawn ones puts it; the cursor
+ * is set straight, as the pad's walk does, and a click is CROSS. */
+static void AlbumEditMenuMouse(void)
+{
+    int i;
+    int menu_num = 0;
+    int y;
+
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    for (i = 0; i < ALBUM_EDIT_MENU_MAX; i++)
+    {
+        if (CheckAlbumMenuCondition(i))
+        {
+            menu_num++;
+        }
+    }
+    y = 0xee - menu_num * 0x11;
+    for (i = 0; i < ALBUM_EDIT_MENU_MAX; i++)
+    {
+        if (!CheckAlbumMenuCondition(i))
+        {
+            continue;
+        }
+        album_edit_ctrl.menu_csr = (char)MioPan_MenuMouseItem(
+            album_edit_ctrl.menu_csr, i, 8.0f, (float)y - 1.0f, 150.0f,
+            ALBUM_EDIT_MENU_STEP_Y);
+        y += ALBUM_EDIT_MENU_STEP_Y;
+    }
+}
+
 static void AlbumEditMenuPad(void)                                      /* 723 */
 {
+    AlbumEditMenuMouse();
+
     int  i;
     char csr_back_up;
 
@@ -847,8 +953,32 @@ static void AlbumEditMenuPadDecision(void)                              /* 781 *
  * flips sort_flg, so the next press on the same row sorts the other way.
  * Moving between rows resets the flag, which is why a row always starts on its
  * first direction. */
+/* PORT: the mouse.  The two sort rows ALBUM_EDIT_MENU_STEP_Y apart from
+ * y 0xe0 (AlbumEditSortDisp).  Moving rows starts the new one on its first
+ * direction, as the pad's move does; a click is CROSS. */
+static void AlbumEditSortMouse(void)
+{
+    int csr;
+
+    if (MioPan_MenuMouseBegin(0, 0) == 0)
+    {
+        return;
+    }
+    csr = MioPan_MenuMouseList(album_edit_ctrl.sort_csr, 8.0f, 0xe0 - 1.0f,
+                               150.0f, ALBUM_EDIT_MENU_STEP_Y, 0.0f,
+                               ALBUM_EDIT_MENU_STEP_Y, ALBUM_EDIT_SORT_MAX,
+                               0, 0);
+    if (csr != album_edit_ctrl.sort_csr)
+    {
+        album_edit_ctrl.sort_flg = 0;
+        album_edit_ctrl.sort_csr = (char)csr;
+    }
+}
+
 static void AlbumEditSortPad(void)                                      /* 850 */
 {
+    AlbumEditSortMouse();
+
     int current_album;
 
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0) ||
@@ -905,8 +1035,40 @@ static void AlbumEditCopyPosSelMain(void)                               /* 920 *
  * cursor and against the *other* album.  Here UP and DOWN survive as two
  * separate bodies -- GCC did not cross-join them the way it did in
  * AlbumEditTopPad(), which is what proves that pair was written out twice. */
+/* PORT: the mouse.  The destination album's grid (AlbumEditGridHit); the
+ * slot cursor is set straight, as the pad's arithmetic does, and a click is
+ * CROSS. */
+static void AlbumEditCopyPosSelMouse(void)
+{
+    MioPan_MenuMouse mouse;
+    int hit;
+
+    if (MioPan_MenuMouseBegin(0, &mouse) == 0)
+    {
+        return;
+    }
+    hit = AlbumEditGridHit(album_copy_ctrl.album_data ^ 1);
+    if (hit < 0)
+    {
+        return;
+    }
+    if (hit != album_copy_ctrl.photo_no
+        && (mouse.moved != 0 || mouse.left != 0))
+    {
+        SystemBankPlay(ALBUM_EDIT_SE_MOVE, 1, 0, 0, NULL, 0x3200, 0x1000);
+        album_copy_ctrl.photo_no = (char)hit;
+        AlbumEditUncompressPhotoReq();
+    }
+    if (MioPan_MenuMouseClicked() != 0)
+    {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
+}
+
 static void AlbumEditCopyPosSelPad(void)                                /* 928 */
 {
+    AlbumEditCopyPosSelMouse();
+
     int copy_photo_no;
     int data_photo_no;
 
@@ -996,8 +1158,25 @@ static void AlbumEditCopyPosSelPad(void)                                /* 928 *
  *  Modes 4, 5, 6, 9 -- the confirm windows
  * ======================================================================== */
 
+/* PORT: the mouse.  The album draws its own Yes / No (AlbumConfYesNoDisp):
+ * Yes between its cursor halves at x 304..407 and No at 436..540, from
+ * y 282.  The pad toggles with LEFT or RIGHT, so pointing steps there the
+ * pad's way and a click answers. */
+static void AlbumEditConfMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(album_edit_ctrl.conf_csr, 300.0f, 279.0f, 112.0f,
+                             36.0f, 132.0f, 0.0f, 2, MIOPAN_MENU_LEFT,
+                             MIOPAN_MENU_RIGHT);
+}
+
 static void AlbumEditCopyConfPad(void)                                  /* 1020 */
 {
+    AlbumEditConfMouse();
+
     int copy_photo_no;
     int data_photo_no;
 
@@ -1049,6 +1228,8 @@ static void AlbumEditCopyConfPad(void)                                  /* 1020 
  * which is why they sit after the if/else rather than inside each arm. */
 static void AlbumEditDelConfPad(void)                                   /* 1092 */
 {
+    AlbumEditConfMouse();
+
     int photo_no = GetAlbumPhotoNo();
 
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||
@@ -1085,6 +1266,8 @@ static void AlbumEditDelConfPad(void)                                   /* 1092 
  * Kept as found. */
 static void AlbumEditLoadConfPad(void)                                  /* 1153 */
 {
+    AlbumEditConfMouse();
+
     GetAlbumPhotoNo();
 
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||
@@ -1113,6 +1296,8 @@ static void AlbumEditLoadConfPad(void)                                  /* 1153 
 
 static void AlbumEditExitConfPad(void)                                  /* 1197 */
 {
+    AlbumEditConfMouse();
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||
         (pad[0].rpt & 0x2000) || GetPadAnalogRpt(3)) {
 

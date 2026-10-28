@@ -32,6 +32,7 @@
 #include "../system/eeiop/stream_auto.h"    // StreamAutoPlay / FadeOut
 #include "../system/os/system.h"            // GetLanguage / SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 #include <stdio.h>                          // printf
@@ -212,8 +213,39 @@ void GalleryEnd(void)
  * Rows 0..2 are picture sets, 3..7 are movies.  The ROM reads the movie number
  * out of mov_no[cursor - 3]; GCC merged the three stack arrays, so the
  * decompiler renders that as pic_mode[cursor + 1]. */
+/* PORT: the mouse.  Three picture sets and five movies down the right-hand
+ * side, at the heights GalDispMenuCsr() puts its cursor; rows still locked
+ * are passed over, as the pad passes over them. */
+static int GalleryRowLocked(int row)
+{
+    return gc->csr_map[row] == 0;
+}
+
+static void GalleryTopMouse(void)
+{
+    static const float row_y[GAL_CSR_NUM] = {
+        73.0f, 99.0f, 125.0f, 180.0f, 206.0f, 232.0f, 258.0f, 284.0f,
+    };
+    int row;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    for (row = 0; row < GAL_CSR_NUM; row++)
+    {
+        if (GalleryRowLocked(row) == 0)
+        {
+            gc->cursor = MioPan_MenuMouseItem(gc->cursor, row, 322.0f,
+                                              row_y[row] - 4.0f, 264.0f, 25.0f);
+        }
+    }
+}
+
 static void GalleryTopPad(void)
 {
+    GalleryTopMouse();
+
     int pic_num[3] = { 3, 10, 20 };                                     /* 261 */
     int pic_mode[3] = { 0, 1, 2 };                                      /* 264 */
     int mov_no[5] = { 66, 67, 68, 51, 52 };                             /* 267 */
@@ -299,8 +331,22 @@ static void GalleryTopPad(void)
 
 /* LEFT / RIGHT page through the set; the fade-out step is what triggers the
  * next load, so a held direction cannot outrun the disc. */
+/* PORT: the mouse.  A picture fills the screen, so its halves are the page
+ * turns: a click on the left half goes back, on the right half forward. */
+static void GalleryViewMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseButton(-1000.0f, -1000.0f, 1320.0f, 3000.0f, MIOPAN_MENU_LEFT);
+    MioPan_MenuMouseButton(320.0f, -1000.0f, 1320.0f, 3000.0f, MIOPAN_MENU_RIGHT);
+}
+
 static void GalleryViewPad(void)
 {
+    GalleryViewMouse();
+
     if (gc->pic_step > GAL_PIC_LOAD_WAIT)                               /* 358 */
     {
         if (*paddat[1] == 1)                                            /* 363 */

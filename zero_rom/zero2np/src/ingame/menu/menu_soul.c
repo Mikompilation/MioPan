@@ -141,6 +141,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -513,8 +514,31 @@ void MenuSoul(void)                                                     /* 347 *
 /* The list's pad.  All four cursor movements share one tail -- play the
  * cursor cue and raise load_flg -- and GCC cross-jumped three of them onto
  * the L1 arm's copy of it. */
+/* PORT: the mouse.  Up to nine rows MENU_SOUL_ROW_STEP apart under the
+ * cursor's frame (MENU_SOUL_CURSOR_BASE_*), stepped to the pad's way so the
+ * pictures cross-fade as they always do; the wheel scrolls too. */
+static void MenuSoulMouse(void)
+{
+    int disp_num = menu_soul_ctrl.ref_ctrl.data_num;
+
+    if (MENU_SOUL_DISP_NUM < disp_num)
+    {
+        disp_num = MENU_SOUL_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(menu_wrk.cursor, MENU_SOUL_CURSOR_BASE_X,
+                             MENU_SOUL_CURSOR_BASE_Y - 2.0f, 272.0f,
+                             MENU_SOUL_ROW_STEP, 0.0f, MENU_SOUL_ROW_STEP,
+                             disp_num, MIOPAN_MENU_UP, MIOPAN_MENU_DOWN);
+}
+
 static void MenuSoulPad(void)                                           /* 449 */
 {
+    MenuSoulMouse();
+
     int  ghost_list_label;
     int  disp_num;
     char load_flg;
@@ -629,6 +653,8 @@ static void MenuSoulOutReq(void)                                        /* 548 *
  * the list; it never leaves the page. */
 static void MenuSoulCompMsgPad(void)                                    /* 561 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 565 */
         SystemBankPlay(SE_DECIDE, 1, 0, 0, nullptr, 0x3200, 0x1000);    /* 568 */
         menu_soul_ctrl.mode = MENU_SOUL_MODE_LIST;                      /* 570 */
@@ -642,6 +668,8 @@ static void MenuSoulCompMsgPad(void)                                    /* 561 *
 /* An empty list has nowhere to go: only cancel does anything. */
 static void MenuSoulNoListPad(void)                                     /* 583 */
 {
+    MioPan_MenuMouseBack();   /* PORT: the only way is back */
+
     if (*paddat[1] == 1) {                                              /* 587 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, 0x3200, 0x1000);    /* 588 */
         MenuSoulOutReq();                                               /* 589 */

@@ -30,6 +30,7 @@
 #include "../../../common/utility2.h"               // PRINT_ASSERT
 #include "../../../graphics/graph2d/message.h"      // PrintMsgDef_W / MesStatusCheck / MesSetNextPage
 #include "../../../system/pad/pad.h"                // paddat
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../../camera/map_camera.h"                // ReqPlyrTalkCameraCtrl / EndPlyrApproachCameraCtrl
 #include "../../photo/finder.h"                     // FilamentDrawLock / FilamentDrawUnlock
 #include "../../plyr/player.h"                      // SetPlyrAnime / PlayerFinderLock / PlayerFinderUnlock
@@ -234,6 +235,13 @@ static int TalkPadWait(void)
 
     if (talk_ctrl.pad_accept_counter > TALK_PAD_WAIT_FRAMES - 1)        /* 289 */
     {
+        /* PORT: the mouse -- a click is the confirm that ends the line. */
+        if (MioPan_MenuMouseBegin(MIOPAN_MM_NO_BACK, 0) != 0 &&
+            MioPan_MenuMouseClicked() != 0)
+        {
+            MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+        }
+
         if (*paddat[PAD_DECIDE] == 1)                                   /* 290 */
         {
             RetVal = 1;                                                 /* 291 */

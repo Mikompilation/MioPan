@@ -52,6 +52,7 @@
 #include "../../../system/mc/prg/mc_set_data.h"     /* path / size / accessors */
 #include "../../../system/os/system.h"              /* GetLanguage / SystemBankPlay */
 #include "../../../system/pad/pad.h"                /* pad / paddat           */
+#include "../../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #define GAMEOVER_LOAD_DATA_MAX  5       /* memory-card save slots */
 
@@ -616,8 +617,29 @@ static void GameOverLoadMcLoadFileSel(void)                             /* 762 *
 
 /* LEFT and RIGHT skip empty slots: the search runs at most five times, so a
  * card with a single populated slot simply lands back on it. */
+/* PORT: the mouse.  The five slots, drawn by save_load_disp.c as the title's
+ * Load Game draws them (118 apart from x 24); empty slots are passed over, as
+ * the pad passes over them. */
+static int GameOverLoadSlotEmpty(int slot)
+{
+    return GetMemoryCardPlayDataFlg(slot) != 1;
+}
+
+static void GameOverLoadFileSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    gameover_load_ctrl.csr = (char)MioPan_MenuMouseList(
+        gameover_load_ctrl.csr, 24.0f, 106.0f, 118.0f, 117.0f, 118.0f, 0.0f,
+        GAMEOVER_LOAD_DATA_MAX, 0, GameOverLoadSlotEmpty);
+}
+
 static void GameOverLoadMcLoadFileSelPad(void)                          /* 777 */
 {
+    GameOverLoadFileSelMouse();
+
     int i;
 
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2)) {                  /* 782 */
@@ -904,6 +926,8 @@ static void GameOverLoadMcErrorConfWait(void)                           /* 1114 
 /* Both buttons do the same thing -- the ROM still writes them out twice. */
 static void GameOverLoadMcErrorConfPad(void)                            /* 1162 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1166 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 1167 */
 
@@ -933,6 +957,8 @@ static void GameOverLoadMcEndConf(void)                                 /* 1184 
  * story. */
 static void GameOverLoadMcEndConfPad(void)                              /* 1198 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 1202 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 1203 */
 

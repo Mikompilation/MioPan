@@ -95,6 +95,7 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -375,8 +376,30 @@ void MenuItem(void)                                                     /* 299 *
  * load_flg; GCC folded three of the four tails together, so which source
  * spelling was used (`load_flg = (x != 0);` or `if (x != 0) load_flg = 1;`)
  * is not recoverable -- the value is. */
+/* PORT: the mouse.  Up to seven rows 35 apart from y 156 (menu_item 51..78).
+ * The cursor is stepped there the pad's way, so the picture cross-fades and
+ * the list scrolls as it always does; the wheel scrolls too. */
+static void MenuItemMouse(void)
+{
+    int disp_num = menu_item_ctrl.ref_ctrl.data_num;
+
+    if (MENU_ITEM_DISP_NUM < disp_num)
+    {
+        disp_num = MENU_ITEM_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(menu_wrk.cursor, 51.0f, 154.0f, 333.0f, 34.0f,
+                             0.0f, 35.0f, disp_num, MIOPAN_MENU_UP,
+                             MIOPAN_MENU_DOWN);
+}
+
 static void MenuItemPad(void)                                           /* 367 */
 {
+    MenuItemMouse();
+
     short  disp_num;
     u_char load_flg;
 
@@ -433,6 +456,8 @@ static void MenuItemPad(void)                                           /* 367 *
 /* The "cannot use that" message: either button dismisses it. */
 static void MenuItemNoUsePad(void)                                      /* 436 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (MenuCmnConfirmPad() != 0) {                                     /* 439 */
         menu_item_ctrl.sub_step = MENU_ITEM_SUB_LIST;                   /* 440 */
     }
@@ -442,6 +467,8 @@ static void MenuItemNoUsePad(void)                                      /* 436 *
  * still answers is TRIANGLE. */
 static void MenuNonItemPad(void)                                        /* 449 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[1] == 1) {                                              /* 453 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr,
                        0x3200, 0x1000);                                 /* 454 */

@@ -77,6 +77,7 @@
 #include "../../../main/gphase.h"                    // GPHASE_ID_ENUM / SetNextGPhase
 #include "../../../system/os/system.h"               // SystemBankPlay / SystemBankIsLoopSnd
 #include "../../../system/pad/pad.h"                 // pad / paddat / GetPadAnalogRpt
+#include "../../../miopan/io/miopan_menu_mouse.h"   // the mouse in menus (port)
 #include "../../plyr/plyr_mdl.h"                     // SetupPlyrMdl / IsReadyPlyrMdl / plyr_mdlBankPlay
 #include "../../map/RegDat.h"                       // RegDatGetStPtr4Label / RegDatGetStPtr4Label3
 #include "../../door/prg/door.h"                    // Door* / GetDoorLockState
@@ -3666,6 +3667,21 @@ static int EvMsgChoice(EV_EXE_CTRL *ctrl_addr)
         PrintChoice((DISP_STR *)0, (MSG_WIN_DAT *)0, (int)choice_msg,
                     choice, (int)ev_choice_ctrl.csr);                   /* 5886 */
 
+        /* PORT: the mouse.  Two answers are the game's Yes / No cells, which
+         * the mouse layer answers by itself; three get pointed at here. */
+        if (sel_max == 3 && MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) != 0) {
+            int ans;
+            float bx;
+            float by;
+            float bw;
+            for (ans = 0; ans < 3; ans++) {
+                if (MioPan_MsgChoice3Box(ans, &bx, &by, &bw) != 0) {
+                    ev_choice_ctrl.csr = (char)MioPan_MenuMouseItem(
+                        ev_choice_ctrl.csr, ans, bx, by - 2.0f, bw, 31.0f);
+                }
+            }
+        }
+
         if (*paddat[0] == 1) {                                          /* 5887 */
             SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000); /* 5888 */
             ctrl_addr->process = 3;                                     /* 5892 */
@@ -4479,6 +4495,13 @@ static int EvPadWait(EV_EXE_CTRL *ctrl_addr)
     u_short pad_label;
 
     pad_label = Get2Byte(ctrl_addr->event_addr + 2);                    /* 7263 */
+
+    /* PORT: the mouse.  A wait on the confirm button takes a click too. */
+    if (paddat[pad_label] == &pad[0].cnt[5] &&
+        MioPan_MenuMouseBegin(MIOPAN_MM_NO_BACK, 0) != 0 &&
+        MioPan_MenuMouseClicked() != 0) {
+        MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+    }
 
     return (*paddat[pad_label] == 1);                                   /* 7267 */
 }                                                                       /* 7272 */

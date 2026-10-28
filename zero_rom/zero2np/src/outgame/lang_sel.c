@@ -33,6 +33,7 @@
 #include "../system/os/eecdvd.h"            // LoadReq / IsLoadEndAll
 #include "../system/os/system.h"            // GetLanguage / SetLanguage / SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -169,8 +170,23 @@ static void LangSelMain(void)
 }
 
 /* Vertical list, so UP (0x1000) / DOWN (0x4000) and analog 0 / 1. */
+/* PORT: the mouse.  Five rows, a flag and a name each, 80 apart down the
+ * screen (lang_sl_tex 0..10). */
+static void LangSelMouse(void)
+{
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL | MIOPAN_MM_NO_BACK, 0) == 0)
+    {
+        return;
+    }
+    lang_sel_ctrl.csr = (char)MioPan_MenuMouseList(
+        lang_sel_ctrl.csr, 175.0f, 25.0f, 280.0f, 72.0f, 0.0f, 80.0f, LANG_NUM,
+        0, 0);
+}
+
 static void LangSelMainPad(void)
 {
+    LangSelMouse();
+
     if (((pad[0].rpt & 0x1000U) != 0) || (GetPadAnalogRpt(0) != 0))     /* 217 */
     {
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);    /* 218 */

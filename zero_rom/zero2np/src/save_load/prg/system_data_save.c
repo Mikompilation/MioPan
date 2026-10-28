@@ -55,6 +55,7 @@
 #include "../../system/mc/prg/mc_set_data.h"    // path / size / data-area helpers
 #include "../../system/os/system.h"             // SystemBankPlay
 #include "../../system/pad/pad.h"               // pad / paddat / GetPadAnalogRpt
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <string.h>                             // memset
 
@@ -673,6 +674,8 @@ static void SystemDataSaveMcErrorConfWait(void)                         /* 811 *
  * the option screen is left, not returned to. */
 static void SystemDataSaveMcErrorConfPad(void)                          /* 849 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 853 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 854 */
         SystemDataSaveOutReq(SYSTEM_DATA_SAVE_EXIT_DONE);               /* 856 */
@@ -687,6 +690,8 @@ static void SystemDataSaveMcErrorConfPad(void)                          /* 849 *
  * ErrorConfPad, and still its own function in the ROM. */
 static void SystemDataSaveMcEndConf(void)                               /* 871 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1) {                                              /* 875 */
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 876 */
         SystemDataSaveOutReq(SYSTEM_DATA_SAVE_EXIT_DONE);               /* 878 */

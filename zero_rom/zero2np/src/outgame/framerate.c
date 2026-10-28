@@ -24,6 +24,7 @@
 #include "../main/gphase.h"                 // SetNextGPhase / GID_TITLE_MENU
 #include "../system/os/system.h"            // SystemBankPlay / ChangeVideoMode / GetPALMode
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -39,8 +40,34 @@ void FrameRateSelMain(void)
 
 /* LEFT or RIGHT does not move a cursor -- it flips the video mode outright,
  * so the two labels swap brightness on the same frame. */
+/* PORT: the mouse.  50 Hz sits on the left and 60 Hz on the right, each
+ * bracketed by the arrows when it is the one in force
+ * (FrameRateSelCursorDisp).  Changing the mode is not something to do on a
+ * hover, so clicking the other one switches to it and clicking the one in
+ * force confirms it. */
+static void FrameRateSelMouse(void)
+{
+    const int pal = GetPALMode() != 0;
+    int side;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_HORIZONTAL, 0) == 0)
+    {
+        return;
+    }
+    for (side = 0; side < 2; side++)
+    {
+        const float x = side == 0 ? 189.0f : 321.0f;
+        const int current = (side == 0) == pal;
+
+        MioPan_MenuMouseButton(x, 378.0f, 130.0f, 44.0f,
+                               current ? MIOPAN_MENU_CROSS : MIOPAN_MENU_LEFT);
+    }
+}
+
 static void FrameRateSelPad(void)
 {
+    FrameRateSelMouse();
+
     if (((pad[0].rpt & 0x8000U) != 0) || (GetPadAnalogRpt(2) != 0) ||
         ((pad[0].rpt & 0x2000U) != 0) || (GetPadAnalogRpt(3) != 0))     /* 75 */
     {

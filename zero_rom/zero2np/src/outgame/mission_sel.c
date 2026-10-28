@@ -50,6 +50,7 @@
 #include "../system/os/eecdvd.h"            // LoadReq
 #include "../system/os/system.h"            // GetLanguage / GetPALMode / SystemBankPlay
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
+#include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdint.h>                         // uintptr_t
 #include <stdio.h>                          // printf
@@ -848,8 +849,24 @@ static int MissionSelTexLoadWait(void)                                  /* 789 *
 }
 
 /* The slide-out menu: Album and Save.  SELECT closes it again. */
+/* PORT: the mouse.  Album and Save, centred on x 453 below the list's cursor
+ * when it is in the top half and above it otherwise (MissionDrawMiniMenu). */
+static void MissionMiniMenuMouse(void)
+{
+    const float top = MissionCsrY < 3 ? 230.0f : 100.0f;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MissionMiniCsr = MioPan_MenuMouseList(MissionMiniCsr, 343.0f, top - 16.0f,
+                                          220.0f, 34.0f, 0.0f, 34.0f, 2, 0, 0);
+}
+
 static void MissionSubSelMiniMenu(void)                                 /* 802 */
 {
+    MissionMiniMenuMouse();
+
     if ((*paddat[18] == 1) || (*paddat[1] == 1))                        /* 805 */
     {
         mission_sel_ctrl.step = MISSION_SEL_STEP_MINI_ANIM;             /* 807 */
@@ -897,8 +914,45 @@ static void MissionSubSelMiniMenu(void)                                 /* 802 *
 /* The list itself.  UP/DOWN move one row and scroll at the ends; L1/R1 page by
  * six.  Every move that lands on a different mission re-cues the caption, and
  * MisFadeSetMsg() reporting a change is what gates the cursor SE. */
+/* PORT: the mouse.  Six rows 35 apart from y 116 (MissionDrawSelect); the
+ * wheel scrolls the way UP / DOWN do.  A row the pointer moves the cursor to
+ * re-cues the caption exactly as a pad move does. */
+static void MissionSubSelectMouse(void)
+{
+    MioPan_MenuMouse mouse;
+    int row;
+
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, &mouse) == 0)
+    {
+        return;
+    }
+    for (row = 0; row < MISSION_ROW_NUM; row++)
+    {
+        if (MioPan_MenuMouseIn(60.0f, 116.0f + (float)row * 35.0f - 10.0f,
+                               540.0f, 35.0f) == 0)
+        {
+            continue;
+        }
+        if ((mouse.moved || mouse.left) && MissionCsrY != row)
+        {
+            MissionCsrY = row;
+            if (MisFadeSetMsg((MissionListTop + MissionCsrY) * 3 + 1) != 0)
+            {
+                SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            }
+        }
+        if (MioPan_MenuMouseClicked() != 0)
+        {
+            MioPan_MenuMousePress(MIOPAN_MENU_CROSS);
+        }
+        break;
+    }
+}
+
 static void MissionSubSelect(void)                                      /* 842 */
 {
+    MissionSubSelectMouse();
+
     if (*paddat[18] == 1)                                               /* 845 */
     {
         SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);  /* 846 */

@@ -1,6 +1,7 @@
 #include "miopan_input.h"
 
 #include "miopan_file.h"
+#include "miopan_menu_mouse.h"
 #include "miopan_paths.h"
 
 #include <SDL3/SDL_events.h>
@@ -95,6 +96,11 @@ static float s_stick_ramp[MIOPAN_PAD_STICK_COUNT];
 static int s_rebind_suppressed;
 static int s_menu_suppressed;
 static int s_suppressed;
+
+// Buttons that were down when the last suppression ended, one bit per logical
+// button: each reads as released until it is let go, so the press that closed
+// a menu does not reach the game.  See ApplySuppression().
+static unsigned int s_release_mask;
 
 // Which device the player asked for, by GUID; empty means "first available".
 // Set to 1 whenever the device list may have changed, so the next update
@@ -512,17 +518,33 @@ static int SourceMagnitude(const MioPan_InputSource *src, const bool *keys)
 
 // Held is "past the threshold".  Digital sources leave threshold at 0 and so
 // trip on any press; axis sources carry MIOPAN_TRIGGER_THRESHOLD by default.
-static int SourceHeld(const MioPan_InputSource *src, const bool *keys)
+static int SourceHeldRaw(const MioPan_InputSource *src, const bool *keys)
 {
-    int mag;
-
-    if (src->kind == MIOPAN_SRC_NONE || s_suppressed != 0)
+    if (src->kind == MIOPAN_SRC_NONE)
     {
         return 0;
     }
+    return SourceMagnitude(src, keys) > src->threshold ? 1 : 0;
+}
 
-    mag = SourceMagnitude(src, keys);
-    return mag > src->threshold ? 1 : 0;
+static int SourceHeld(const MioPan_InputSource *src, const bool *keys)
+{
+    return s_suppressed == 0 && SourceHeldRaw(src, keys) != 0 ? 1 : 0;
+}
+
+// Any of a logical button's sources down, suppressed or not.
+static int ButtonHeldRaw(int index, const bool *keys)
+{
+    int i;
+
+    for (i = 0; i < MIOPAN_INPUT_MAX_SOURCES; i++)
+    {
+        if (SourceHeldRaw(&s_buttons[index].src[i], keys))
+        {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static unsigned char AxisToPs2(int axis)
@@ -774,11 +796,14 @@ static void AdvanceStickRamps(void)
 
 // Whether a press or a notch arriving now belongs to the game.  While captured
 // it always does -- the overlay has been told to ignore the mouse -- and while
-// free only if the overlay is neither holding the mouse nor under the cursor.
+// free only if neither the overlay nor one of the game's menus has it: a menu
+// that takes the mouse (miopan_menu_mouse.h) turns clicks into its own
+// presses, and a binding firing as well would press twice.
 static int GameOwnsMouse(void)
 {
     return s_captured != 0 ||
-           (s_ui_wants_mouse == 0 && s_pointer_over_ui == 0);
+           (s_ui_wants_mouse == 0 && s_pointer_over_ui == 0 &&
+            MioPan_MenuMouseClaimed() == 0);
 }
 
 static void NoteMouseActivity(void)
@@ -927,6 +952,7 @@ void MioPan_InputUpdate(void)
      * from inside that loop, where a nested pump would take the drag's own
      * mouse messages. */
     SelectGamepad();
+    MioPan_MenuMousePoll(0);
     AdvanceMouse();
     AdvanceGyro();
     AdvanceStickRamps();
@@ -1022,8 +1048,7 @@ void MioPan_InputRefreshDevices(void)
 
 int MioPan_InputButtonHeld(int index)
 {
-    const bool *keys;
-    int         i;
+    int held;
 
     if (index < 0 || index >= MIOPAN_PAD_BUTTON_COUNT)
     {
@@ -1031,17 +1056,25 @@ int MioPan_InputButtonHeld(int index)
     }
     EnsureBindings();
 
-    keys = SDL_GetKeyboardState(0);
-
-    for (i = 0; i < MIOPAN_INPUT_MAX_SOURCES; i++)
+    // A press a menu made for the mouse, Enter or Backspace.
+    if (s_suppressed == 0 && MioPan_MenuMouseHeld(index) != 0)
     {
-        if (SourceHeld(&s_buttons[index].src[i], keys))
-        {
-            return 1;
-        }
+        return 1;
     }
 
-    return 0;
+    held = ButtonHeldRaw(index, SDL_GetKeyboardState(0));
+
+    // Still down from before the suppression ended: the menu's until let go.
+    if ((s_release_mask & (1u << index)) != 0)
+    {
+        if (held != 0)
+        {
+            return 0;
+        }
+        s_release_mask &= ~(1u << index);
+    }
+
+    return s_suppressed == 0 ? held : 0;
 }
 
 unsigned char MioPan_InputStickValue(int index)
@@ -1144,6 +1177,9 @@ int MioPan_InputSetStickBinding(int stick, const MioPan_InputStickBinding *in)
 
 static void ApplySuppression(void)
 {
+    const int was = s_suppressed;
+    int       i;
+
     s_suppressed = (s_rebind_suppressed != 0 || s_menu_suppressed != 0) ? 1 : 0;
 
     // Drop whatever deflection the digital keys had built up, so releasing
@@ -1153,6 +1189,27 @@ static void ApplySuppression(void)
     {
         memset(s_stick_ramp, 0, sizeof(s_stick_ramp));
         ClearMouseButtons();
+        return;
+    }
+
+    // Handing the controls back: a menu closes on a press, and the game must
+    // not see that press.  Only the buttons down right now are held back, each
+    // until it is let go -- waiting for every key and pad button anywhere to
+    // be up instead left the game deaf for as long as any one of them read as
+    // down, which a device dropped from under a press (Steam Input switching
+    // configurations) can do indefinitely.
+    if (was != 0)
+    {
+        const bool *keys = SDL_GetKeyboardState(0);
+
+        s_release_mask = 0;
+        for (i = 0; i < MIOPAN_PAD_BUTTON_COUNT; i++)
+        {
+            if (ButtonHeldRaw(i, keys))
+            {
+                s_release_mask |= 1u << i;
+            }
+        }
     }
 }
 
@@ -1166,6 +1223,14 @@ void MioPan_InputSetMenuSuppressed(int suppressed)
 {
     s_menu_suppressed = suppressed != 0 ? 1 : 0;
     ApplySuppression();
+}
+
+int MioPan_MenuMouseFree(void)
+{
+    return (s_captured == 0 && s_ui_wants_mouse == 0 &&
+            s_pointer_over_ui == 0 && s_suppressed == 0)
+               ? 1
+               : 0;
 }
 
 int MioPan_InputIsSuppressed(void)
@@ -1468,6 +1533,8 @@ void MioPan_InputProcessEvent(const SDL_Event *event)
     {
         return;
     }
+
+    MioPan_MenuMouseEvent(event, MioPan_MenuMouseFree());
 
     switch (event->type)
     {

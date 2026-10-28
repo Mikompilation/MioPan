@@ -141,6 +141,7 @@
 #include "../../system/eeiop/stream_auto.h"     /* StreamAutoPlay             */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
+#include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 
 #include <stdio.h>                              /* printf                     */
 #include <string.h>                             /* memset                     */
@@ -502,8 +503,30 @@ void MenuRadio(void)                                                     /* 312 
 /* The list.  CROSS starts the selected crystal's recording -- but only once
  * its picture has finished loading, because HearCrystal() retiring the
  * unread bracket and the picture fading up have to land together. */
+/* PORT: the mouse.  Up to six rows MENU_RADIO_ROW_STEP apart, the selection
+ * frame's span (menu_radio_tex 21..23: x 44 to 310 from y 82), stepped to the
+ * pad's way so the cross-fades run; the wheel scrolls too. */
+static void MenuRadioMouse(void)
+{
+    int disp_num = menu_radio_ctrl.ref_ctrl.data_num;
+
+    if (MENU_RADIO_DISP_NUM < disp_num)
+    {
+        disp_num = MENU_RADIO_DISP_NUM;
+    }
+    if (MioPan_MenuMouseBegin(MIOPAN_MM_WHEEL_VERTICAL, 0) == 0)
+    {
+        return;
+    }
+    MioPan_MenuMouseSeekList(menu_wrk.cursor, 44.0f, 80.0f, 266.0f,
+                             MENU_RADIO_ROW_STEP, 0.0f, MENU_RADIO_ROW_STEP,
+                             disp_num, MIOPAN_MENU_UP, MIOPAN_MENU_DOWN);
+}
+
 static void MenuRadioPad(void)                                           /* 390 */
 {
+    MenuRadioMouse();
+
     short disp_num;
     char  load_flg;
 
@@ -606,6 +629,8 @@ static void MenuRadioPad(void)                                           /* 390 
  * running out, which is the only way this page ever advances by itself. */
 static void MenuRadioCrystalPlayPad(void)                                /* 486 */
 {
+    MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
+
     if (*paddat[0] == 1 || *paddat[1] == 1) {                           /* 491 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr,
                        RADIO_STREAM_VOL, 0x1000);                       /* 492 */
@@ -631,6 +656,8 @@ static void MenuRadioCrystalPlayPad(void)                                /* 486 
  * because there is nothing to select. */
 static void MenuRadioNoHaveCrystalPad(void)                              /* 518 */
 {
+    MioPan_MenuMouseBack();   /* PORT: the only way is back */
+
     if (*paddat[1] == 1) {                                              /* 523 */
         SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr,
                        RADIO_STREAM_VOL, 0x1000);                       /* 524 */
