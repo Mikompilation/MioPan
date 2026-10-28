@@ -322,6 +322,7 @@ enum GsBlendMode
                            * source colour is unused by the GS, so the pipeline
                            * carries As in the colour channels (DST_COLOR/ONE)
                            * and DrawSolidQuad encodes it there                  */
+    GS_BLEND_FIXED_ALPHA, /* (Cs - Cd)*FIX + Cd */
     GS_BLEND_COUNT
 };
 
@@ -454,6 +455,7 @@ struct DrawCommand
      * queued.  Blend and depth-write are baked into the pipeline, so they pick
      * a variant; the scissor box is dynamic pass state. */
     GsBlendMode blend_mode;
+    float blend_constant;
     bool depth_write;
     GsScissor scissor;
 
@@ -1591,6 +1593,7 @@ float g_alpha_cutoff = 0.0f;
  * at the values ClearDrawEnv() lays down every frame, so a draw queued before
  * anything writes the registers behaves as it would on hardware. */
 GsBlendMode g_gs_blend_mode = GS_BLEND_ALPHA;
+float g_gs_blend_constant = 1.0f;
 bool g_gs_depth_write = true;
 /* ZTST from the GS TEST register, and the Z of the 2D primitive being built.
  * Both are per-draw state the 2D layer refreshes immediately before the draw,
@@ -4851,6 +4854,10 @@ SDL_GPUColorTargetBlendState BlendStateForMode(GsBlendMode mode)
          * MioPan_RendererDrawSolidQuad(). */
         blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_DST_COLOR;
         blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+        break;
+    case GS_BLEND_FIXED_ALPHA:
+        blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_CONSTANT_COLOR;
+        blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_CONSTANT_COLOR;
         break;
     case GS_BLEND_ALPHA:
     default:                                            /* Cs*As + Cd*(1-As) */
@@ -9729,6 +9736,7 @@ bool BuildScissorRect(const DrawCommand &draw, int target_width,
 void ApplyGsDrawEnv(DrawCommand &command)
 {
     command.blend_mode = g_gs_blend_mode;
+    command.blend_constant = g_gs_blend_constant;
     command.depth_write = g_gs_depth_write;
     command.scissor = g_gs_scissor;
 
@@ -9795,6 +9803,7 @@ bool DrawCommandsAreMergeCompatible(const DrawCommand &previous,
         previous.animated_mesh != next.animated_mesh ||
         previous.fragment_lighting != next.fragment_lighting ||
         previous.blend_mode != next.blend_mode ||
+        previous.blend_constant != next.blend_constant ||
         previous.depth_write != next.depth_write ||
         std::memcmp(&previous.scissor, &next.scissor,
                     sizeof(previous.scissor)) != 0 ||
@@ -10243,6 +10252,7 @@ bool ResidentDrawContinues(const DrawCommand &previous, const DrawCommand &next)
            (!next.fragment_lighting ||
             previous.fragment_light_index == next.fragment_light_index) &&
            previous.blend_mode == next.blend_mode &&
+           previous.blend_constant == next.blend_constant &&
            previous.depth_write == next.depth_write &&
            std::memcmp(&previous.scissor, &next.scissor,
                        sizeof(next.scissor)) == 0 &&
@@ -10401,6 +10411,12 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
             bound_pipeline = pipeline;
+        }
+
+        if (draw.blend_mode == GS_BLEND_FIXED_ALPHA)
+        {
+            const float weight = draw.blend_constant;
+            SDL_SetGPUBlendConstants(pass, SDL_FColor{weight, weight, weight, weight});
         }
 
         /* GS SCISSOR.  Pass state, so it has to be restored to the full frame
@@ -17081,6 +17097,7 @@ void MioPan_RendererSetGsAlphaRegister(unsigned long long alpha)
     if (c == 3) { c = CO_FIX; }
 
     g_gs_blend_mode = GS_BLEND_ALPHA;
+    g_gs_blend_constant = 1.0f;
 
     /*
      * Only the source-alpha and FIX families are classified.  A destination-
@@ -17126,14 +17143,13 @@ void MioPan_RendererSetGsAlphaRegister(unsigned long long alpha)
     }
     else if (c == CO_FIX)
     {
-        /*
-         * SDL_GPU has no blend-constant, so a FIX-weighted equation is only
-         * reproducible at the extremes.  0x80 is 1.0 in the GS's 7-bit alpha
-         * scale, and is what the engine uses when it wants a plain add; treat
-         * anything at or above that as full strength and anything below as
-         * the ordinary alpha blend rather than silently doubling an effect.
-         */
-        if (fix >= 0x80 && a == COL_SRC && b == COL_ZERO && d == COL_DST)
+        // Camera cross-fades use FIX independently of the screenshot's alpha.
+        if (a == COL_SRC && b == COL_DST && d == COL_DST && fix <= 0x80)
+        {
+            g_gs_blend_mode = GS_BLEND_FIXED_ALPHA;
+            g_gs_blend_constant = (float)fix / 128.0f;
+        }
+        else if (fix >= 0x80 && a == COL_SRC && b == COL_ZERO && d == COL_DST)
         {
             g_gs_blend_mode = GS_BLEND_ADD_ONE;      /* Cs + Cd */
         }
@@ -18075,6 +18091,7 @@ static bool IndexedStreamDrawContinues(const DrawCommand &previous,
            (!next.fragment_lighting ||
             previous.fragment_light_index == next.fragment_light_index) &&
            previous.blend_mode == next.blend_mode &&
+           previous.blend_constant == next.blend_constant &&
            previous.depth_write == next.depth_write &&
            std::memcmp(&previous.scissor, &next.scissor,
                        sizeof(next.scissor)) == 0 &&
