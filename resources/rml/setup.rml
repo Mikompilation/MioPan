@@ -1,0 +1,57 @@
+<rml>
+<head>
+    <title>Setup</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="setup.rcss"/>
+</head>
+<body id="setup">
+    <!-- Over setup.c's own background, which the game still draws. -->
+    <div id="shade"></div>
+    <div id="frame" class="menu">
+        <div id="header">
+            <img class="emblem" src="images/butterfly.png"/>
+            <h1 class="title">Setup</h1>
+        </div>
+        <div class="rule"></div>
+        <div id="body">
+            <!-- Story, Mission, Return to Title: built by miopan_rml_setup.cpp. -->
+            <div id="menu-items"></div>
+            <div id="settings">
+                <div id="row-costume" class="row selectable">
+                    <span class="row-label">Costume</span>
+                    <span class="row-value"><span class="arrow left">‹</span><span id="row-costume-value" class="value"></span><span class="arrow right">›</span></span>
+                </div>
+                <p class="heading">Accessory</p>
+                <div id="row-mio" class="row selectable">
+                    <span class="row-label">Mio</span>
+                    <span class="row-value"><span class="arrow left">‹</span><span id="row-mio-value" class="value"></span><span class="arrow right">›</span></span>
+                </div>
+                <div id="row-mayu" class="row selectable">
+                    <span class="row-label">Mayu</span>
+                    <span class="row-value"><span class="arrow left">‹</span><span id="row-mayu-value" class="value"></span><span class="arrow right">›</span></span>
+                </div>
+                <div id="row-difficulty" class="row selectable">
+                    <span class="row-label">Difficulty</span>
+                    <span class="row-value"><span class="arrow left">‹</span><span id="row-difficulty-value" class="value"></span><span class="arrow right">›</span></span>
+                </div>
+                <div id="row-start" class="selectable">
+                    <span id="row-start-value" class="start-button"></span>
+                </div>
+            </div>
+        </div>
+        <div class="rule"></div>
+        <p id="help"></p>
+        <div id="prompts" class="prompts"></div>
+    </div>
+    <div id="confirm" class="confirm hidden">
+        <div class="confirm-box">
+            <p class="confirm-text"></p>
+            <p class="confirm-note"></p>
+            <div class="confirm-choices">
+                <span id="confirm-yes" class="confirm-choice selectable">Yes</span>
+                <span id="confirm-no" class="confirm-choice selectable">No</span>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

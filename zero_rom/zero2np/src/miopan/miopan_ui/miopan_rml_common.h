@@ -61,7 +61,8 @@ std::string PromptsRml(const Prompt *prompts, int count);
  *     </div></div></div>
  *
  * The cursor opens on No, as it does in the game's own windows; left and right
- * move it, Enter answers and Escape is No.
+ * move it, Enter answers and Escape is No.  `on_no` is for a question the
+ * game itself is waiting on an answer to; most only need the yes.
  */
 class ConfirmDialog final : public Rml::EventListener
 {
@@ -70,7 +71,7 @@ public:
     void Detach();
 
     void Open(const std::string &text, const std::string &note,
-              std::function<void()> on_yes);
+              std::function<void()> on_yes, std::function<void()> on_no = nullptr);
     void Close();
     bool IsOpen() const;
 
@@ -91,6 +92,7 @@ private:
     Rml::Element *no_ = nullptr;
     bool yes_selected_ = false;
     std::function<void()> on_yes_;
+    std::function<void()> on_no_;
 };
 }
 

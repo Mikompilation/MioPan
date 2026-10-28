@@ -1,0 +1,83 @@
+/*
+ * The save point's menu, over the save point's own picture.  The game put a
+ * small window in the upper middle of the screen (DrawCmnWindow at 171, 93,
+ * 296 x 160) with the three rows centred in it; here they stand in a column
+ * in the same place, the picture left to show around them.
+ */
+
+#shade
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #08050560;
+    decorator: image(images/vignette.png);
+}
+
+#frame
+{
+    position: absolute;
+    left: 50%;
+    width: 260dp;
+    margin-left: -130dp;
+    top: 86dp;
+    text-align: center;
+    animation: 0.2s quadratic-out rise-in;
+    opacity: 1;
+    transition: opacity 0.15s linear-in-out;
+}
+
+/* The game fades its window out as the menu hands over or the save point
+ * closes; no input then. */
+#frame.closing
+{
+    opacity: 0;
+}
+
+#frame .emblem
+{
+    display: block;
+    width: 36dp;
+    height: 27dp;
+    margin: 0 auto 2dp auto;
+}
+
+#frame .title
+{
+    margin-bottom: 4dp;
+}
+
+#items
+{
+    padding: 8dp 0;
+}
+
+.entry
+{
+    height: 26dp;
+    line-height: 26dp;
+    font-size: 16dp;
+    letter-spacing: 1dp;
+    cursor: pointer;
+}
+
+/* Centred, so the bar is the one that fades both ways. */
+.entry.selected
+{
+    border-left-color: #00000000;
+    decorator: image(images/cursor_bar.png);
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+#prompts
+{
+    margin-top: 8dp;
+    text-align: center;
+}
+
+#prompts .prompt
+{
+    margin: 0 7dp;
+}

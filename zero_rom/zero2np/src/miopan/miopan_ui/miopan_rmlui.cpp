@@ -2,6 +2,9 @@
 #include "miopan_rml_options.h"
 #include "miopan_rml_load.h"
 #include "miopan_rml_pause.h"
+#include "miopan_rml_save.h"
+#include "miopan_rml_savepoint.h"
+#include "miopan_rml_setup.h"
 #include "miopan_rml_title.h"
 #include "../io/miopan_file.h"
 #include "../io/miopan_input.h"
@@ -1163,11 +1166,17 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device, SDL_GPUTextureFormat format
     MioPanRmlPause::Init(g_rml.context);
     MioPanRmlTitle::Init(g_rml.context);
     MioPanRmlLoad::Init(g_rml.context);
+    MioPanRmlSave::Init(g_rml.context);
+    MioPanRmlSavePoint::Init(g_rml.context);
+    MioPanRmlSetup::Init(g_rml.context);
     return true;
 }
 
 void Shutdown()
 {
+    MioPanRmlSetup::Shutdown();
+    MioPanRmlSavePoint::Shutdown();
+    MioPanRmlSave::Shutdown();
     MioPanRmlLoad::Shutdown();
     MioPanRmlTitle::Shutdown();
     MioPanRmlPause::Shutdown();
@@ -1219,6 +1228,9 @@ void Frame()
     MioPanRmlPause::Frame();
     MioPanRmlTitle::Frame();
     MioPanRmlLoad::Frame();
+    MioPanRmlSave::Frame();
+    MioPanRmlSavePoint::Frame();
+    MioPanRmlSetup::Frame();
     g_rml.context->Update();
 
     DrawSnapshot &frame = g_rml.frame;
@@ -1309,6 +1321,8 @@ const char *PadButtonName(SDL_GamepadButton button)
     case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return playstation ? "R1" : "RB";
     case SDL_GAMEPAD_BUTTON_START: return playstation ? "START" : "Menu";
     case SDL_GAMEPAD_BUTTON_BACK: return playstation ? "SELECT" : "View";
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return "Left";
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Right";
     default: return "?";
     }
 }

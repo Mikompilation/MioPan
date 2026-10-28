@@ -57,6 +57,7 @@
 #include "../../system/os/system.h"             // GetLanguage / SystemBankPlay
 #include "../../system/pad/pad.h"               // pad / paddat / GetPadAnalogRpt
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_save.h" // the RmlUi save screen (port)
 
 #include <string.h>                             // memset
 
@@ -228,6 +229,7 @@ static void GameDataSaveMcEveryFrameCheck(void);
 static void LiberateGameDataSaveMem(void **tex_addr);
 static void GameDataSaveDispInit(void);
 static void GameData_SaveFileSelDisp(u_char alpha);
+static int  GameDataSaveRmlDisp(void);
 
 /* ==========================================================================
  *  Set-up
@@ -775,8 +777,40 @@ static void GameDataSaveMouse(void)
         GAME_DATA_SAVE_DATA_MAX, 0, GameDataSaveSlotOutOfRange);
 }
 
+/* PORT DEVIATION: with RmlUi up, the port's save screen (miopan_rml_save.h)
+ * walks the slots and asks "save here?" itself -- so the confirm step is
+ * skipped and its "yes" lands here -- and leaving is this file's, cue and
+ * all. */
+static void GameDataSaveRmlFileSel(void)
+{
+    game_data_save_ctrl.csr = (char)MioPan_RmlSaveCursor();
+
+    switch (MioPan_RmlSaveConsumeCommand())
+    {
+    case MIOPAN_RML_SAVE_CHOSEN:
+        game_data_save_ctrl.mc_step       = GDS_MC_SYSTEM_LOAD_INIT;
+        game_data_save_disp.msg_id        = 0x1e;
+        game_data_save_ctrl.save_file_cnt = 0;
+        break;
+
+    case MIOPAN_RML_SAVE_BACK:
+        SystemBankPlay(1, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        GameDataSaveOutReq();
+        break;
+
+    default:
+        break;
+    }
+}
+
 static void GameDataSaveMcSaveFileSelPad(void)                          /* 885 */
 {
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        GameDataSaveRmlFileSel();
+        return;
+    }
+
     GameDataSaveMouse();
 
     int i;
@@ -833,6 +867,13 @@ static void GameDataSaveMcSaveConf(void)                                /* 945 *
 
 static void GameDataSaveMcSaveConfPad(void)                             /* 959 */
 {
+    /* PORT: the RmlUi screen asks this itself, from the slot select. */
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        GameDataSaveRmlFileSel();
+        return;
+    }
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||                  /* 963 */
         (pad[0].rpt & 0x2000) || GetPadAnalogRpt(3)) {
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 984 */
@@ -1084,6 +1125,17 @@ static void GameDataSaveMcErrorConfWait(void)                           /* 1249 
 /* Both buttons do the same thing -- there is nothing to choose. */
 static void GameDataSaveMcErrorConfPad(void)                            /* 1287 */
 {
+    /* PORT: the RmlUi screen's OK is CROSS. */
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        if (MioPan_RmlSaveConsumeCommand() == MIOPAN_RML_SAVE_ACK)
+        {
+            SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            GameDataSaveOutReq();
+        }
+        return;
+    }
+
     MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
 
     if (*paddat[0] == 1) {                                              /* 1291 */
@@ -1100,6 +1152,17 @@ static void GameDataSaveMcErrorConfPad(void)                            /* 1287 
  * ErrorConfPad, but it is its own function in the ROM. */
 static void GameDataSaveMcEndConf(void)                                 /* 1309 */
 {
+    /* PORT: the RmlUi screen's OK is CROSS. */
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        if (MioPan_RmlSaveConsumeCommand() == MIOPAN_RML_SAVE_ACK)
+        {
+            SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            GameDataSaveOutReq();
+        }
+        return;
+    }
+
     MioPan_MenuMouseConfirm();   /* PORT: a click acknowledges */
 
     if (*paddat[0] == 1) {                                              /* 1313 */
@@ -1133,6 +1196,24 @@ static void GameDataSaveMcRemakeConfWait(void)                          /* 1346 
 
 static void GameDataSaveMcRemakeConfPad(void)                           /* 1360 */
 {
+    /* PORT: the RmlUi screen's window answers; it has played the cue. */
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        switch (MioPan_RmlSaveConsumeCommand())
+        {
+        case MIOPAN_RML_SAVE_YES:
+            game_data_save_ctrl.mc_step = GDS_MC_REMAKE_DIR_DEL_INIT;
+            game_data_save_disp.msg_id  = 0x12;
+            break;
+        case MIOPAN_RML_SAVE_NO:
+            GameDataSaveOutReq();
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||                  /* 1364 */
         (pad[0].rpt & 0x2000) || GetPadAnalogRpt(3)) {
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 1492 */
@@ -1202,6 +1283,24 @@ static void GameDataSaveMcNewMakeConfWait(void)                         /* 1454 
 
 static void GameDataSaveMcNewMakeConfPad(void)                          /* 1468 */
 {
+    /* PORT: the RmlUi screen's window answers; it has played the cue. */
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        switch (MioPan_RmlSaveConsumeCommand())
+        {
+        case MIOPAN_RML_SAVE_YES:
+            game_data_save_ctrl.mc_step = GDS_MC_NEW_MAKE_INIT;
+            game_data_save_disp.msg_id  = 0x12;
+            break;
+        case MIOPAN_RML_SAVE_NO:
+            GameDataSaveOutReq();
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||                  /* 1472 */
         (pad[0].rpt & 0x2000) || GetPadAnalogRpt(3)) {
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 1492 */
@@ -1405,6 +1504,24 @@ static void GameDataSaveMcFormatConfWait(void)                          /* 1686 
 
 static void GameDataSaveMcFormatConfPad(void)                           /* 1726 */
 {
+    /* PORT: the RmlUi screen's window answers; it has played the cue. */
+    if (MioPan_RmlSaveIsShown() != 0)
+    {
+        switch (MioPan_RmlSaveConsumeCommand())
+        {
+        case MIOPAN_RML_SAVE_YES:
+            game_data_save_ctrl.mc_step = GDS_MC_FORMAT_INIT;
+            game_data_save_disp.msg_id  = 4;
+            break;
+        case MIOPAN_RML_SAVE_NO:
+            GameDataSaveOutReq();
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+
     if ((pad[0].rpt & 0x8000) || GetPadAnalogRpt(2) ||                  /* 1730 */
         (pad[0].rpt & 0x2000) || GetPadAnalogRpt(3)) {
         SystemBankPlay(0, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000); /* 1750 */
@@ -1571,6 +1688,11 @@ void GameDataSaveDispMain(void)                                         /* 1955 
         return;
     }
 
+    /* PORT: the opening and closing above still pace the card machine. */
+    if (GameDataSaveRmlDisp() != 0) {
+        return;
+    }
+
     SaveLoadCmnBaseDisp(0, 0, alpha, save_load_tex_addr, 0);            /* 1972 */
     SaveLoadTitleFrameDisp(0, 0, alpha, outgame_cmn_tex_addr);          /* 1975 */
     SaveLoadTitleSaveDisp(0, 0, alpha, save_load_tex_addr);             /* 1978 */
@@ -1685,4 +1807,121 @@ static void GameData_SaveFileSelDisp(u_char alpha)                      /* 2044 
 
     SaveLoadSelFlareDisp(0, 0, alpha, save_load_tex_addr,
                          (int)game_data_save_ctrl.csr);                 /* 2115 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi save screen (miopan_rml_save.h), put up for
+ *  this frame with what each step shows -- the slots from the slot select on,
+ *  the step's message, and whether the player is choosing, waiting, answering
+ *  the card's question or has a message to acknowledge.  1 when it is up, in
+ *  place of everything GameDataSaveDispMain() draws.
+ * ------------------------------------------------------------------------ */
+
+/* The snapshot a slot's save wants: the cleared plate or its room's, as
+ * GameDataSaveMcSnapLoadInit() picks it.  -1 for a room room_info_dat does
+ * not know. */
+static int GameDataSaveRmlSnapLabel(int slot)
+{
+    int i;
+
+    if (GetMemoryCardClearDataFlg(slot) != 0)
+    {
+        return SNP_CLEAR_DATA_PK2;
+    }
+    for (i = 0; room_info_dat[i].map_label != -1; i++)
+    {
+        if (room_info_dat[i].room_label == GetMemoryCardPlayDataRoomLabel(slot))
+        {
+            return room_info_dat[i].snap_tex_label;
+        }
+    }
+    return -1;
+}
+
+static int GameDataSaveRmlDisp(void)
+{
+    int      mode;
+    int      list;
+    int      range;
+    unsigned open;
+    int      i;
+
+    switch (game_data_save_ctrl.mc_step)
+    {
+    case GDS_MC_SAVE_FILE_SEL:
+    case GDS_MC_SAVE_CONF:
+        mode = MIOPAN_RML_SAVE_SELECT;
+        list = 1;
+        break;
+
+    case GDS_MC_SYSTEM_LOAD_INIT:
+    case GDS_MC_SYSTEM_LOAD_WAIT:
+    case GDS_MC_SAVE_INIT:
+    case GDS_MC_SAVE_WAIT:
+        mode = MIOPAN_RML_SAVE_BUSY;
+        list = 1;
+        break;
+
+    case GDS_MC_END_CONF:
+        mode = MIOPAN_RML_SAVE_NOTICE;
+        list = 1;
+        break;
+
+    case GDS_MC_ERROR_CONF_INIT:
+    case GDS_MC_ERROR_CONF_WAIT:
+        mode = MIOPAN_RML_SAVE_NOTICE;
+        list = 0;
+        break;
+
+    case GDS_MC_REMAKE_CONF_INIT:
+    case GDS_MC_REMAKE_CONF_WAIT:
+    case GDS_MC_NEW_MAKE_CONF_INIT:
+    case GDS_MC_NEW_MAKE_CONF_WAIT:
+    case GDS_MC_FORMAT_CONF_INIT:
+    case GDS_MC_FORMAT_CONF_WAIT:
+        mode = MIOPAN_RML_SAVE_QUESTION;
+        list = 0;
+        break;
+
+    default:
+        mode = MIOPAN_RML_SAVE_BUSY;
+        list = 0;
+        break;
+    }
+
+    /* Opening and closing take no answers: the card machine is not running. */
+    if (game_data_save_disp.anim_step != ZERO2_ANIM2D_STEP_SHOW)
+    {
+        mode = MIOPAN_RML_SAVE_BUSY;
+    }
+
+    /* The saves in use and one more, as the pad's range is. */
+    range = 1;
+    for (i = 0; i < GAME_DATA_SAVE_DATA_MAX; i++)
+    {
+        if (GetMemoryCardPlayDataFlg(i) == 1)
+        {
+            range++;
+        }
+    }
+    open = 0;
+    for (i = 0; (i < GAME_DATA_SAVE_DATA_MAX) && (i < range); i++)
+    {
+        open |= 1u << i;
+    }
+
+    /* Each snapshot is the one SnapLoadInit() read -- unless a save has just
+     * gone over that slot from another room, whose picture was never read. */
+    for (i = 0; i < GAME_DATA_SAVE_DATA_MAX; i++)
+    {
+        const int has = (list != 0) && (GetMemoryCardPlayDataFlg(i) == 1) &&
+                        (game_data_save_snap_addr[i] != nullptr) &&
+                        (game_data_save_snap_tex[i] == GameDataSaveRmlSnapLabel(i));
+
+        MioPan_RmlSaveSetPicture(i, has ? game_data_save_snap_addr[i] : nullptr,
+                                 game_data_save_snap_tex[i]);
+    }
+
+    return MioPan_RmlSaveShow(mode, game_data_save_disp.msg_id,
+                              (int)game_data_save_ctrl.csr, list, open);
 }

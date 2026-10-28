@@ -46,6 +46,7 @@
 #include "../system/pad/pad.h"              // paddat / GetPadAnalogRpt
 #include "../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../miopan/io/miopan_xbox_assets.h"  // the converted Xbox extras (port)
+#include "../miopan/miopan_ui/miopan_rml_setup.h"  // the RmlUi setup menu (port)
 
 #include <stdint.h>                         // uintptr_t
 
@@ -148,6 +149,8 @@ static void SetupMenuCsrFlareRDisp(int x, int y, u_char alpha, u_char rgb);
 static void SetupMenuLineDisp(int off_x, int off_y, u_char alpha, u_char rgb);
 static void SetupMenuMsgWinDisp(int off_x, int off_y, u_char alpha);
 static void SetupMenuCaptionDisp(int off_x, int off_y, u_char alpha);
+static void SetupMenuRmlPad(void);
+static int  SetupMenuRmlDisp(void);
 
 /* Both tables are indexed by SETUP_MENU_CTRL::mode. */
 static void (*setup_menu_pad_func[3])(void) =                           /* data 345050 */
@@ -321,7 +324,15 @@ void SetupMenuMain(void)                                                /* 290 *
     if ((setup_menu_ctrl.step == SETUP_MENU_MAIN) &&                    /* 304 */
         (setup_menu_disp.anim_step == SETUP_MENU_ANIM_IN_END))          /* 305 */
     {
-        setup_menu_pad_func[setup_menu_ctrl.mode]();                    /* 307 */
+        /* PORT: the RmlUi menu's input in place of the pad's. */
+        if (MioPan_RmlSetupIsShown() != 0)
+        {
+            SetupMenuRmlPad();
+        }
+        else
+        {
+            setup_menu_pad_func[setup_menu_ctrl.mode]();                /* 307 */
+        }
     }
 
     if (setup_menu_ctrl.step == SETUP_MENU_EXIT)                        /* 311 */
@@ -882,7 +893,10 @@ void SetupMenuDispMain(void)                                            /* 755 *
         alpha = Zero2Anim2D_InOutAnimCtrl(&setup_menu_disp.anim_step,
                                           &setup_menu_disp.anim_timer, 10, 5);  /* 764 */
 
-        if (setup_menu_disp.anim_step != SETUP_MENU_ANIM_END)           /* 766 */
+        /* PORT: the RmlUi menu in place of the sprites; the opening and
+         * closing above still pace the input and the hand-offs. */
+        if ((SetupMenuRmlDisp() == 0) &&
+            (setup_menu_disp.anim_step != SETUP_MENU_ANIM_END))         /* 766 */
         {
             /* The frame is the shared OUTGAME part; the title plate beneath it
              * comes out of this mode's own background pak. */
@@ -1856,4 +1870,172 @@ static void SetupMenuCaptionDisp(int off_x, int off_y, u_char alpha)    /* 1826 
     (void)off_y;
 
     DrawCmnCapGroup_W(0, 0, alpha, 0);                                  /* 1829 */
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// PORT DEVIATION: the RmlUi setup menu (miopan_rml_setup.h).  The screen
+// walks the rows and asks before going back to the title; what is open and
+// what each choice does stays here, in the ROM's own terms -- the same locks
+// and skips its pad handlers apply, through the same helpers.
+
+/* LEFT (-1) or RIGHT (+1) on the setting under the cursor, as
+ * SetupMenuSetupSelPad() steps each one: the cursor cue when it moved, the
+ * error cue when nothing else is open. */
+static void SetupMenuRmlStep(int dir)
+{
+    int  i;
+    int  num;
+    int  moved;
+    char before;
+
+    switch (setup_menu_ctrl.setup_csr)
+    {
+    case SETUP_MENU_SETUP_CSR_COSTUME:
+        before = setup_menu_ctrl.costume_csr;
+        num = SetupMenuCostumeNum();
+        for (i = 0; i < num; i++)
+        {
+            setup_menu_ctrl.costume_csr =
+                (char)((setup_menu_ctrl.costume_csr + num + dir) % num);
+            if (SetupMenuCostumeIsOpen(setup_menu_ctrl.costume_csr) != 0)
+            {
+                break;
+            }
+        }
+        moved = setup_menu_ctrl.costume_csr != before;
+        break;
+
+    /* SetupMenuAcsStep() is the ROM's own toggle with nothing converted. */
+    case SETUP_MENU_SETUP_CSR_MIO_ACS:
+        before = setup_menu_ctrl.mio_csr;
+        setup_menu_ctrl.mio_csr = SetupMenuAcsStep(setup_menu_ctrl.mio_csr, dir);
+        moved = setup_menu_ctrl.mio_csr != before;
+        break;
+
+    case SETUP_MENU_SETUP_CSR_MAYU_ACS:
+        before = setup_menu_ctrl.mayu_csr;
+        setup_menu_ctrl.mayu_csr = SetupMenuAcsStep(setup_menu_ctrl.mayu_csr, dir);
+        moved = setup_menu_ctrl.mayu_csr != before;
+        break;
+
+    case SETUP_MENU_SETUP_CSR_DIFFICULTY:
+        before = setup_menu_ctrl.difficulty_csr;
+        for (i = 0; i < SETUP_MENU_DIFFICULTY_MAX; i++)
+        {
+            setup_menu_ctrl.difficulty_csr =
+                (char)((setup_menu_ctrl.difficulty_csr + SETUP_MENU_DIFFICULTY_MAX + dir) %
+                       SETUP_MENU_DIFFICULTY_MAX);
+            if (clear_flg_ctrl.difficulty_flg.IsUp(setup_menu_ctrl.difficulty_csr) != 0)
+            {
+                break;
+            }
+        }
+        moved = setup_menu_ctrl.difficulty_csr != before;
+        break;
+
+    default:
+        return;
+    }
+
+    SystemBankPlay(moved != 0 ? SE_CURSOR : SE_ERROR, 1, 0, 0, (SND_3D_SET *)0,
+                   0x3200, 0x1000);
+}
+
+/* CROSS on Game Start / Mission Select: the hand-off and the commit, as
+ * SetupMenuSetupSelPad() makes them. */
+static void SetupMenuRmlStart(void)
+{
+    SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+
+    if (setup_menu_ctrl.menu_csr == SETUP_MENU_CSR_MISSION)
+    {
+        SetupMenuGotoMission();
+    }
+    else
+    {
+        SetupMenuGoToGame();
+    }
+
+    SetPlyrMdlNo(SetupMenuCostumeMdl(MIOPAN_XBOX_GIRL_MIO));
+    SetSisterMdlNo(SetupMenuCostumeMdl(MIOPAN_XBOX_GIRL_MAYU));
+    SetPlyrAcsNo(SetupMenuAcsMdl(MIOPAN_XBOX_GIRL_MIO, setup_menu_ctrl.mio_csr));
+    SetSisterAcsNo(SetupMenuAcsMdl(MIOPAN_XBOX_GIRL_MAYU, setup_menu_ctrl.mayu_csr));
+    ingame_wrk.mDifficulty.Set(setup_menu_ctrl.difficulty_csr);
+}
+
+static void SetupMenuRmlPad(void)
+{
+    int arg;
+    const int command = MioPan_RmlSetupConsumeCommand(&arg);
+
+    /* The screen moves the cursors; the cues for that were its own. */
+    if (setup_menu_ctrl.mode == SETUP_MENU_MODE_SEL_MENU)
+    {
+        setup_menu_ctrl.menu_csr = (char)MioPan_RmlSetupMenuCursor();
+
+        switch (command)
+        {
+        case MIOPAN_RML_SETUP_ENTER:
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            setup_menu_ctrl.mode = SETUP_MENU_MODE_SEL_SETUP;
+            setup_menu_ctrl.setup_csr = SETUP_MENU_SETUP_CSR_COSTUME;
+            break;
+
+        /* The screen's window has asked, and played the cue. */
+        case MIOPAN_RML_SETUP_EXIT:
+            SetupMenuExitReq();
+            break;
+
+        default:
+            break;
+        }
+    }
+    else if (setup_menu_ctrl.mode == SETUP_MENU_MODE_SEL_SETUP)
+    {
+        setup_menu_ctrl.setup_csr = (char)MioPan_RmlSetupSettingCursor();
+
+        switch (command)
+        {
+        case MIOPAN_RML_SETUP_STEP:
+            SetupMenuRmlStep(arg);
+            break;
+
+        case MIOPAN_RML_SETUP_START:
+            if (setup_menu_ctrl.setup_csr == SETUP_MENU_SETUP_CSR_START)
+            {
+                SetupMenuRmlStart();
+            }
+            break;
+
+        case MIOPAN_RML_SETUP_BACK:
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
+            setup_menu_ctrl.mode = SETUP_MENU_MODE_SEL_MENU;
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
+/* The screen up for this frame, with where the menu is and what is chosen.
+ * The difficulty row shows for Story, as SetupMenuSelMenuDisp() draws it, and
+ * only a save made at the clear can change it, as the pad's skip says. */
+static int SetupMenuRmlDisp(void)
+{
+    MIOPAN_RML_SETUP setup;
+
+    setup.mode = (setup_menu_ctrl.mode == SETUP_MENU_MODE_SEL_SETUP)
+                     ? MIOPAN_RML_SETUP_SETTINGS : MIOPAN_RML_SETUP_MENU;
+    setup.menu_csr = setup_menu_ctrl.menu_csr;
+    setup.setup_csr = setup_menu_ctrl.setup_csr;
+    setup.costume = setup_menu_ctrl.costume_csr;
+    setup.mio_acs = setup_menu_ctrl.mio_csr;
+    setup.mayu_acs = setup_menu_ctrl.mayu_csr;
+    setup.difficulty = setup_menu_ctrl.difficulty_csr;
+    setup.has_difficulty = setup_menu_ctrl.menu_csr == SETUP_MENU_CSR_STORY;
+    setup.difficulty_open = setup.has_difficulty && (ingame_wrk.clear_save_flg != 0);
+    setup.closing = setup_menu_ctrl.step == SETUP_MENU_EXIT;
+
+    return MioPan_RmlSetupShow(&setup);
 }

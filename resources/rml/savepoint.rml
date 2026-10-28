@@ -1,0 +1,30 @@
+<rml>
+<head>
+    <title>Save Point</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="savepoint.rcss"/>
+</head>
+<body id="savepoint">
+    <!-- Over the save point's own picture, which the game still draws. -->
+    <div id="shade"></div>
+    <div id="frame">
+        <img class="emblem" src="images/butterfly.png"/>
+        <h1 class="title">Save Point</h1>
+        <div class="rule"></div>
+        <!-- The rows, in the game's words, built by miopan_rml_savepoint.cpp. -->
+        <div id="items"></div>
+        <div class="rule"></div>
+        <div id="prompts" class="prompts"></div>
+    </div>
+    <div id="confirm" class="confirm hidden">
+        <div class="confirm-box">
+            <p class="confirm-text"></p>
+            <p class="confirm-note"></p>
+            <div class="confirm-choices">
+                <span id="confirm-yes" class="confirm-choice selectable">Yes</span>
+                <span id="confirm-no" class="confirm-choice selectable">No</span>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

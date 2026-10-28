@@ -150,10 +150,11 @@ void ConfirmDialog::Detach()
     }
     root_ = text_ = note_ = yes_ = no_ = nullptr;
     on_yes_ = nullptr;
+    on_no_ = nullptr;
 }
 
 void ConfirmDialog::Open(const std::string &text, const std::string &note,
-                         std::function<void()> on_yes)
+                         std::function<void()> on_yes, std::function<void()> on_no)
 {
     if (root_ == nullptr)
     {
@@ -169,6 +170,7 @@ void ConfirmDialog::Open(const std::string &text, const std::string &note,
         note_->SetClass("hidden", note.empty());
     }
     on_yes_ = std::move(on_yes);
+    on_no_ = std::move(on_no);
     Select(false);
     root_->SetClass("hidden", false);
 }
@@ -180,6 +182,7 @@ void ConfirmDialog::Close()
         root_->SetClass("hidden", true);
     }
     on_yes_ = nullptr;
+    on_no_ = nullptr;
 }
 
 bool ConfirmDialog::IsOpen() const
@@ -244,6 +247,7 @@ void ConfirmDialog::Select(bool yes)
 void ConfirmDialog::Answer(bool yes)
 {
     std::function<void()> on_yes = std::move(on_yes_);
+    std::function<void()> on_no = std::move(on_no_);
     Close();
     if (yes)
     {
@@ -256,6 +260,10 @@ void ConfirmDialog::Answer(bool yes)
     else
     {
         PlayCancel();
+        if (on_no)
+        {
+            on_no();
+        }
     }
 }
 }

@@ -44,6 +44,7 @@
 #include "../../system/os/system.h"                 /* GetLanguage            */
 #include "../../system/pad/pad.h"                   /* pad / paddat           */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_savepoint.h" // the RmlUi menu (port)
 
 /* The message group every save-point string comes out of. */
 #define SAVEPOINT_MSG_TYPE          0x4b
@@ -227,8 +228,37 @@ static void SavePointTopMouse(void)
         SAVEPOINT_TOP_CSR_NUM, 0, 0);
 }
 
+/* PORT DEVIATION: with RmlUi up, the port's menu (miopan_rml_savepoint.h)
+ * walks the rows and asks the save and album questions itself -- so the
+ * confirm window never opens and its "yes" lands here -- while what each row
+ * does is still this file's. */
+static void SavePointTopRmlPad(void)
+{
+    savepoint_top_ctrl.csr = (char)MioPan_RmlSavePointCursor();
+
+    if (MioPan_RmlSavePointConsumeCommand() != MIOPAN_RML_SAVEPOINT_CHOSEN)
+    {
+        return;
+    }
+    if (savepoint_top_ctrl.csr == SAVEPOINT_TOP_CSR_EXIT)
+    {
+        SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        SavePointEndReq();
+    }
+    else
+    {
+        SavePointTopExeDecision();
+    }
+}
+
 static void SavePointTopPad(void)                                       /* 282 */
 {
+    if (MioPan_RmlSavePointIsShown() != 0)
+    {
+        SavePointTopRmlPad();
+        return;
+    }
+
     SavePointTopMouse();
 
     if ((pad[0].rpt & 0x1000) || GetPadAnalogRpt(0)) {                  /* 286 */
@@ -380,6 +410,15 @@ void SavePointTopDisp(void)                                             /* 448 *
                                           &savepoint_top_disp.anim_timer,
                                           SAVEPOINT_TOP_ANIM_IN_TIME,
                                           SAVEPOINT_TOP_ANIM_OUT_TIME); /* 465 */
+
+        /* PORT: the RmlUi menu in place of the window, fading as it goes;
+         * the opening and closing above still pace SavePointTopMain(). */
+        if (MioPan_RmlSavePointShow((int)savepoint_top_ctrl.csr,
+                                    savepoint_top_ctrl.step ==
+                                        SAVEPOINT_TOP_STEP_DECIDED) != 0)
+        {
+            return;
+        }
 
         SavePoint_MenuWinDisp(0, 0, alpha);                             /* 468 */
 

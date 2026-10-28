@@ -1,7 +1,8 @@
 /*
  * The load screen: the five saves side by side, each with its room's picture,
  * as the game laid them out; what the chosen one holds beneath; and the
- * game's own memory-card messages along the bottom.
+ * game's own memory-card messages along the bottom.  The save screen is the
+ * same screen (save.rml), so this sheet is both.
  */
 
 /* The game's 640 less a margin, centred: a widened window widens the room
@@ -66,7 +67,7 @@
     decorator: image(images/cursor_glow.png);
 }
 
-.slot.empty
+.slot.locked
 {
     border-color: #3a2f1e;
     cursor: default;
@@ -107,7 +108,18 @@
     color: #ffd98a;
 }
 
-.slot.empty .number
+.slot.locked .number
+{
+    color: #5d524b;
+}
+
+/* An empty save that can take the cursor: the save screen's next free one. */
+.slot.empty .blank
+{
+    color: #8a7d72;
+}
+
+.slot.locked .blank
 {
     color: #5d524b;
 }

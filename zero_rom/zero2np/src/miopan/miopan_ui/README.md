@@ -27,15 +27,25 @@ of its own that loads its document and handles its events:
 - `miopan_rml_load.cpp` -- the title's Load Game: the five saves with their
   rooms' pictures, the chosen one's chapter, room, play time and clears, and
   the game's memory-card messages.
+- `miopan_rml_save.cpp` -- the save screen, wherever the game saves (save
+  points, the clear menu, Mission Mode): the same five saves, "save here?",
+  and the card's own questions as yes / no windows.
+- `miopan_rml_saves.cpp` -- the five saves and the chosen one's detail, as
+  the load and save screens both show them.
+- `miopan_rml_savepoint.cpp` -- the save point's menu: Save Game, Album and
+  Resume Game in the game's words, with its questions.
+- `miopan_rml_setup.cpp` -- the setup menu a cleared save opens: Story,
+  Mission or back to the title, and the costume, accessories and difficulty,
+  the Xbox extras among them once imported.
 - `miopan_rml_common.cpp` -- what the screens share: the game's menu sounds,
   button prompts, the yes / no window.
 - `miopan_game_text.cpp` -- the game's own message strings as UTF-8, for the
   screens that show its words: the message font's glyphs as its atlas draws
   them, and the control codes' lengths as the ROM's printers step them.
 
-The title and load screens stand in for screens the game still runs: each
-frame the phase asks for the screen and acts on the player's answer with its
-own code, and a frame that does not ask hides it. With RmlUi unavailable the
+The title, load, save, save point and setup screens stand in for screens the
+game still runs: each frame the phase asks for the screen and acts on the
+player's answer with its own code, and a frame that does not ask hides it. With RmlUi unavailable the
 game's own screens run as they always did. Pictures made at run time, like a
 save's room snapshot decoded from its TIM2, reach RmlUi as `gen:` images
 (`MioPanRml::SetGeneratedImage`).

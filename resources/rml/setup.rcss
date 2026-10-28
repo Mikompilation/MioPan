@@ -1,0 +1,266 @@
+/*
+ * The setup menu a cleared save opens, over setup.c's own background.  The
+ * game put Story, Mission and its way back to the title in a column up top
+ * and the settings in a block beneath; here they stand side by side in the
+ * 640 column the load screen uses, the rows on the left and the settings in
+ * a panel on the right, with the game's caption for the row under the rule.
+ */
+
+#shade
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #08050590;
+    decorator: image(images/vignette.png), image(images/grain.png repeat);
+}
+
+#frame
+{
+    position: absolute;
+    left: 50%;
+    width: 568dp;
+    margin-left: -284dp;
+    top: 22dp;
+    bottom: 16dp;
+    animation: 0.2s quadratic-out rise-in;
+    opacity: 1;
+    transition: opacity 0.2s linear-in-out;
+}
+
+/* On its way into the game or back to the title: the game fades its own
+ * window out, and takes no input. */
+#frame.closing
+{
+    opacity: 0;
+}
+
+#header
+{
+    height: 34dp;
+}
+
+#header .emblem
+{
+    display: inline-block;
+    width: 32dp;
+    height: 24dp;
+    margin-right: 8dp;
+    vertical-align: middle;
+}
+
+#header .title
+{
+    display: inline-block;
+    vertical-align: middle;
+}
+
+#body
+{
+    height: 200dp;
+    padding: 14dp 4dp 10dp 4dp;
+}
+
+/* ---- Story, Mission, Return to Title ----------------------------------- */
+
+#menu-items
+{
+    float: left;
+    width: 176dp;
+    padding-top: 6dp;
+}
+
+.entry
+{
+    height: 28dp;
+    line-height: 28dp;
+    margin-bottom: 6dp;
+    font-size: 16dp;
+    letter-spacing: 1dp;
+    cursor: pointer;
+}
+
+.entry.selected
+{
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+/* While the settings have the cursor, the row they belong to stays marked
+ * and the other two fall back. */
+#frame.settings .entry
+{
+    color: #6d6158;
+}
+
+#frame.settings .entry.selected
+{
+    color: #e8ddcc;
+    border-left-color: #b8913e;
+    decorator: none;
+    font-effect: none;
+}
+
+/* ---- the settings ------------------------------------------------------ */
+
+/* 176 + 374 across the 560 inside the frame's padding. */
+#settings
+{
+    float: right;
+    width: 340dp;
+    padding: 10dp 16dp 12dp 16dp;
+    border: 1dp #6b5528;
+    background-color: #0a0807d8;
+}
+
+/* Waiting on the left, the settings show what they hold, dimmed. */
+#frame.menu #settings
+{
+    opacity: 0.45;
+}
+
+#frame.settings #settings
+{
+    border-color: #b8913e;
+}
+
+.heading
+{
+    margin: 10dp 0 3dp 0;
+    padding: 0 0 1dp 2dp;
+    font-size: 10dp;
+    font-weight: bold;
+    letter-spacing: 2dp;
+    text-transform: uppercase;
+    color: #c4283c;
+    border-bottom: 1dp #6b552888;
+}
+
+.row
+{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 24dp;
+    line-height: 24dp;
+    cursor: pointer;
+}
+
+/* Mission Mode has no difficulty: theme.rcss's .hidden loses to the flex
+ * above. */
+.row.hidden
+{
+    display: none;
+}
+
+.row-label
+{
+    font-size: 14dp;
+}
+
+.row-value
+{
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    font-size: 13dp;
+    color: #c9bcaa;
+}
+
+.row.selected .row-value
+{
+    color: #fff6e8;
+}
+
+.value
+{
+    display: inline-block;
+    width: 160dp;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* The step arrows: dim at rest, lit on the cursor's row. */
+.arrow
+{
+    display: inline-block;
+    width: 16dp;
+    text-align: center;
+    font-size: 16dp;
+    color: #6b5528;
+}
+
+.row.selected .arrow
+{
+    color: #e8a040;
+}
+
+.arrow:hover
+{
+    color: #f4ebde;
+}
+
+/* A save made before the clear keeps its difficulty: shown, but fixed. */
+.row.disabled,
+.row.disabled .row-value,
+.row.disabled .arrow
+{
+    color: #5d524b;
+    cursor: default;
+}
+
+/* Game Start / Mission Select: a plate of its own under the settings. */
+#row-start
+{
+    margin-top: 16dp;
+    padding: 0;
+    text-align: center;
+    border-left-width: 0;
+    cursor: pointer;
+}
+
+#row-start.selected
+{
+    decorator: none;
+}
+
+.start-button
+{
+    display: inline-block;
+    width: 180dp;
+    padding: 3dp 0;
+    border: 1dp #6b5528;
+    background-color: #1b1213;
+    font-size: 14dp;
+    letter-spacing: 2dp;
+    text-transform: uppercase;
+    color: #c9bcaa;
+}
+
+#row-start.selected .start-button
+{
+    border-color: #e2bc62;
+    decorator: image(images/cursor_bar.png);
+    color: #fff6e8;
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+/* ---- caption and prompts ----------------------------------------------- */
+
+#help
+{
+    margin-top: 10dp;
+    min-height: 40dp;
+    padding: 0 6dp;
+    font-size: 13dp;
+    font-style: italic;
+    color: #a89a8c;
+}
+
+#prompts
+{
+    position: absolute;
+    right: 0;
+    bottom: 0;
+}
