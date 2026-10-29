@@ -1,6 +1,8 @@
 #ifndef MIOPAN_CDTABLE_H
 #define MIOPAN_CDTABLE_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -40,6 +42,15 @@ void MioPan_CdTableSelect(void *tbl, const void *names, char **paths, int rom_fi
 
 /* The release the table is for, once selected: "EU retail" or "prototype". */
 const char *MioPan_CdTableRelease(void);
+
+/* libcdvd, when the data folder is an extracted tree and has no IMG_BD.BIN:
+ * `size` bytes from sector `lsn`, out of the extracted file whose ROM row
+ * covers that sector.  The sound streams are read by sector alone -- the IOP
+ * asks for start_sector plus how far it has got -- so without this a tree
+ * plays none of them and the read retries for ever.  -1 when no ROM file's
+ * sectors hold `lsn`, else 1 read or 0 failed.  Past the file's end reads as
+ * zeroes, as the next file's bytes would have in IMG_BD.BIN. */
+int MioPan_CdTableReadTree(unsigned int lsn, void *buf, size_t size);
 
 #ifdef __cplusplus
 }
