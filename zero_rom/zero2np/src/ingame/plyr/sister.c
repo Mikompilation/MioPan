@@ -88,11 +88,17 @@ static SIS_ANI_TBL sis_ani999_tbl[2] = { {  0, 10,  1 }, { 255, 0, 0 } };
 
 #define SIS_ANI_TBL_MAX 10
 
+/* Indexed by ReqModeSisMotion()'s tbl_no, i.e. by the algorithm number an
+ * event's SET_OBJ_ALGORITHM hands to obj_type 7.  The order is the ROM's
+ * (.rodata 3c7760): 0..7 are 001..008, 8 the turn-to-face table, 9 the plain
+ * idle.  An earlier pass rotated 999 to the front, which made every scripted
+ * motion run the next table down -- chapter 1's house entry (ev1567, alg 9)
+ * turned her round where the ROM just lets her stand. */
 static SIS_ANI_TBL *sis_ani_tbl_data[SIS_ANI_TBL_MAX] =
 {
-    sis_ani999_tbl, sis_ani001_tbl, sis_ani002_tbl, sis_ani003_tbl,
-    sis_ani004_tbl, sis_ani005_tbl, sis_ani006_tbl, sis_ani007_tbl,
-    sis_ani008_tbl, sis_ani998_tbl
+    sis_ani001_tbl, sis_ani002_tbl, sis_ani003_tbl, sis_ani004_tbl,
+    sis_ani005_tbl, sis_ani006_tbl, sis_ani007_tbl, sis_ani008_tbl,
+    sis_ani998_tbl, sis_ani999_tbl
 };
 
 /* The ROM binds this in __static_initialization_and_destruction_0, which is
@@ -149,8 +155,7 @@ static SIS_AREA_CHG sis_area_chg[7] =
 };
 
 /* Push-aside headings, quarter turns, indexed by sis_trace.push_dir. */
-static float rrot[4] = { 0.0f, 1.5707963705062866f, 3.1415927410125732f,
-                         -1.5707963705062866f };
+static float rrot[4] = { 0.0f, 1.5707963f, 3.1415925f, -1.5707963f };   /* data 34f9b0 */
 
 SIS_TRACE    sis_trace;                 /* data  34f3c0 */
 SIS_ALG_WORK sis_algo;                  /* sdata 3f4468 */
@@ -235,7 +240,7 @@ void InitSisterPos(void)
 
     /* Placed 175 units behind the player, facing +X. */
     sis_wrk.cmn_wrk.mbox.pos[2] = plyr_wrk.cmn_wrk.mbox.pos[2] - 175.0f;
-    sis_wrk.cmn_wrk.mbox.rot[1] = 1.5707963705062866f;
+    sis_wrk.cmn_wrk.mbox.rot[1] = 1.5707963f;
     sis_wrk.cmn_wrk.mbox.pos[3] = 1.0f;                                 /* 392 */
 }
 
@@ -336,8 +341,8 @@ static void SisKaidanLookAt(void)                                       /* 478 *
     float offset[4];
     LOOK_AT_PARAM param;
 
-    param.eye_spd   = 0.4f;
-    param.head_spd  = 0.05f;
+    param.eye_spd   = 0.39999998f;      /* the ROM's lit4 words, one ulp low */
+    param.head_spd  = 0.049999997f;
     param.chest_spd = 0.005f;
 
     sis_mdlGetMATRIX(mtx, 0);
@@ -352,6 +357,10 @@ static void SisKaidanLookAt(void)                                       /* 478 *
         sceVu0AddVector(param.pos, mtx[3], offset);
         sceVu0ScaleVector(offset, mtx[2], 20.0f);
         sceVu0AddVector(param.pos, param.pos, offset);
+        SisNeckRegisterTarget(&param, LTP_MAYU_KAIDAN, FLT_MAX);
+        /* The ROM registers the same target twice (508, 510; the second
+         * call is cross-jumped into the down arm's).  The repeat is a no-op
+         * -- same priority, not closer -- and is kept as found. */
         SisNeckRegisterTarget(&param, LTP_MAYU_KAIDAN, FLT_MAX);
     }
     else if ((u_char)(a - 0x12) < 2 || a == 0x1a || a == 0x1b ||
@@ -649,10 +658,12 @@ int SisDead(void)                                                       /* 709 *
         cnt = 0;
         EndPlyrApproachCameraCtrl();
         SetOpenCondSwitch(1);
+        sis_wrk.modedead++;             /* the finishing steps advance too */
         return 1;
 
     case 0x0a:
         SetOpenCondSwitch(1);
+        sis_wrk.modedead++;
         return 1;
 
     case 0x14:
@@ -696,6 +707,7 @@ int SisDead(void)                                                       /* 709 *
             return 0;
         }
         SetOpenCondSwitch(1);
+        sis_wrk.modedead++;
         return 1;
 
     default:
@@ -1388,7 +1400,7 @@ void SetSisterStatus(void)                                              /* 1023 
             psrot = vw[1] - sis_wrk.cmn_wrk.mbox.rot[1];
             RotLimitChk(&psrot);
 
-            if (fabsf(psrot) > 2.0943951606750488f)     /* 120 degrees */
+            if (fabsf(psrot) > 2.094395f)               /* 120 degrees */
             {
                 turn_chk_time++;
             }
@@ -1421,16 +1433,21 @@ tail:
     if ((sis_wrk.cmn_wrk.st.mvsta & 0x801fff) == 0)
     {
         sis_wrk.se_matte = 0;
+    }
 
-        if (sis_algo.amode != 2)
+    /* Moving, or handed to the battle script: the turn-to-face count and the
+     * wait pose both start over.  Standing still in any other mode keeps
+     * them, which is what lets the two standing-arm timers above ever run
+     * out.  GCC threaded the repeated mask test into the branch above, so in
+     * the ROM only the amode test (1331) is left at this point. */
+    if ((sis_wrk.cmn_wrk.st.mvsta & 0x801fff) != 0 || sis_algo.amode == 2)
+    {
+        turn_chk_time = 0;
+        if ((sis_wrk.cmn_wrk.st.mvsta & 0x10000) != 0)
         {
-            turn_chk_time = 0;
-            if ((sis_wrk.cmn_wrk.st.mvsta & 0x10000) != 0)
-            {
-                SetSisterAnime(0, 0x14);
-            }
-            ClearSisWait();
+            SetSisterAnime(0, 0x14);
         }
+        ClearSisWait();                                                 /* 1337 */
     }
 
     if ((sis_wrk.cmn_wrk.st.mvsta & 1) == 0)
@@ -1639,17 +1656,19 @@ void SisterTraceMove(void)                                              /* 1461 
     float f = vr[1] - sis_wrk.cmn_wrk.mbox.brot[1];
     RotLimitChk(&f);
 
-    if (fabsf(f) <= 0.0872664950788021f)        /* 5 degrees -- close enough */
+    /* The ROM's lit4 words for these angles sit a few ulps under the decimals
+     * (EE GCC truncates); the spellings below round-trip to them exactly. */
+    if (fabsf(f) <= 0.08726645f)                /* 5 degrees -- close enough */
     {
         return;
     }
 
-    if (fabsf(f) <= 1.5707963705062866f)        /* up to 90 degrees: ease in */
+    if (fabsf(f) <= 1.5707963f)                 /* up to 90 degrees: ease in */
     {
-        float div = GetPALMode() == 0 ? 8.0f : 6.6666665077209473f;
+        float div = GetPALMode() == 0 ? 8.0f : 6.666667f;
 
         sis_wrk.cmn_wrk.mbox.rot[1] = vr[1];
-        if (fabsf(f) > 0.0436332486569881f)     /* 2.5 degrees */
+        if (fabsf(f) > 0.043633226f)            /* 2.5 degrees */
         {
             sis_wrk.cmn_wrk.mbox.rot[1] = sis_wrk.cmn_wrk.mbox.brot[1] + f / div;
         }
@@ -1680,8 +1699,8 @@ int SetSisTurn(void)                                                    /* 3367 
     float psrot;
 
     float rw   = GetSisterRot();
-    float step = GetPALMode() == 0 ? 0.1396263986825943f    /*  8 degrees */
-                                   : 0.1675516068935394f;   /* 9.6 degrees */
+    float step = GetPALMode() == 0 ? 0.13962632f            /*  8 degrees */
+                                   : 0.16755158f;           /* 9.6 degrees */
 
     psrot = rw - sis_wrk.cmn_wrk.mbox.rot[1];
     RotLimitChk(&psrot);
@@ -1719,7 +1738,7 @@ int SetSisTurn(void)                                                    /* 3367 
     sis_wrk.cmn_wrk.mbox.brot[1] = sis_wrk.cmn_wrk.mbox.rot[1];
     g3dxVu0CopyVector(sis_wrk.wpos, sis_wrk.cmn_wrk.mbox.pos);
 
-    return fabsf(psrot) <= 0.0872664950788021f;                         /* 3403 */
+    return fabsf(psrot) <= 0.08726645f;                                 /* 3403 */
 }
 
 /* Heading she should be facing: along the segment she is walking, or straight
@@ -1765,7 +1784,7 @@ void MoveSisStairs(void)                                                /* 3280 
     fw = rotw - sis_wrk.cmn_wrk.mbox.rot[1];
     RotLimitChk(&fw);
 
-    float deg = (fw * 180.0f) / 3.1415927410125732f;
+    float deg = (fw * 180.0f) / 3.1415925f;     /* the ROM's lit4, one ulp under PI */
 
     if (deg > -65.0f && deg < 65.0f)
     {
@@ -1844,9 +1863,13 @@ void SisterPushCheck(void)                                              /* 2166 
     float mopos[4] = { 0.0f, 0.0f,  25.0f, 1.0f };
     float wlm[4][4];
     float vw[4][4];
-    float a[4];
-    float b[4];
-    int   c[4];
+    /* PORT: a[] and b[] share one array because the ROM's frame has b at
+     * a+0x10.  A heading with no companion heading inside its window leaves
+     * c[i] at -1, and the ROM's b[c[i]] then reads a[3]; two separate arrays
+     * would make that read undefined. */
+    float ab[8];
+    float *a = &ab[0];
+    float *b = &ab[4];
     int   d[4][2];
     int   flg[4];
     float psrot;
@@ -1858,10 +1881,11 @@ void SisterPushCheck(void)                                              /* 2166 
     int   dir;
     float step;
 
-    const float qpai    = 1.5707963705062866f;  /*  90 degrees */
-    const float pai     = 3.1415927410125732f;  /* 180 degrees */
-    const float quarter = 0.7853981852531433f;  /*  45 degrees */
-    const float twopai  = 6.2831854820251465f;
+    /* The ROM's lit4 words, each one ulp under the true angle. */
+    const float qpai    = 1.5707963f;           /*  90 degrees */
+    const float pai     = 3.1415925f;           /* 180 degrees */
+    const float quarter = 0.7853981f;           /*  45 degrees */
+    const float twopai  = 6.283185f;
 
     if (sis_trace.push_tm > 0)
     {
@@ -1875,10 +1899,9 @@ void SisterPushCheck(void)                                              /* 2166 
                         plyr_wrk.cmn_wrk.mbox.pos, (short)plyr_wrk.cmn_wrk.floor,
                         140.0f) == 0)
     {
+        int   c[4] = { -1, -1, -1, -1 };
         float srot = sis_wrk.cmn_wrk.mbox.rot[1];
         float prot = plyr_wrk.cmn_wrk.mbox.rot[1];
-
-        c[0] = c[1] = c[2] = c[3] = -1;
 
         GetTrgtRot(plyr_wrk.cmn_wrk.mbox.pos, sis_wrk.cmn_wrk.mbox.pos, trgt, 2);
         float from = trgt[1];
@@ -1891,7 +1914,7 @@ void SisterPushCheck(void)                                              /* 2166 
         b[0] = srot;
         b[1] = srot + qpai;
         b[2] = srot + pai;
-        b[3] = srot + 4.7123889923095703f;      /* 270 degrees */
+        b[3] = srot + 4.7123885f;               /* 270 degrees */
 
         for (i = 0; i < 4; i++)
         {
@@ -1903,7 +1926,7 @@ void SisterPushCheck(void)                                              /* 2166 
         {
             for (j = 0; j < 4; j++)
             {
-                if (a[i] >= 2.3561944961547852f)        /*  135 degrees */
+                if (a[i] >= 2.3561943f)                 /*  135 degrees */
                 {
                     /* Window runs off the top of the range -- wrap it. */
                     if (b[j] > a[i] - quarter && b[j] <= pai)
@@ -1915,7 +1938,10 @@ void SisterPushCheck(void)                                              /* 2166 
                         c[i] = j;
                     }
                 }
-                else if (a[i] < -2.3561944961547852f)   /* -135 degrees */
+                /* -135 degrees.  Not a lit4: the ROM multiplies -quarter by
+                 * 3.0 at run time (mul.s), which rounds one ulp the other way
+                 * from the +135 word above. */
+                else if (a[i] < -quarter * 3.0f)
                 {
                     if (b[j] > -pai && b[j] <= a[i] + quarter)
                     {
@@ -2110,7 +2136,7 @@ void SisterPushCheck(void)                                              /* 2166 
      * a time. */
     if (sis_wrk.anime_no == 0x1b)
     {
-        step = -sis_wrk.spd[2] * 1.2000000476837158f;
+        step = -sis_wrk.spd[2] * 1.1999999f;
     }
     else
     {
@@ -2121,7 +2147,7 @@ void SisterPushCheck(void)                                              /* 2166 
     mopos[2] = step;
 
     dir = sis_trace.push_dir;
-    if (sis_trace.push_pldir < 2 &&
+    if ((u_int)sis_trace.push_pldir < 2 &&      /* sltiu in the ROM */
         (sis_trace.push_dir == 1 || sis_trace.push_dir == 3) &&
         (float)sis_trace.push_cnt <= 14.0f)
     {
@@ -2223,25 +2249,41 @@ void SisterPosUpdate(void)                                              /* 2199 
                                  plyr_wrk.cmn_wrk.mbox.bpos);
             }
         }
+        else if (DistHitCheck(sis_wrk.cmn_wrk.mbox.bpos,
+                              plyr_wrk.cmn_wrk.mbox.pos, 140.0f) == 0)
+        {
+            /* Only her step closed the gap: she takes it back. */
+            g3dxVu0CopyVector(sis_wrk.cmn_wrk.mbox.pos, sis_wrk.cmn_wrk.mbox.bpos);
+        }
+        else if (DistHitCheck(sis_wrk.cmn_wrk.mbox.pos,
+                              plyr_wrk.cmn_wrk.mbox.bpos, 140.0f) == 0)
+        {
+            /* Only his step closed it: he takes it back, she keeps hers. */
+            g3dxVu0CopyVector(plyr_wrk.cmn_wrk.mbox.pos, plyr_wrk.cmn_wrk.mbox.bpos);
+        }
+        else if (DistHitCheck(sis_wrk.cmn_wrk.mbox.bpos,
+                              plyr_wrk.cmn_wrk.mbox.bpos, 140.0f) == 0)
+        {
+            /* Neither step alone overlaps, both together do: both rewind. */
+            g3dxVu0CopyVector(plyr_wrk.cmn_wrk.mbox.pos, plyr_wrk.cmn_wrk.mbox.bpos);
+            g3dxVu0CopyVector(sis_wrk.cmn_wrk.mbox.pos, sis_wrk.cmn_wrk.mbox.bpos);
+        }
         else
         {
-            if (DistHitCheck(sis_wrk.cmn_wrk.mbox.bpos,
-                             plyr_wrk.cmn_wrk.mbox.pos, 140.0f) != 0)
+            /* Already overlapping last frame: rewind both only if this frame
+             * made it worse.  The ROM computes all four distances and
+             * compares two (2219-2227); the bpos/pos cross pair is unused. */
+            float d_now = GetDistV(sis_wrk.cmn_wrk.mbox.pos, plyr_wrk.cmn_wrk.mbox.pos);
+            float d_old = GetDistV(sis_wrk.cmn_wrk.mbox.bpos, plyr_wrk.cmn_wrk.mbox.bpos);
+
+            GetDistV(sis_wrk.cmn_wrk.mbox.bpos, plyr_wrk.cmn_wrk.mbox.pos);
+            GetDistV(sis_wrk.cmn_wrk.mbox.pos, plyr_wrk.cmn_wrk.mbox.bpos);
+
+            if (d_now < d_old)
             {
-                if (DistHitCheck(sis_wrk.cmn_wrk.mbox.pos,
-                                 plyr_wrk.cmn_wrk.mbox.bpos, 140.0f) == 0 ||
-                    (DistHitCheck(sis_wrk.cmn_wrk.mbox.bpos,
-                                  plyr_wrk.cmn_wrk.mbox.bpos, 140.0f) != 0 &&
-                     GetDistV(sis_wrk.cmn_wrk.mbox.bpos,
-                              plyr_wrk.cmn_wrk.mbox.bpos) >
-                     GetDistV(sis_wrk.cmn_wrk.mbox.pos,
-                              plyr_wrk.cmn_wrk.mbox.pos)))
-                {
-                    g3dxVu0CopyVector(plyr_wrk.cmn_wrk.mbox.pos,
-                                     plyr_wrk.cmn_wrk.mbox.bpos);
-                }
+                g3dxVu0CopyVector(plyr_wrk.cmn_wrk.mbox.pos, plyr_wrk.cmn_wrk.mbox.bpos);
+                g3dxVu0CopyVector(sis_wrk.cmn_wrk.mbox.pos, sis_wrk.cmn_wrk.mbox.bpos);
             }
-            g3dxVu0CopyVector(sis_wrk.cmn_wrk.mbox.pos, sis_wrk.cmn_wrk.mbox.bpos);
         }
         sis_lalg.hit = 1;
     }
@@ -2419,7 +2461,7 @@ void SisterDamageCtrl(void)                                             /* 2388 
                 ew->atk_tm = 0;
                 if (sis_wrk.cmn_wrk.st.dmg_type == 3)
                 {
-                    ReqAnm(ew->ani_ctrl_p, 10, ew->dat->cmn.anm_no, 9);
+                    ReqAnm(ew->ani_ctrl_p, 10, ew->cmn_dat->anm_no, 9);
                 }
                 return;
             }
@@ -2628,16 +2670,12 @@ void SisterNAnimeCtrl(void)                                             /* 2632 
         }
         else
         {
-            if (sis_wrk.cmn_wrk.st.dwalk_tm == 0 &&
-                (sis_wrk.cmn_wrk.st.mvsta & 0x10) == 0)
+            /* Limping keeps entry 7.  Otherwise the first matching entry wins,
+             * scanning from 0 -- so running up stairs (0x10) is entry 0. */
+            if (sis_wrk.cmn_wrk.st.dwalk_tm == 0)
             {
-                for (i = 0; ; )
+                for (i = 0; i < 0xe; i = (i + 1) & 0xff)
                 {
-                    i = (i + 1) & 0xff;
-                    if (i > 0xd)
-                    {
-                        break;
-                    }
                     if ((sis_wrk.cmn_wrk.st.mvsta & psta_chk_tbl[i]) != 0)
                     {
                         if ((psta_chk_tbl[i] & 0x1f00) != 0)
@@ -2649,13 +2687,19 @@ void SisterNAnimeCtrl(void)                                             /* 2632 
                 }
             }
 
-            /* Outdoors there is no walk clip for entry 5, so slide to 6. */
-            if (PlyrOutsideCheck() != 0 && psta_chk_tbl[i] == 2)
+            /* Outdoors there is no walk clip for entry 5, so slide to 6.
+             *
+             * PORT: with no match (only 0x1000 up) i is 14 and the ROM reads
+             * one word past psta_chk_tbl[] here and pmani_no_tbl[] below.
+             * Whatever it reads, i >= 14 ends on the current animation, so
+             * both reads are guarded rather than reproduced. */
+            if (PlyrOutsideCheck() != 0 && i < 0xe && psta_chk_tbl[i] == 2)
             {
                 i = (i + 1) & 0xff;
             }
 
-            if ((pmani_no_tbl[i][0] != sis_wrk.anime_no &&
+            if (i >= 0xe ||
+                (pmani_no_tbl[i][0] != sis_wrk.anime_no &&
                  pmani_no_tbl[i][1] != sis_wrk.anime_no) ||
                 (sis_wrk.cmn_wrk.st.sta & 0x2000) != 0)
             {
@@ -2705,6 +2749,17 @@ int SearchSearchPoint(float *pos, int floor1, float *tgt, int floor2)   /* 2781 
     }
 
     int area = sis_wrk.cmn_wrk.pr_info.area_no;
+
+    /* PORT: the ROM's guard is 0x42 but the tables hold 63 rooms, so rooms
+     * 63..65 index past them.  On the disc 63 reads 0 (no routing), 64 a
+     * negative count (nothing found), and 65 -- chapter 1's overlook -- a
+     * huge count over a NULL point list, which would hang the PS2.  Here
+     * all three get the "no routing" answer instead of undefined reads. */
+    if (area >= (int)(sizeof(room_point_num) / sizeof(room_point_num[0])))
+    {
+        return 0;
+    }
+
     if (room_point_num[area] == 0)
     {
         return 0;
@@ -2869,8 +2924,9 @@ void SetSearchPoint(char *route, int floor1, int floor2)                /* 2944 
     int j = sis_trace.now;
 
     /* Walk in from the far end of the route to the furthest node she can
-     * already see; that becomes the first waypoint. */
-    int ne = num - 1;
+     * already see; that becomes the first waypoint.  If she can see none,
+     * the pass below starts from node 0 (2978). */
+    int ne = 0;
     for (i = num - 1; i >= 0; i--)
     {
         if (SisterHitCheck(sis_wrk.cmn_wrk.headpos, floor1,
@@ -2966,10 +3022,13 @@ void SetSearchPoint(char *route, int floor1, int floor2)                /* 2944 
         sis_trace.num++;
     }
 
+    /* ROM BUG, reproduced: the sum runs l[1..num], one past the segment just
+     * written, so a stale length from her previous trail rides along.  It
+     * only lasts until the next CalcSisDist(). */
     sis_trace.dist = 0.0f;
-    for (i = 1; i < sis_trace.num; i++)
+    for (i = 0; i < sis_trace.num; i++)
     {
-        sis_trace.dist += sis_trace.l[i];
+        sis_trace.dist += sis_trace.l[i + 1];
     }                                                                   /* 3040 */
 }
 
