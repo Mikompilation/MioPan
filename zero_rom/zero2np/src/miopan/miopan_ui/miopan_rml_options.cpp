@@ -1085,23 +1085,24 @@ Page ControlsPage()
  *  Special -- what the port adds to the game itself.
  *
  *  Both imports read the player's own copy of another release of the game: a
- *  folder dialog, then a worker does the work while the screen reports how
- *  far it has got.
+ *  folder or file dialog, then a worker does the work while the screen reports
+ *  how far it has got.
  *
  *    * The Director's Cut's extra costumes and accessories, from an Xbox copy
  *      (miopan_xbox_assets.h).  They are in the setup menu the moment it
  *      finishes.
- *    * The Japanese voices, from a Japanese copy (miopan_undub.h).  The game
- *      speaks Japanese from the next line on, and a choice switches back.
+ *    * The Japanese voices, from a Japanese copy (miopan_undub.h): its disc
+ *      image, or the disc extracted into a folder.  The game speaks Japanese
+ *      from the next line on, and a choice switches back.
  * ------------------------------------------------------------------------ */
 
-/* A folder dialog in flight.  SDL hands the chosen folder back on a thread of
+/* A folder or file dialog in flight.  SDL hands the choice back on a thread of
  * its own, so it waits here for the game thread to take it. */
 struct FolderPick
 {
     const char *tag;            /* for the log */
     std::mutex mutex;
-    std::string folder;         /* guarded by mutex */
+    std::string folder;         /* guarded by mutex: the folder or file chosen */
     std::atomic<bool> ready{false};
     std::atomic<bool> open{false};
     std::string last;           /* game thread: where the next dialog opens */
@@ -1109,6 +1110,7 @@ struct FolderPick
 
 FolderPick g_xbox_pick{"xbox"};
 FolderPick g_undub_pick{"undub"};
+FolderPick g_undub_image_pick{"undub"};
 
 void SDLCALL FolderPicked(void *userdata, const char *const *filelist, int filter)
 {
@@ -1117,7 +1119,7 @@ void SDLCALL FolderPicked(void *userdata, const char *const *filelist, int filte
     /* A null list is an error and an empty one is a cancel. */
     if (filelist == nullptr)
     {
-        SDL_Log("[port] %s: folder dialog failed: %s", pick.tag, SDL_GetError());
+        SDL_Log("[port] %s: file dialog failed: %s", pick.tag, SDL_GetError());
     }
     else if (filelist[0] != nullptr)
     {
@@ -1137,6 +1139,23 @@ void ChooseFolder(FolderPick &pick)
     pick.open = true;
     SDL_ShowOpenFolderDialog(FolderPicked, &pick, MioPanRml::GetWindow(),
                              pick.last.empty() ? nullptr : pick.last.c_str(), false);
+}
+
+/* A disc image.  "All files" too: dumps are not always named .iso. */
+void ChooseImage(FolderPick &pick)
+{
+    static const SDL_DialogFileFilter kFilters[] = {
+        {"Disc images (*.iso)", "iso"},
+        {"All files", "*"},
+    };
+    if (pick.open.load())
+    {
+        return;
+    }
+    pick.open = true;
+    SDL_ShowOpenFileDialog(FolderPicked, &pick, MioPanRml::GetWindow(), kFilters,
+                           (int)SDL_arraysize(kFilters),
+                           pick.last.empty() ? nullptr : pick.last.c_str(), false);
 }
 
 /* Game thread: the folder the dialog handed back, once. */
@@ -1170,7 +1189,15 @@ void ChooseUndubFolder()
     }
 }
 
-/* Game thread: start on a folder a dialog has handed back. */
+void ChooseUndubImage()
+{
+    if (!MioPanUndub::ImportRunning())
+    {
+        ChooseImage(g_undub_image_pick);
+    }
+}
+
+/* Game thread: start on a folder or file a dialog has handed back. */
 void TakeFolderPicks()
 {
     std::string folder;
@@ -1178,10 +1205,24 @@ void TakeFolderPicks()
     {
         MioPanXbox::StartImport(folder);
     }
-    if (TakeFolder(g_undub_pick, folder))
+    if (TakeFolder(g_undub_pick, folder) || TakeFolder(g_undub_image_pick, folder))
     {
         MioPanUndub::StartImport(folder);
     }
+}
+
+/* The undub rows' button while an import or one of their dialogs is going. */
+std::string UndubButton(const FolderPick &pick, const char *idle)
+{
+    if (MioPanUndub::ImportRunning())
+    {
+        return "Working...";
+    }
+    if (pick.open.load())
+    {
+        return "Choosing...";
+    }
+    return idle;
 }
 
 std::string XboxInstalled()
@@ -1247,9 +1288,9 @@ Page SpecialPage()
             std::string text =
                 "Hear the original Japanese cast -- every spoken line and the "
                 "cutscenes' soundtracks -- from your own copy of the Japanese "
-                "release: choose its extracted bin folder, the one with adpcm, "
-                "data and movie in it, or a folder above it. The subtitles stay "
-                "in your language, retimed to the Japanese lines. ";
+                "release, Zero ~Akai Chou~: choose its disc image (.iso). The "
+                "subtitles stay in your language, retimed to the Japanese "
+                "lines. ";
             const std::string last = MioPanUndub::ImportStatus();
             if (!last.empty())
             {
@@ -1271,19 +1312,20 @@ Page SpecialPage()
             }
             return text;
         },
-        "Import", ChooseUndubFolder);
+        "Import", ChooseUndubImage);
     undub.action_text = [] {
-        if (MioPanUndub::ImportRunning())
-        {
-            return std::string("Working...");
-        }
-        if (g_undub_pick.open.load())
-        {
-            return std::string("Choosing...");
-        }
-        return std::string(MioPan_UndubAvailable() != 0 ? "Re-import" : "Import");
+        return UndubButton(g_undub_image_pick,
+                           MioPan_UndubAvailable() != 0 ? "Re-import" : "Import");
     };
     rows.push_back(std::move(undub));
+    Row undub_folder = Action(
+        "From an extracted disc",
+        Fixed("Or, with the Japanese disc already copied out into a folder: "
+              "choose its bin folder, the one with adpcm, data and movie in it, "
+              "or a folder above that."),
+        "Choose folder", ChooseUndubFolder);
+    undub_folder.action_text = [] { return UndubButton(g_undub_pick, "Choose folder"); };
+    rows.push_back(std::move(undub_folder));
     rows.push_back(When(
         Toggle("Voices",
                Fixed("Which cast speaks. Switching takes effect from the next "

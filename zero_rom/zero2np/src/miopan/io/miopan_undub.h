@@ -14,7 +14,8 @@ extern "C" {
  * release (Zero ~Akai Chou~) through Options > Special (miopan_rml_options.cpp).
  *
  * What is swapped, all of it measured against the Feb 2004 prototype's
- * IMG_BD.BIN and an extracted Japanese disc:
+ * IMG_BD.BIN and the Japanese disc (SLPS_253.03), read from its image or an
+ * extraction of it:
  *
  *   * the voice streams under bin/adpcm/ -- 268 of its 530 .hxd/.str pairs
  *     differ.  A pair always travels together: the Japanese header names its
@@ -97,10 +98,11 @@ int MioPan_UndubCaptionFrame(int str_file_no, int frame);
 namespace MioPanUndub
 {
 
-/* Copy the Japanese voices out of an extracted Japanese disc on a worker
- * thread.  `folder` (UTF-8) may be the bin folder that holds adpcm, data and
- * movie, or any folder above it.  Returns false if one is already running. */
-bool StartImport(const std::string &folder);
+/* Copy the Japanese voices out of a Japanese disc on a worker thread.  `path`
+ * (UTF-8) may be an image of the disc (.iso), the extracted disc's bin folder
+ * that holds adpcm, data and movie, or any folder above that.  Returns false
+ * if one is already running. */
+bool StartImport(const std::string &path);
 bool ImportRunning();
 
 /* One line for the screen: what the worker is doing while it runs, else the
