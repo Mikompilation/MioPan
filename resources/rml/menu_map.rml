@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Map</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="menu.rcss"/>
+    <link type="text/rcss" href="menu_map.rcss"/>
+</head>
+<body id="menu-map">
+    <!-- Over the menu's shoji backdrop, which the game still draws: the game's
+         own picture, composed by miopan_rml_menu_map.cpp. -->
+    <div id="stage" class="stage"></div>
+</body>
+</rml>

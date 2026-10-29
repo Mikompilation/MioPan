@@ -111,6 +111,7 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_memo.h" // the RmlUi page (port)
 
 #include <string.h>                             /* memset                     */
 
@@ -250,6 +251,8 @@ static void MenuMemoMsgWindowDisp(int off_x, int off_y, u_char alpha);
 static void MenuMemoItemDisp(int off_x, int off_y, u_char alpha);
 static void MenuMemoNonReadFrameDisp(float y, u_char alpha);
 static void MenuMemoContentWindowDisp(int memo_label, u_char alpha);
+static void MenuMemoRmlPad(void);
+static int  MenuMemoRmlDisp(void);
 
 /* --------------------------------------------------------------------------
  *  Entry / texture
@@ -369,7 +372,11 @@ void MenuMemo(void)                                                     /* 307 *
     if (menu_wrk.step == MENU_MEMO_STEP_MAIN) {                         /* 336 */
         switch (menu_memo_ctrl.sub_step) {                              /* 337 */
         case MENU_MEMO_SUB_MAIN:                                        /* 339 */
-            if (menu_memo_pad_func[menu_memo_ctrl.mode] != nullptr) {   /* 340 */
+            /* PORT: the RmlUi page's input in place of the pad's. */
+            if (MioPan_RmlMenuMemoIsShown() != 0) {
+                MenuMemoRmlPad();
+            }
+            else if (menu_memo_pad_func[menu_memo_ctrl.mode] != nullptr) { /* 340 */
                 (*menu_memo_pad_func[menu_memo_ctrl.mode])();           /* 341 */
             }
             break;                                                      /* 343 */
@@ -635,6 +642,12 @@ void MenuMemoDisp(void)                                                 /* 592 *
             MenuInOutAnimCtrl(&menu_memo_disp.anim_step,
                               &menu_memo_disp.anim_timer, &alpha);      /* 605 */
 
+            /* PORT: the RmlUi page in place of everything below; the fades
+             * still pace the hand-back and the change between modes. */
+            if (MenuMemoRmlDisp() != 0) {
+                return;
+            }
+
             MenuMemoBgDisp(0, 0, alpha);                                /* 608 */
 
             MenuMemoTitleDisp(0, 0, alpha);                             /* 611 */
@@ -724,6 +737,64 @@ static void MenuMemoTitleDisp(int off_x, int off_y, u_char alpha)       /* 672 *
     DispSprD(&title_ds);                                                /* 693 */
 }
 
+/* The titles' tile runs, one table per revision, and which red the
+ * selected one is brushed in.  PORT: moved out of MenuMemoPlyrMemoDisp()
+ * to file scope, so the RmlUi page can read them too. */
+static int memo_first_tbl[DISP_MEMO_NUM][3] =           /* rodata 3be288 */
+{
+    {  9, -1, -1 },
+    { 10, 11, -1 },
+    { 12, 13, 14 },
+    { 15, -1, -1 },
+    { 16, 17, -1 },
+    { 18, -1, -1 },
+    { 19, 20, -1 },
+    { 21, -1, -1 },
+    { 22, -1, -1 },
+    { 23, 24, 25 },
+    { 26, -1, -1 },
+    { 27, 28, 29 },
+    { 30, -1, -1 },
+    { 31, -1, -1 },
+    { 32, -1, -1 },
+    { 33, -1, -1 },
+    { 34, 35, 36 },
+    { 37, 38, -1 },
+    { 39, 40, -1 },
+    { 41, 42, -1 },
+};
+
+static int memo_second_tbl[DISP_MEMO_NUM][3] =          /* rodata 3be378 */
+{
+    { 43, -1, -1 },
+    { 44, 45, -1 },
+    { 46, 47, 48 },
+    { 15, -1, -1 },
+    { 16, 17, -1 },
+    { 49, -1, -1 },
+    { 19, 20, -1 },
+    { 21, -1, -1 },
+    { 22, -1, -1 },
+    { 50, 51, 52 },
+    { 26, -1, -1 },
+    { 53, 54, 55 },
+    { 30, -1, -1 },
+    { 31, -1, -1 },
+    { 56, -1, -1 },
+    { 33, -1, -1 },
+    { 57, 58, 59 },
+    { 37, 38, -1 },
+    { 60, 61, -1 },
+    { 41, 42, -1 },
+};
+
+/* Which of the two reds the selected title is brushed in. */
+static char color_type_tbl[DISP_MEMO_NUM] =             /* rodata 3be468 */
+{
+    1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+    1, 0, 0, 0, 1, 0, 1, 0, 0, 0,
+};
+
 /* Every memo the player holds, brushed onto the paper where it belongs.
  *
  * A title is one, two or three vertical tiles stacked down the page, and the
@@ -734,61 +805,6 @@ static void MenuMemoTitleDisp(int off_x, int off_y, u_char alpha)       /* 672 *
  * Only the row under the cursor is drawn in ink; everything else is black. */
 static void MenuMemoPlyrMemoDisp(int off_x, int off_y, u_char alpha)    /* 704 */
 {
-    static int memo_first_tbl[DISP_MEMO_NUM][3] =           /* rodata 3be288 */
-    {
-        {  9, -1, -1 },
-        { 10, 11, -1 },
-        { 12, 13, 14 },
-        { 15, -1, -1 },
-        { 16, 17, -1 },
-        { 18, -1, -1 },
-        { 19, 20, -1 },
-        { 21, -1, -1 },
-        { 22, -1, -1 },
-        { 23, 24, 25 },
-        { 26, -1, -1 },
-        { 27, 28, 29 },
-        { 30, -1, -1 },
-        { 31, -1, -1 },
-        { 32, -1, -1 },
-        { 33, -1, -1 },
-        { 34, 35, 36 },
-        { 37, 38, -1 },
-        { 39, 40, -1 },
-        { 41, 42, -1 },
-    };
-
-    static int memo_second_tbl[DISP_MEMO_NUM][3] =          /* rodata 3be378 */
-    {
-        { 43, -1, -1 },
-        { 44, 45, -1 },
-        { 46, 47, 48 },
-        { 15, -1, -1 },
-        { 16, 17, -1 },
-        { 49, -1, -1 },
-        { 19, 20, -1 },
-        { 21, -1, -1 },
-        { 22, -1, -1 },
-        { 50, 51, 52 },
-        { 26, -1, -1 },
-        { 53, 54, 55 },
-        { 30, -1, -1 },
-        { 31, -1, -1 },
-        { 56, -1, -1 },
-        { 33, -1, -1 },
-        { 57, 58, 59 },
-        { 37, 38, -1 },
-        { 60, 61, -1 },
-        { 41, 42, -1 },
-    };
-
-    /* Which of the two reds the selected title is brushed in. */
-    static char color_type_tbl[DISP_MEMO_NUM] =             /* rodata 3be468 */
-    {
-        1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
-        1, 0, 0, 0, 1, 0, 1, 0, 0, 0,
-    };
-
     DISP_SPRT memo_ds;
     int       i;
     int       j;
@@ -1049,4 +1065,189 @@ static void MenuMemoNotHaveDisp(int off_x, int off_y, u_char alpha)     /* 1169 
              1, alpha, 0);                                              /* 1183 */
 
     DrawCmnCapGroup_W(12, 12, alpha, 0);                                /* 1187 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_memo.h).  The screen
+ *  shows the list or the reader and asks; every answer is this file's own --
+ *  the cursor as MenuMemoPad() moves it, marking a memo read, the reader's
+ *  pages as MenuMemoContentDispPad() turns them, the cues, leaving.
+ * ------------------------------------------------------------------------ */
+
+static void MenuMemoRmlPad(void)
+{
+    int    arg;
+    int    i;
+    int    disp_num;
+    int    memo_label;
+    int    msg_id_data;
+    int    page_num;
+    u_char moved;
+    const int command = MioPan_RmlMenuMemoConsumeCommand(&arg);
+
+    disp_num = menu_memo_ctrl.ref_ctrl.data_num;
+    if (MENU_MEMO_DISP_NUM < disp_num) {
+        disp_num = MENU_MEMO_DISP_NUM;
+    }
+
+    switch (menu_memo_ctrl.mode) {
+    case MENU_MEMO_MODE_SEL:
+        memo_label = disp_memo_data[menu_memo_ctrl.ref_ctrl.data_pos].memo_label;
+        moved = 0;
+        switch (command) {
+        case MIOPAN_RML_MENU_MEMO_UP:
+            moved = (MenuRefMovePadLup(&menu_memo_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                       disp_num, MENU_MEMO_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_MEMO_DOWN:
+            moved = (MenuRefMovePadLdown(&menu_memo_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                         disp_num, MENU_MEMO_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_MEMO_PAGE_UP:
+            moved = (MenuRefMovePageUp(&menu_memo_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                       disp_num, MENU_MEMO_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_MEMO_PAGE_DOWN:
+            moved = (MenuRefMovePageDown(&menu_memo_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                         disp_num, MENU_MEMO_DISP_NUM) != 0);
+            break;
+        /* A row pointed at: stepped to the pad's way. */
+        case MIOPAN_RML_MENU_MEMO_ROW:
+            for (i = 0; (i < MENU_MEMO_DISP_NUM) && (menu_wrk.cursor != arg) &&
+                        (arg >= 0) && (arg < disp_num); i++) {
+                if (arg < menu_wrk.cursor) {
+                    moved |= (MenuRefMovePadLup(&menu_memo_ctrl.ref_ctrl,
+                                                &menu_wrk.cursor, disp_num,
+                                                MENU_MEMO_DISP_NUM) != 0);
+                }
+                else {
+                    moved |= (MenuRefMovePadLdown(&menu_memo_ctrl.ref_ctrl,
+                                                  &menu_wrk.cursor, disp_num,
+                                                  MENU_MEMO_DISP_NUM) != 0);
+                }
+            }
+            break;
+        case MIOPAN_RML_MENU_MEMO_CHOOSE:
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            SetMsgFirstPage();
+            ReadMemo(memo_label);
+            MenuMemoModeMoveReq(MENU_MEMO_MODE_CONTENT);
+            break;
+        case MIOPAN_RML_MENU_MEMO_BACK:
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            SetMsgFirstPage();
+            MenuMemoOutReq();
+            break;
+        default:
+            break;
+        }
+        if (moved != 0) {
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        }
+        break;
+
+    /* Forward and back both wrap round the ends, the cue only when the page
+     * moved.  SetMsgPage() stands in for MesSetNextPage() and
+     * MesSetBeforePage(), which only step while PrintMsg_P() is drawing the
+     * message -- the screen draws it here. */
+    case MENU_MEMO_MODE_CONTENT:
+        memo_label = disp_memo_data[menu_memo_ctrl.ref_ctrl.data_pos].memo_label;
+        msg_id_data = memo_label * MEMO_MSG_PER_MEMO
+                          + GetMemoMsgStep(memo_label) * MEMO_MSG_PER_STEP
+                          + MEMO_MSG_DATA;
+        page_num = GetNowMsgPageNum();
+        if (command == MIOPAN_RML_MENU_MEMO_NEXT) {
+            if (GetNowMsgPageNum() == GetMsgPageNum(MEMO_MSG_BANK, msg_id_data) - 1) {
+                SetMsgPage(0);
+            }
+            else {
+                SetMsgPage((char)(GetNowMsgPageNum() + 1));
+            }
+        }
+        else if (command == MIOPAN_RML_MENU_MEMO_PREV) {
+            if (GetNowMsgPageNum() == 0) {
+                SetMsgPage((char)(GetMsgPageNum(MEMO_MSG_BANK, msg_id_data) - 1));
+            }
+            else {
+                SetMsgPage((char)(GetNowMsgPageNum() - 1));
+            }
+        }
+        else if (command == MIOPAN_RML_MENU_MEMO_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuMemoModeMoveReq(MENU_MEMO_MODE_SEL);
+        }
+        if (page_num != GetNowMsgPageNum()) {
+            SystemBankPlay(SE_PAGE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        }
+        break;
+
+    case MENU_MEMO_MODE_NOT_HAVE:
+        if (command == MIOPAN_RML_MENU_MEMO_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuMemoOutReq();
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* The screen up for this frame: every memo held with its title's tiles and
+ * ink as MenuMemoPlyrMemoDisp() picks them, the list's rows, the reader's
+ * page, and the mode's own fade -- run here as MenuMemoDisp() runs it. */
+static int MenuMemoRmlDisp(void)
+{
+    MIOPAN_RML_MENU_MEMO page;
+    u_char sub_alpha;
+    int    i;
+    int    j;
+    int    memo_label;
+    int    selected;
+
+    if (MioPan_RmlMenuMemoReady() == 0) {
+        return 0;
+    }
+
+    sub_alpha = 0;
+    MenuInOutAnimCtrl(&menu_memo_disp.sub_anim_step, &menu_memo_disp.sub_anim_timer,
+                      &sub_alpha);
+
+    memset(&page, 0, sizeof(page));
+
+    switch (menu_memo_ctrl.mode) {
+    case MENU_MEMO_MODE_CONTENT:  page.mode = MIOPAN_RML_MENU_MEMO_READ;  break;
+    case MENU_MEMO_MODE_NOT_HAVE: page.mode = MIOPAN_RML_MENU_MEMO_EMPTY; break;
+    default:                      page.mode = MIOPAN_RML_MENU_MEMO_LIST;  break;
+    }
+    page.closing    = menu_wrk.step != MENU_MEMO_STEP_MAIN;
+    page.busy       = menu_memo_ctrl.sub_step == MENU_MEMO_SUB_MOVE;
+    page.mode_alpha = (menu_memo_disp.sub_anim_step != MENU_MEMO_ANIM_END) ? sub_alpha : 0;
+    page.cursor     = menu_wrk.cursor;
+    page.start      = menu_memo_ctrl.ref_ctrl.disp_start_pos;
+    page.count      = menu_memo_ctrl.ref_ctrl.data_num;
+    for (i = 0; (i < page.count) && (i < MIOPAN_RML_MENU_MEMO_MAX); i++) {
+        memo_label = disp_memo_data[i].memo_label;
+        page.label[i]  = memo_label;
+        page.step[i]   = GetMemoMsgStep(memo_label);
+        page.unread[i] = GetMemoState(memo_label) == MEMO_STATE_HAVE;
+        for (j = 0; j < 3; j++) {
+            page.ink[i][j] = (page.step[i] == 0) ? memo_first_tbl[memo_label][j]
+                                                 : memo_second_tbl[memo_label][j];
+        }
+        if (i == menu_memo_ctrl.ref_ctrl.data_pos) {
+            page.ink_rgb[i] = (color_type_tbl[memo_label] != 0) ? 0x440404 : 0x2b0606;
+        }
+    }
+    if (page.count > 0) {
+        selected = disp_memo_data[menu_memo_ctrl.ref_ctrl.data_pos].memo_label;
+        page.page  = GetNowMsgPageNum();
+        page.pages = GetMsgPageNum(MEMO_MSG_BANK,
+                                   selected * MEMO_MSG_PER_MEMO
+                                       + GetMemoMsgStep(selected) * MEMO_MSG_PER_STEP
+                                       + MEMO_MSG_DATA);
+    }
+    page.pak = menu_memo_tex_addr;
+
+    return MioPan_RmlMenuMemoShow(&page);
 }

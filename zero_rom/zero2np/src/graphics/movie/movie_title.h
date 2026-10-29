@@ -65,6 +65,9 @@ void MovieTitleBaseDisp(float x, float y, float w, u_char alp, u_int pri);
                                                                     /* 0x221d18 */
 void MovieTitleEnd(void);                                           /* 0x221eb0 */
 
+/* PORT: whether MovieTitleDispMain() would print `msg_id`. */
+int  MovieTitleCheckDisp(int msg_id);
+
 #ifdef __cplusplus
 }
 #endif

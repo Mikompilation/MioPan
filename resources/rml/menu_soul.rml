@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Spirit List</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="menu.rcss"/>
+    <link type="text/rcss" href="menu_soul.rcss"/>
+</head>
+<body id="menu-soul">
+    <!-- Over the menu's shoji backdrop, which the game still draws: the game's
+         own picture, composed by miopan_rml_menu_soul.cpp. -->
+    <div id="stage" class="stage"></div>
+</body>
+</rml>

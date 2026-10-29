@@ -1,0 +1,70 @@
+/*
+ * The Spirit List page, as menu_soul.c lays it out: the rows on the
+ * lacquered frame under the cursor's amber bed, the spirit's score and place
+ * in the frame's slots, and what is known of it on the parchment under its
+ * photograph.  The inks are message colours 19 and 20, the description's 9.
+ */
+
+/* The cursor's bed, MenuSoulCursorBaseDisp()'s quad: amber at 0x19. */
+.soul-bed
+{
+    position: absolute;
+    background-color: #ffd88c32;
+}
+
+/* A name, set in the height of the row and stencilled over its shadow as the
+ * game prints it twice a pixel apart in black. */
+.soul-name
+{
+    position: absolute;
+    font-size: 2.05em;
+    line-height: 1.6;
+    letter-spacing: 0.03em;
+    color: #d8cbaf;
+    font-effect: shadow(2dp 2dp #000000d0);
+    white-space: nowrap;
+}
+
+/* The enhancing spirits, in the game's orange. */
+.soul-name.enhancing
+{
+    color: #edb171;
+}
+
+.soul-name.lit
+{
+    color: #fff1e0;
+}
+
+.soul-name.enhancing.lit
+{
+    color: #ffcf96;
+}
+
+/* The score and the place, in the frame's slots. */
+.soul-info
+{
+    position: absolute;
+    font-size: 2.05em;
+    line-height: 1.4;
+    color: #e8dcc0;
+    font-effect: shadow(1dp 1dp #000000c0);
+    white-space: nowrap;
+}
+
+/* What is known of the spirit, in black on the parchment, 24 of the game's
+ * pixels a line. */
+.soul-explain
+{
+    position: absolute;
+    font-size: 2.2em;
+    line-height: 1.11;
+    color: #140d06;
+}
+
+/* The congratulation's wash over the list: black at 0x59. */
+.soul-wash
+{
+    position: absolute;
+    background-color: #000000b2;
+}

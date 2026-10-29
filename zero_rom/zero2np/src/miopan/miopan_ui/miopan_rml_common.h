@@ -43,6 +43,9 @@ struct Prompt
     const char *action;
     const char *id;
     SDL_GamepadButton pad_pair = SDL_GAMEPAD_BUTTON_INVALID;
+    /* Shown for a pad instead of the buttons' names -- the triggers, which
+     * are not buttons. */
+    const char *pad_text = nullptr;
 };
 
 /* The prompts as RML, labelled for whichever the player used last: the pad,

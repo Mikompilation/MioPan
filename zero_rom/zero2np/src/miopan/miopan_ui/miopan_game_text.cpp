@@ -58,6 +58,11 @@ namespace MioPanGameText
 {
 std::string Message(int type, int id)
 {
+    return MessagePage(type, id, 0, false);
+}
+
+std::string MessagePage(int type, int id, int page, bool keep_breaks)
+{
     if ((unsigned)type > 0x52 || id < 0 || id >= GetMsgIDNumMax(type))
     {
         return {};
@@ -70,6 +75,7 @@ std::string Message(int type, int id)
 
     std::string out;
     bool space = true;  /* no space at the start, none doubled */
+    int at_page = 0;    /* the page `s` is in */
 
     /* The lengths are what PrintMsgOneLine()'s handlers step over when they
      * draw without a window, as these lines are drawn. */
@@ -109,10 +115,16 @@ std::string Message(int type, int id)
             break;
         case 0xfa:
         case 0xfe:
-            text = " ";
+            text = keep_breaks ? "\n" : " ";
             s += 1;
             break;
-        case 0xfb:
+        case 0xfb:          /* the end of a page */
+            if (at_page++ >= page)
+            {
+                guard = 1024;
+            }
+            s += 1;
+            continue;
         case 0xff:
             guard = 1024;
             continue;
@@ -122,7 +134,20 @@ std::string Message(int type, int id)
             break;
         }
 
-        if (text[0] == ' ' && text[1] == '\0')
+        if (at_page != page)
+        {
+            continue;
+        }
+        if (text[0] == '\n')
+        {
+            while (!out.empty() && out.back() == ' ')
+            {
+                out.pop_back();
+            }
+            out += '\n';
+            space = true;
+        }
+        else if (text[0] == ' ' && text[1] == '\0')
         {
             if (!space)
             {
@@ -137,7 +162,7 @@ std::string Message(int type, int id)
         }
     }
 
-    if (!out.empty() && out.back() == ' ')
+    while (!out.empty() && (out.back() == ' ' || out.back() == '\n'))
     {
         out.pop_back();
     }

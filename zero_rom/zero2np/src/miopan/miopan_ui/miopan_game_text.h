@@ -19,8 +19,13 @@
 namespace MioPanGameText
 {
 /* Message `id` of `type`, as GetMsgDataAddr() finds it; "" when there is
- * none. */
+ * none.  Only its first page: a message the game pages (0xfb between pages)
+ * is read a page at a time with MessagePage(). */
 std::string Message(int type, int id);
+/* Page `page` of it, from 0.  With `keep_breaks` the game's own line breaks
+ * come out as '\n' rather than spaces, for text laid out line by line to fit
+ * its window -- a note, a document. */
+std::string MessagePage(int type, int id, int page, bool keep_breaks);
 }
 
 #endif

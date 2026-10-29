@@ -127,8 +127,11 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_photo.h" // the RmlUi page (port)
+#include "../../system/compress/compress.h"   /* CheckPhotoExpandEnd (port) */
 
 #include <stdio.h>                              /* printf                     */
+#include <string.h>                             /* memset (port)              */
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -278,6 +281,8 @@ static void MenuPhotoDelConfirmDisp(int off_x, int off_y, u_char alpha);
 static void MenuPhotoNotDelWinDisp(int off_x, int off_y, u_char alpha);
 static void MenuPhotoSortMenuDisp(int off_x, int off_y, u_char alpha);
 static void MenuPhotoNotHaveDisp(int off_x, int off_y, u_char alpha);
+static void MenuPhotoRmlPad(void);
+static int  MenuPhotoRmlDisp(u_char alpha);
 
 /* --------------------------------------------------------------------------
  *  Entry / texture
@@ -369,7 +374,11 @@ void MenuPhoto(void)                                                    /* 309 *
     }
 
     if (menu_wrk.step == MENU_PHOTO_STEP_MAIN) {                        /* 324 */
-        if (GetFilePhotoNum() != 0) {                                   /* 325 */
+        /* PORT: the RmlUi page's input in place of the pads'. */
+        if (MioPan_RmlMenuPhotoIsShown() != 0) {
+            MenuPhotoRmlPad();
+        }
+        else if (GetFilePhotoNum() != 0) {                              /* 325 */
 
             if (menu_photo_ctrl.step == MENU_PHOTO_MODE_SEL) {          /* 327 */
                 MenuPhotoPad();                                         /* 328 */
@@ -840,6 +849,12 @@ void MenuPhotoDisp(void)                                                /* 735 *
                                 &menu_photo_ctrl.rgb);                  /* 747 */
 
         if (menu_photo_disp.anim_step != MENU_PHOTO_ANIM_END) {         /* 749 */
+            /* PORT: the RmlUi page in place of everything below; the fade
+             * above still paces the hand-back. */
+            if (MenuPhotoRmlDisp(alpha) != 0) {
+                return;
+            }
+
             MenuPhotoTitleDisp(0, 0, alpha);                            /* 751 */
 
             if (GetFilePhotoNum() > 0) {                                /* 754 */
@@ -1347,6 +1362,24 @@ static void MenuPhotoCaptionDisp(int off_x, int off_y, u_char alpha)    /* 1404 
     DrawCmnCapGroup_W(13, 13, alpha, 0);                                /* 1407 */
 }
 
+/* The shot's menu's opening scales and fade.  PORT: moved out of
+ * MenuPhotoSubMenuDisp() to file scope, so the RmlUi page can run them too. */
+static SCL_ANIM_TBL photo_sub_sel_scl_tbl[2] =                    /* rdata 3be870 */
+{
+    { 0.0f, 1.0f, 0, 10 },
+    { -1.0f, -1.0f, -1, -1 },
+};
+static SCL_ANIM_TBL photo_sub_non_sel_scl_tbl[2] =                /* rdata 3be888 */
+{
+    { 0.0f, 0.909999967f, 0, 10 },
+    { -1.0f, -1.0f, -1, -1 },
+};
+static ALPHA_ANIM_TBL photo_sub_alpha_tbl[2] =                    /* rdata 3be8a0 */
+{
+    { 0, 128, 0, 10 },
+    { -1, -1, -1, -1 },
+};
+
 /* The per-photo pop-up.  Its open/close fade is its own -- three canned
  * tables, one for the selected row's scale, one for the others', one for the
  * alpha -- and the close arm is what finally hands the page back to the
@@ -1378,22 +1411,6 @@ static void MenuPhotoSubMenuDisp(int off_x, int off_y, u_char alpha)    /* 1447 
         { 203, 204 },
         { 205, 206 },
     };
-    static SCL_ANIM_TBL sel_scl_tbl[2] =                    /* rdata 3be870 */
-    {
-        { 0.0f, 1.0f, 0, 10 },
-        { -1.0f, -1.0f, -1, -1 },
-    };
-    static SCL_ANIM_TBL non_sel_scl_tbl[2] =                /* rdata 3be888 */
-    {
-        { 0.0f, 0.909999967f, 0, 10 },
-        { -1.0f, -1.0f, -1, -1 },
-    };
-    static ALPHA_ANIM_TBL alpha_tbl[2] =                    /* rdata 3be8a0 */
-    {
-        { 0, 128, 0, 10 },
-        { -1, -1, -1, -1 },
-    };
-
     sel_scale     = 1.0f;                                               /* 1479 */
     non_sel_scale = 0.909999967f;                                       /* 1480 */
     now_alpha     = 128;                                                /* 1481 */
@@ -1406,11 +1423,11 @@ static void MenuPhotoSubMenuDisp(int off_x, int off_y, u_char alpha)    /* 1447 
     }
 
     if (menu_photo_ctrl.sub_anim_step == MENU_PHOTO_ANIM_IN) {          /* 1491 */
-        sel_scale     = Anim2D_CalcNowScale(sel_scl_tbl,
+        sel_scale     = Anim2D_CalcNowScale(photo_sub_sel_scl_tbl,
                                             menu_photo_ctrl.sub_anim_timer); /* 1492 */
-        non_sel_scale = Anim2D_CalcNowScale(non_sel_scl_tbl,
+        non_sel_scale = Anim2D_CalcNowScale(photo_sub_non_sel_scl_tbl,
                                             menu_photo_ctrl.sub_anim_timer); /* 1493 */
-        now_alpha     = Anim2D_CalcNowAlpha(alpha_tbl,
+        now_alpha     = Anim2D_CalcNowAlpha(photo_sub_alpha_tbl,
                                             menu_photo_ctrl.sub_anim_timer); /* 1494 */
         menu_photo_ctrl.sub_anim_timer++;                               /* 1495 */
 
@@ -1424,7 +1441,7 @@ static void MenuPhotoSubMenuDisp(int off_x, int off_y, u_char alpha)    /* 1447 
     if (menu_photo_ctrl.sub_anim_step == MENU_PHOTO_ANIM_OUT) {         /* 1501 */
         menu_photo_ctrl.sub_anim_timer--;                               /* 1503 */
 
-        now_alpha = Anim2D_CalcNowAlpha(alpha_tbl,
+        now_alpha = Anim2D_CalcNowAlpha(photo_sub_alpha_tbl,
                                         menu_photo_ctrl.sub_anim_timer); /* 1505 */
 
         if (menu_photo_ctrl.sub_anim_timer < 1) {                       /* 1506 */
@@ -1607,4 +1624,290 @@ static void MenuPhotoNotHaveDisp(int off_x, int off_y, u_char alpha)    /* 1700 
     PrintMsg(0x36, 1, msg_data.pos_x, msg_data.pos_y, 1, alpha, 0);     /* 1714 */
 
     DrawCmnCapGroup_W(12, 12, alpha, 0);                                /* 1718 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_photo.h).  The screen
+ *  shows the album and asks; every answer is this file's own -- the cursor
+ *  and the enlarged picture's decoding as MenuPhotoPad() moves them,
+ *  protecting, deleting and sorting as the pop-ups' pads do them, the cues,
+ *  leaving.
+ * ------------------------------------------------------------------------ */
+
+static void MenuPhotoRmlPad(void)
+{
+    int arg;
+    int sel_num;
+    const int command = MioPan_RmlMenuPhotoConsumeCommand(&arg);
+
+    if (GetFilePhotoNum() == 0) {
+        /* As MenuNonPhotoPad(): only the way back. */
+        if (command == MIOPAN_RML_MENU_PHOTO_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuPhotoOutReq();
+        }
+        return;
+    }
+
+    sel_num = csr_num[menu_photo_ctrl.csr_tate][menu_photo_ctrl.csr_yoko];
+
+    switch (menu_photo_ctrl.step) {
+    /* As MenuPhotoPad(): a move files a fresh decompress; the menu opens on
+     * a photograph and buzzes on an empty slot. */
+    case MENU_PHOTO_MODE_SEL:
+        switch (command) {
+        case MIOPAN_RML_MENU_PHOTO_UP:
+        case MIOPAN_RML_MENU_PHOTO_DOWN:
+        case MIOPAN_RML_MENU_PHOTO_SIDE:
+        case MIOPAN_RML_MENU_PHOTO_CELL:
+            if (command == MIOPAN_RML_MENU_PHOTO_UP) {
+                menu_photo_ctrl.csr_tate =
+                    (menu_photo_ctrl.csr_tate + MENU_PHOTO_CSR_TATE_NUM - 1)
+                    % MENU_PHOTO_CSR_TATE_NUM;
+            }
+            else if (command == MIOPAN_RML_MENU_PHOTO_DOWN) {
+                menu_photo_ctrl.csr_tate =
+                    (menu_photo_ctrl.csr_tate + 1) % MENU_PHOTO_CSR_TATE_NUM;
+            }
+            else if (command == MIOPAN_RML_MENU_PHOTO_SIDE) {
+                menu_photo_ctrl.csr_yoko =
+                    (menu_photo_ctrl.csr_yoko + 1) % MENU_PHOTO_CSR_YOKO_NUM;
+            }
+            else if (arg >= 0 && arg < PHOTO_FILE_MAX) {
+                menu_photo_ctrl.csr_yoko = arg / MENU_PHOTO_CSR_TATE_NUM;
+                menu_photo_ctrl.csr_tate = arg % MENU_PHOTO_CSR_TATE_NUM;
+            }
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.photo_flg = 0;
+            break;
+        case MIOPAN_RML_MENU_PHOTO_CHOOSE:
+            if ((GetFilePhotoState((u_char)sel_num) & PHOTO_STATE_USE) != 0) {
+                SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+                menu_photo_ctrl.step           = MENU_PHOTO_MODE_SUB;
+                menu_photo_ctrl.sub_csr        = MENU_PHOTO_SUB_PROTECT;
+                menu_photo_ctrl.sub_anim_step  = MENU_PHOTO_ANIM_START;
+                menu_photo_ctrl.sub_anim_timer = 0;
+            }
+            else {
+                SystemBankPlay(SE_ERROR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            }
+            break;
+        case MIOPAN_RML_MENU_PHOTO_BACK:
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuPhotoOutReq();
+            break;
+        default:
+            break;
+        }
+        break;
+
+    /* As MenuPhotoSubPad(), parked while the menu closes. */
+    case MENU_PHOTO_MODE_SUB:
+        if (menu_photo_ctrl.sub_anim_step == MENU_PHOTO_ANIM_OUT) {
+            break;
+        }
+        if (command == MIOPAN_RML_MENU_PHOTO_UP || command == MIOPAN_RML_MENU_PHOTO_DOWN ||
+            (command == MIOPAN_RML_MENU_PHOTO_ROW && arg >= 0 && arg < MENU_PHOTO_SUB_NUM)) {
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.sub_csr =
+                (command == MIOPAN_RML_MENU_PHOTO_ROW) ? arg
+                : (command == MIOPAN_RML_MENU_PHOTO_UP)
+                    ? (menu_photo_ctrl.sub_csr + MENU_PHOTO_SUB_NUM - 1) % MENU_PHOTO_SUB_NUM
+                    : (menu_photo_ctrl.sub_csr + 1) % MENU_PHOTO_SUB_NUM;
+        }
+        else if (command == MIOPAN_RML_MENU_PHOTO_CHOOSE) {
+            MenuPhotoSubMenuMain();
+        }
+        else if (command == MIOPAN_RML_MENU_PHOTO_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.sub_anim_step  = MENU_PHOTO_ANIM_OUT;
+            menu_photo_ctrl.sub_anim_timer = 10;
+        }
+        break;
+
+    /* As MenuPhotoSortPad(): every move resets the direction. */
+    case MENU_PHOTO_MODE_SORT:
+        if (command == MIOPAN_RML_MENU_PHOTO_UP || command == MIOPAN_RML_MENU_PHOTO_DOWN ||
+            (command == MIOPAN_RML_MENU_PHOTO_ROW && arg >= 0 && arg < MENU_PHOTO_SORT_NUM)) {
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.sort_csr =
+                (command == MIOPAN_RML_MENU_PHOTO_ROW) ? arg
+                : (command == MIOPAN_RML_MENU_PHOTO_UP)
+                    ? (menu_photo_ctrl.sort_csr + MENU_PHOTO_SORT_NUM - 1) % MENU_PHOTO_SORT_NUM
+                    : (menu_photo_ctrl.sort_csr + 1) % MENU_PHOTO_SORT_NUM;
+            menu_photo_ctrl.sort_flg = 0;
+        }
+        else if (command == MIOPAN_RML_MENU_PHOTO_CHOOSE) {
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuPhotoSortMenuMain();
+        }
+        else if (command == MIOPAN_RML_MENU_PHOTO_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.step = MENU_PHOTO_MODE_SUB;
+        }
+        break;
+
+    /* As MenuPhotoDelPad() over MenuCmnYesNoPad(): the screen keeps the
+     * cursor; TRIANGLE answers no. */
+    case MENU_PHOTO_MODE_DEL:
+        if (command == MIOPAN_RML_MENU_PHOTO_YES) {
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            DeletePhotoData((u_char)sel_num);
+            menu_photo_ctrl.step      = MENU_PHOTO_MODE_SEL;
+            menu_photo_ctrl.photo_flg = 0;
+        }
+        else if (command == MIOPAN_RML_MENU_PHOTO_NO || command == MIOPAN_RML_MENU_PHOTO_BACK) {
+            SystemBankPlay(command == MIOPAN_RML_MENU_PHOTO_NO ? SE_DECIDE : SE_CANCEL, 1, 0, 0,
+                           (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.step = MENU_PHOTO_MODE_SUB;
+        }
+        break;
+
+    /* As MenuCmnConfirmPad(): either button, each with its cue. */
+    case MENU_PHOTO_MODE_NOT_DEL:
+        if (command == MIOPAN_RML_MENU_PHOTO_ACK || command == MIOPAN_RML_MENU_PHOTO_BACK) {
+            SystemBankPlay(command == MIOPAN_RML_MENU_PHOTO_ACK ? SE_DECIDE : SE_CANCEL, 1, 0, 0,
+                           (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_photo_ctrl.step = MENU_PHOTO_MODE_SUB;
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* The shot's menu's own fade, as MenuPhotoSubMenuDisp() runs it -- the close
+ * ramp is still what puts the page back on the grid. */
+static void MenuPhotoRmlSubAnim(float *sel_scale, float *non_sel_scale, u_char *now_alpha)
+{
+    *sel_scale     = 1.0f;
+    *non_sel_scale = 0.909999967f;
+    *now_alpha     = 128;
+
+    if (menu_photo_ctrl.sub_anim_step == MENU_PHOTO_ANIM_START) {
+        menu_photo_ctrl.sub_anim_timer = 0;
+        menu_photo_ctrl.sub_anim_step  = MENU_PHOTO_ANIM_IN;
+    }
+    if (menu_photo_ctrl.sub_anim_step == MENU_PHOTO_ANIM_IN) {
+        *sel_scale     = Anim2D_CalcNowScale(photo_sub_sel_scl_tbl,
+                                             menu_photo_ctrl.sub_anim_timer);
+        *non_sel_scale = Anim2D_CalcNowScale(photo_sub_non_sel_scl_tbl,
+                                             menu_photo_ctrl.sub_anim_timer);
+        *now_alpha     = Anim2D_CalcNowAlpha(photo_sub_alpha_tbl,
+                                             menu_photo_ctrl.sub_anim_timer);
+        menu_photo_ctrl.sub_anim_timer++;
+        if (menu_photo_ctrl.sub_anim_timer > 9) {
+            menu_photo_ctrl.sub_anim_step = MENU_PHOTO_ANIM_MAIN;
+        }
+    }
+    if (menu_photo_ctrl.sub_anim_step == MENU_PHOTO_ANIM_OUT) {
+        menu_photo_ctrl.sub_anim_timer--;
+        *now_alpha = Anim2D_CalcNowAlpha(photo_sub_alpha_tbl,
+                                         menu_photo_ctrl.sub_anim_timer);
+        if (menu_photo_ctrl.sub_anim_timer < 1) {
+            menu_photo_ctrl.sub_anim_step = MENU_PHOTO_ANIM_END;
+            menu_photo_ctrl.step          = MENU_PHOTO_MODE_SEL;
+        }
+    }
+}
+
+/* The screen up for this frame: every slot and where its thumbnail is, the
+ * selected photograph's data as MenuPhotoInfoDisp() reads it, the enlarged
+ * picture as MenuPhotoLargePhotoDisp() decodes it a slice a frame, and the
+ * pop-ups' state. */
+static int MenuPhotoRmlDisp(u_char alpha)
+{
+    MIOPAN_RML_MENU_PHOTO page;
+    PICTURE_WRK *pic_info;
+    DATE_INFO    date;
+    u_char       sub_alpha;
+    int          sel_num;
+    int          i;
+
+    if (MioPan_RmlMenuPhotoReady() == 0) {
+        return 0;
+    }
+
+    memset(&page, 0, sizeof(page));
+
+    page.closing = menu_wrk.step != MENU_PHOTO_STEP_MAIN;
+    page.pak     = menu_photo_tex_addr;
+    page.room    = -1;
+
+    if (GetFilePhotoNum() <= 0) {
+        page.mode = MIOPAN_RML_MENU_PHOTO_EMPTY;
+        return MioPan_RmlMenuPhotoShow(&page);
+    }
+
+    switch (menu_photo_ctrl.step) {
+    case MENU_PHOTO_MODE_SUB:     page.mode = MIOPAN_RML_MENU_PHOTO_MENU;      break;
+    case MENU_PHOTO_MODE_SORT:    page.mode = MIOPAN_RML_MENU_PHOTO_SORT;      break;
+    case MENU_PHOTO_MODE_DEL:     page.mode = MIOPAN_RML_MENU_PHOTO_DELETE;    break;
+    case MENU_PHOTO_MODE_NOT_DEL: page.mode = MIOPAN_RML_MENU_PHOTO_PROTECTED; break;
+    default:                      page.mode = MIOPAN_RML_MENU_PHOTO_GRID;      break;
+    }
+
+    sel_num = csr_num[menu_photo_ctrl.csr_tate][menu_photo_ctrl.csr_yoko];
+    page.selected = sel_num;
+    for (i = 0; i < PHOTO_FILE_MAX && i < MIOPAN_RML_MENU_PHOTO_SLOTS; i++) {
+        page.state[i] = GetFilePhotoState((u_char)i);
+        if ((page.state[i] & PHOTO_STATE_USE) != 0) {
+            page.thumb[i] = SPHOTO_AREA + GetFilePhotoAdrNo((u_char)i) * SPHOTO_ONE_SIZE;
+        }
+    }
+
+    if ((page.state[sel_num] & PHOTO_STATE_USE) != 0) {
+        pic_info = GetPhotoData((u_char)sel_num);
+        SetDateInfoType(&date, &pic_info->time);
+        if ((u_short)pic_info->room < 0xf0) {
+            page.room = pic_info->room;
+        }
+        page.day    = date.day.day;
+        page.month  = date.day.month;
+        page.year   = date.day.year;
+        page.hour   = date.time.hour;
+        page.minute = date.time.min;
+        page.second = date.time.sec;
+        page.score  = (int)pic_info->score;
+        for (i = 0; i < PICTURE_SUBJECT_MAX && i < MIOPAN_RML_MENU_PHOTO_SUBJECTS; i++) {
+            if (pic_info->maSubject[i].type < 0) {
+                break;
+            }
+            page.subject_type[i] = pic_info->maSubject[i].type;
+            page.subject_id[i]   = pic_info->maSubject[i].obj_no;
+            page.subjects++;
+        }
+    }
+
+    /* MenuPhotoLargePhotoDisp(): file the decompress, then feed it a slice a
+     * frame until the picture is there. */
+    if (menu_photo_ctrl.photo_flg == 0 && (page.state[sel_num] & PHOTO_STATE_USE) != 0) {
+        UncompressPhoto(GetFilePhotoAdrNo((u_char)sel_num));
+        menu_photo_ctrl.photo_flg = 1;
+    }
+    if (menu_photo_ctrl.photo_flg == 1) {
+        if (CheckPhotoExpandEnd()) {
+            page.large = PACKET2D_ADDR;
+        }
+        else if (GetPhotoExpand() == 1) {
+            UncompressData(PHOTO_AREA, 0xff, PACKET2D_ADDR);
+        }
+    }
+
+    page.menu_row       = menu_photo_ctrl.sub_csr;
+    page.sort_row       = menu_photo_ctrl.sort_csr;
+    page.menu_scale     = 1.0f;
+    page.menu_dim_scale = 0.909999967f;
+    page.menu_alpha     = 128;
+    if (menu_photo_ctrl.step == MENU_PHOTO_MODE_SUB ||
+        menu_photo_ctrl.step == MENU_PHOTO_MODE_DEL ||
+        menu_photo_ctrl.step == MENU_PHOTO_MODE_NOT_DEL) {
+        sub_alpha = 128;
+        MenuPhotoRmlSubAnim(&page.menu_scale, &page.menu_dim_scale, &sub_alpha);
+        page.menu_alpha = sub_alpha;
+    }
+    (void)alpha;
+
+    return MioPan_RmlMenuPhotoShow(&page);
 }

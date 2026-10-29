@@ -108,6 +108,9 @@
 #include "../../graphics/graph2d/g2d_draw.h"    /* DISP_SPRT / DISP_SQAR      */
 #include "../../graphics/graph2d/message.h"     /* PrintMsg                   */
 #include "../../graphics/graph2d/tim2.h"        /* PK2SendVram                */
+#include "../../miopan/miopan_ui/miopan_rml_menu_camera.h" // the RmlUi page (port)
+
+#include <string.h>                             /* memset (port)             */
 #include "../../graphics/graph3d/ctl/fixed_array.h"  /* fixed_array           */
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
 #include "../../system/os/system.h"             /* SystemBankPlay             */
@@ -331,6 +334,12 @@ static void MenuCamTopEquipFilmSelDisp(int off_x, int off_y, u_char alpha);
 static void MenuCamTopFilmSelCsrDisp(int off_x, int off_y, u_char alpha);
 static void MenuCamTopAddFuncSelCsrDisp(int off_x, int off_y, u_char alpha);
 static void MenuCamTopEquipFuncSelCsrDisp(int off_x, int off_y, u_char alpha);
+static void MenuCamTopRmlPad(void);
+static int  MenuCamTopRmlDisp(void);
+
+/* PORT: the RmlUi page is up this frame -- it has the title, the window, its
+ * line and the hints, and this file leaves them out of its drawing. */
+static int menu_cam_top_rml;
 
 /* The two dispatch tables, both indexed by MENU_CAM_TOP_CTRL::mode.  Slot 3
  * -- the page itself -- is last, which is why MenuCamTopCtrlInit() opens on
@@ -399,7 +408,11 @@ int MenuCamTopMain(void)                                                /* 256 *
     }
 
     if (menu_cam_top_ctrl.step == MENU_CAM_TOP_STEP_MAIN) {             /* 270 */
-        if (menu_cam_top_pad[menu_cam_top_ctrl.mode] != nullptr) {      /* 272 */
+        /* PORT: the RmlUi page's input in place of the pads'. */
+        if (MioPan_RmlMenuCameraIsShown() != 0) {
+            MenuCamTopRmlPad();
+        }
+        else if (menu_cam_top_pad[menu_cam_top_ctrl.mode] != nullptr) { /* 272 */
             (*menu_cam_top_pad[menu_cam_top_ctrl.mode])();              /* 273 */
         }
     }
@@ -904,6 +917,8 @@ void MenuCamTopDisp(void)                                               /* 669 *
                                           MENU_CAM_TOP_FADE_OUT_TIME);  /* 678 */
 
         if (menu_cam_top_disp.anim_step != MENU_CAM_TOP_ANIM_END) {     /* 680 */
+            menu_cam_top_rml = MenuCamTopRmlDisp();   /* PORT */
+
             PK2SendVram((uintptr_t)(uintptr_t)GetMenuCameraPk2Addr(),
                         -1, -1, 0);                                     /* 681 */
 
@@ -941,6 +956,7 @@ static void MenuCamModeTopDisp(int off_x, int off_y, u_char alpha)       /* 701 
 
     MenuCamTopEquipFilmDisp(0, 0, alpha);                               /* 722 */
 
+    if (menu_cam_top_rml == 0)   /* PORT */
     PrintMsg(MENU_CAM_MSG_TYPE, msg_id[disp_data],
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 725 */
 }
@@ -970,6 +986,7 @@ static void MenuCamModeFilmSelDisp(int off_x, int off_y, u_char alpha)   /* 736 
 
     for (i = 0; film_msg_tbl[i][0] != -1; i++) {                        /* 763 */
         if (film_msg_tbl[i][0] == equip_film) {                         /* 767 */
+            if (menu_cam_top_rml == 0)   /* PORT */
             PrintMsg(MENU_CAM_MSG_TYPE, film_msg_tbl[i][1],
                      off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0); /* 769 */
         }
@@ -987,6 +1004,7 @@ static void MenuCamModeAddFuncSelDisp(int off_x, int off_y, u_char alpha) /* 782
 
     MenuCamTopAddFuncSelCsrDisp(off_x, off_y, alpha);                   /* 797 */
 
+    if (menu_cam_top_rml == 0)   /* PORT */
     PrintMsg(MENU_CAM_MSG_TYPE, msg_id[menu_cam_top_ctrl.add_csr],
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 800 */
 }
@@ -1003,6 +1021,7 @@ static void MenuCamModeEquipFuncSelDisp(int off_x, int off_y,
 
     MenuCamTopEquipFuncSelCsrDisp(off_x, off_y, alpha);                 /* 828 */
 
+    if (menu_cam_top_rml == 0)   /* PORT */
     PrintMsg(MENU_CAM_MSG_TYPE, msg_id[menu_cam_top_ctrl.equip_csr],
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 831 */
 }
@@ -1068,6 +1087,10 @@ static void MenuCamTopTitleDisp(int off_x, int off_y, u_char alpha)       /* 920
 {
     int       i;
     DISP_SPRT title_ds;
+
+    if (menu_cam_top_rml != 0) {   /* PORT: the page's crisp title */
+        return;
+    }
 
     for (i = 0; i < 2; i++) {                                           /* 927 */
         CopySprDToSpr(&title_ds, &menu_camera_tex[MC_TITLE + i]);       /* 928 */
@@ -1595,12 +1618,18 @@ static void MenuCamTopEquipFuncLineDisp(float x, float y, u_char alpha)  /* 1433
 
 static void MenuCamTopMsgWindowDisp(int off_x, int off_y, u_char alpha)  /* 1453 */
 {
+    if (menu_cam_top_rml != 0) {   /* PORT: the page's window */
+        return;
+    }
     DrawCmnWindow(0, (float)(off_x + 0x18), (float)(off_y + 0x160),
                   592.0f, 100.0f, alpha, 102);                          /* 1457 */
 }
 
 static void MenuCamTopCaptionDisp(int off_x, int off_y, u_char alpha)    /* 1468 */
 {
+    if (menu_cam_top_rml != 0) {   /* PORT: the page's hints */
+        return;
+    }
     DrawCmnCapGroup_W(0, 0, alpha, 0);                                  /* 1472 */
 }
 
@@ -1774,4 +1803,219 @@ static void MenuCamTopEquipFuncSelCsrDisp(int off_x, int off_y,
 
         DispSprD(&csr_ds);                                              /* 1662 */
     }                                                                   /* 1663 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_camera.h).  This file
+ *  still draws the page's art; the screen puts up the title, the window and
+ *  its line, and the hints over it, and asks.  Every answer is this file's
+ *  own -- the cursor, the three selectors, loading a film, fitting a part,
+ *  opening the editor, leaving -- as the four pads give them.
+ * ------------------------------------------------------------------------ */
+
+/* A selector's cursor stepped to the next slot the player owns, as its pad
+ * walks it; the cue only if it came to rest somewhere else. */
+static void MenuCamTopRmlStep(char *csr, int step, int add_flg)
+{
+    int i;
+
+    for (i = 1; i < ADD_FUNC_NUM + 1; i++) {
+        *csr = (char)((*csr + step) % ADD_FUNC_NUM);
+        if ((add_flg != 0)
+                ? (m_plyr_camera.camera_power_up.mAdditionFlg.IsUp(*csr) != 0)
+                : (m_plyr_camera.camera_power_up.mCamPartsFlg.IsUp(*csr) != 0)) {
+            break;
+        }
+    }
+    if (i < ADD_FUNC_NUM) {
+        SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+    }
+}
+
+static void MenuCamTopRmlPad(void)
+{
+    int  arg;
+    int  i;
+    int  equip_film;
+    int  before_equip_film;
+    fixed_array<char, EQUIP_SPECIAL_NUM> equip_special;
+    const int command = MioPan_RmlMenuCameraConsumeCommand(&arg);
+
+    switch (menu_cam_top_ctrl.mode) {
+    /* As MenuCamTopPad(). */
+    case MENU_CAM_TOP_MODE_TOP:
+        switch (command) {
+        case MIOPAN_RML_MENU_CAMERA_UP:
+        case MIOPAN_RML_MENU_CAMERA_DOWN:
+            if (menu_cam_top_ctrl.csr_yoko == MENU_CAM_TOP_CSR_MENU) {
+                SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+                menu_cam_top_ctrl.csr_tate =
+                    (menu_cam_top_ctrl.csr_tate
+                     + (command == MIOPAN_RML_MENU_CAMERA_UP ? 2 : 1)) % MENU_CAM_TOP_ROW_NUM;
+            }
+            break;
+        case MIOPAN_RML_MENU_CAMERA_LEFT:
+            if (menu_cam_top_ctrl.csr_yoko == MENU_CAM_TOP_CSR_MENU) {
+                SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+                menu_cam_top_ctrl.csr_yoko = MENU_CAM_TOP_CSR_CAMERA;
+            }
+            break;
+        case MIOPAN_RML_MENU_CAMERA_RIGHT:
+            if (menu_cam_top_ctrl.csr_yoko == MENU_CAM_TOP_CSR_CAMERA) {
+                SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+                menu_cam_top_ctrl.csr_yoko = MENU_CAM_TOP_CSR_MENU;
+            }
+            break;
+        /* A box pointed at: the cursor set straight, as the mouse does. */
+        case MIOPAN_RML_MENU_CAMERA_SET:
+            if (arg >= 0 && arg <= MENU_CAM_TOP_ROW_NUM) {
+                SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+                if (arg == 0) {
+                    menu_cam_top_ctrl.csr_yoko = MENU_CAM_TOP_CSR_CAMERA;
+                }
+                else {
+                    menu_cam_top_ctrl.csr_yoko = MENU_CAM_TOP_CSR_MENU;
+                    menu_cam_top_ctrl.csr_tate = (char)(arg - 1);
+                }
+            }
+            break;
+        case MIOPAN_RML_MENU_CAMERA_CHOOSE:
+            menu_cam_top_ctrl.csr_yoko_backup = menu_cam_top_ctrl.csr_yoko;
+            MenuCamTopPadDecision();
+            break;
+        case MIOPAN_RML_MENU_CAMERA_BACK:
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuCamTopOutReq();
+            break;
+        default:
+            break;
+        }
+        break;
+
+    /* As MenuCamTopFilmSelPad(): the equipped film is the cursor. */
+    case MENU_CAM_TOP_MODE_FILM_SEL:
+        if (command == MIOPAN_RML_MENU_CAMERA_LEFT || command == MIOPAN_RML_MENU_CAMERA_RIGHT) {
+            before_equip_film = GetPlyrEquipmentFilmType();
+            equip_film        = before_equip_film;
+            for (i = 0; i < FILM_TYPE_NUM + 1; i++) {
+                if (command == MIOPAN_RML_MENU_CAMERA_LEFT) {
+                    equip_film = (equip_film == FILM_TYPE_07) ? FILM_TYPE_SPECIAL : equip_film - 1;
+                }
+                else {
+                    equip_film = (equip_film == FILM_TYPE_SPECIAL) ? FILM_TYPE_07 : equip_film + 1;
+                }
+                if (GetPlyrItemHaveNum(equip_film) > 0) {
+                    ItemUse(equip_film, 1);
+                    break;
+                }
+            }
+            SystemBankPlay(before_equip_film != GetPlyrEquipmentFilmType() ? SE_CURSOR : SE_ERROR,
+                           1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        }
+        else if (command == MIOPAN_RML_MENU_CAMERA_CHOOSE || command == MIOPAN_RML_MENU_CAMERA_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_cam_top_ctrl.mode = MENU_CAM_TOP_MODE_TOP;
+        }
+        break;
+
+    /* As MenuCamTopAdditionalFunctionSelPad() and MenuCamTopEquipFuncSelPad(). */
+    case MENU_CAM_TOP_MODE_ADD_FUNC_SEL:
+    case MENU_CAM_TOP_MODE_EQUIP_FUNC_SEL:
+    {
+        const int add_flg = menu_cam_top_ctrl.mode == MENU_CAM_TOP_MODE_ADD_FUNC_SEL;
+        char *csr = add_flg ? &menu_cam_top_ctrl.add_csr : &menu_cam_top_ctrl.equip_csr;
+
+        if (command == MIOPAN_RML_MENU_CAMERA_LEFT) {
+            MenuCamTopRmlStep(csr, 3, add_flg);
+        }
+        else if (command == MIOPAN_RML_MENU_CAMERA_RIGHT) {
+            MenuCamTopRmlStep(csr, 1, add_flg);
+        }
+        else if (command == MIOPAN_RML_MENU_CAMERA_SET && arg >= 0 && arg < ADD_FUNC_NUM &&
+                 ((add_flg != 0)
+                      ? (m_plyr_camera.camera_power_up.mAdditionFlg.IsUp(arg) != 0)
+                      : (m_plyr_camera.camera_power_up.mCamPartsFlg.IsUp(arg) != 0))) {
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            *csr = (char)arg;
+        }
+        else if (command == MIOPAN_RML_MENU_CAMERA_CHOOSE && add_flg == 0) {
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            m_plyr_camera.eq_tray.GetSubFuncArray(&equip_special[0]);
+            if (m_plyr_camera.camera_power_up.mCamPartsSetFlg.IsUp(
+                    menu_cam_top_ctrl.equip_csr) != 0) {
+                m_plyr_camera.camera_power_up.mCamPartsSetFlg.FlgDown(
+                    menu_cam_top_ctrl.equip_csr);
+                if (menu_cam_top_ctrl.equip_csr == EQUIP_FUNC_SPECIAL_SLOT) {
+                    for (i = 1; i < EQUIP_SPECIAL_NUM; i++) {
+                        equip_special[i] = 0;
+                    }
+                    m_plyr_camera.eq_tray.SetSubFuncArray(&equip_special[0]);
+                }
+            }
+            else {
+                m_plyr_camera.camera_power_up.mCamPartsSetFlg.FlgUp(
+                    menu_cam_top_ctrl.equip_csr);
+            }
+        }
+        else if (command == MIOPAN_RML_MENU_CAMERA_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            menu_cam_top_ctrl.mode = MENU_CAM_TOP_MODE_TOP;
+        }
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+/* The screen up for this frame: the mode, its cursor and owned slots, and
+ * the window's line as the four mode draws pick it. */
+static int MenuCamTopRmlDisp(void)
+{
+    static const int top_msg[4]  = { 0, 2, 1, 3 };          /* MenuCamModeTopDisp */
+    static const int film_msg[5] = { 4, 5, 6, 7, 8 };       /* ...FilmSelDisp     */
+    static const int add_msg[4]  = { 11, 12, 13, 14 };      /* ...AddFuncSelDisp  */
+    static const int equip_msg[4] = { 16, 17, 18, 19 };     /* ...EquipFuncSelDisp */
+    MIOPAN_RML_MENU_CAMERA page;
+    int i;
+    int film;
+
+    memset(&page, 0, sizeof(page));
+    page.mode    = menu_cam_top_ctrl.mode;
+    page.closing = menu_cam_top_ctrl.step != MENU_CAM_TOP_STEP_MAIN;
+
+    switch (menu_cam_top_ctrl.mode) {
+    case MENU_CAM_TOP_MODE_FILM_SEL:
+        film = GetPlyrEquipmentFilmType();
+        page.line = (film >= 0 && film < 5) ? film_msg[film] : film_msg[0];
+        break;
+    case MENU_CAM_TOP_MODE_ADD_FUNC_SEL:
+        page.cursor = menu_cam_top_ctrl.add_csr;
+        page.line   = add_msg[menu_cam_top_ctrl.add_csr & 3];
+        for (i = 0; i < ADD_FUNC_NUM; i++) {
+            if (m_plyr_camera.camera_power_up.mAdditionFlg.IsUp(i) != 0) {
+                page.owned |= 1 << i;
+            }
+        }
+        break;
+    case MENU_CAM_TOP_MODE_EQUIP_FUNC_SEL:
+        page.cursor = menu_cam_top_ctrl.equip_csr;
+        page.line   = equip_msg[menu_cam_top_ctrl.equip_csr & 3];
+        page.fitted = m_plyr_camera.camera_power_up.mCamPartsSetFlg.IsUp(
+                          menu_cam_top_ctrl.equip_csr) != 0;
+        for (i = 0; i < EQUIP_FUNC_NUM; i++) {
+            if (m_plyr_camera.camera_power_up.mCamPartsFlg.IsUp(i) != 0) {
+                page.owned |= 1 << i;
+            }
+        }
+        break;
+    default:
+        page.cursor = (menu_cam_top_ctrl.csr_yoko == MENU_CAM_TOP_CSR_CAMERA)
+                          ? 0 : menu_cam_top_ctrl.csr_tate + 1;
+        page.line   = top_msg[page.cursor];
+        break;
+    }
+
+    return MioPan_RmlMenuCameraShow(&page);
 }

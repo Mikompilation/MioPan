@@ -1,0 +1,54 @@
+/*
+ * The File page, as menu_file.c lays it out: the list under its tabs with
+ * the file's picture in the round window, and the reader and the two viewers
+ * a file opens into.
+ */
+
+/* The game's flat squares: the black panels the list and the reader sit
+ * on. */
+.file-square
+{
+    position: absolute;
+}
+
+/* A viewer's page arrow, its plate pulsing behind it. */
+.file-arrow
+{
+    position: absolute;
+    cursor: pointer;
+}
+
+/* A file's title over the reader or a viewer, centred and stencilled over
+ * its shadow as PrintMsg_Arrange() prints it three times a pixel apart. */
+.file-title
+{
+    position: absolute;
+    text-align: center;
+    font-size: 2.2em;
+    line-height: 1.35;
+    letter-spacing: 0.04em;
+    color: #efe0b0;
+    font-effect: shadow(2dp 2dp #231f10);
+    white-space: nowrap;
+}
+
+/* The reader's page in the game's own lines. */
+.file-body
+{
+    position: absolute;
+    font-size: 1.9em;
+    line-height: 1.32;
+    color: #f2ebe0;
+    font-effect: outline(1dp #0c0806);
+}
+
+/* "n / total" at the foot of the page. */
+.file-count
+{
+    position: absolute;
+    text-align: center;
+    font-size: 1.9em;
+    line-height: 1.35;
+    color: #ddd6c8;
+    white-space: nowrap;
+}

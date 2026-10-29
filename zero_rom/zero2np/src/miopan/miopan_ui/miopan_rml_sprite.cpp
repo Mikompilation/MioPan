@@ -6,6 +6,7 @@
 #include "../../graphics/graph2d/tim2.h"
 
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <tuple>
 #include <vector>
@@ -36,18 +37,34 @@ unsigned Csa(u_long tex0)
 constexpr unsigned kPsmT4 = 0x14;
 
 /* The picture in the pak uploaded where the sprite samples. */
-TIM2_PICTUREHEADER *FindPicture(uintptr_t pk2, const SPRT_DAT &sprite)
+TIM2_PICTUREHEADER *FindPicture(uintptr_t pk2, const SPRT_DAT &sprite, int only)
 {
     const auto *base = (const unsigned char *)MioPan_GetHostPointer(pk2);
     if (base == nullptr)
     {
         return nullptr;
     }
+    /* A buffer the game has since filled with something else -- photo
+     * decoding reuses the resident 2D area -- must not be walked: only
+     * offsets that stay in the EE's memory, to pictures that say TIM2. */
     const int count = *(const int *)base;
     const int *offsets = (const int *)(base + 0x10);
+    const uintptr_t room = 0x02000000u - (pk2 & 0x01ffffffu);
     for (int i = 0; i >= 0 && i < count && i < 256; i++)
     {
+        if (only >= 0 && i != only)
+        {
+            continue;
+        }
+        if (offsets[i] <= 0 || (uintptr_t)offsets[i] + 0x100 >= room)
+        {
+            continue;
+        }
         void *tim2 = (void *)(base + offsets[i]);
+        if (std::memcmp(tim2, "TIM2", 4) != 0)
+        {
+            continue;
+        }
         TIM2_PICTUREHEADER *picture = Tim2GetPictureHeader(tim2, 0);
         if (picture == nullptr || Tbp(picture->GsTex0) != Tbp(sprite.tex0))
         {
@@ -87,7 +104,7 @@ unsigned long long Hash(const std::vector<Uint8> &rgba, int w, int h)
 /* What was asked for -- the pak, the sprite's picture and part, the tint --
  * and the image it came to. */
 using Key = std::tuple<uintptr_t, u_long, int, int, int, int, int, int, int, int, int,
-                       int, bool>;
+                       int, bool, int>;
 std::map<Key, std::string> g_answers;
 
 /* A lone TIM2's contents, and the image they came to. */
@@ -129,7 +146,7 @@ std::string Image(uintptr_t pk2, const SPRT_DAT &sprite, const Look &look)
     const int b = look.b;
     const int turns = look.turns & 3;
     const Key key{pk2, sprite.tex0, sprite.u, sprite.v, sprite.w, sprite.h,
-                  sprite.flip, sprite.alpha, r, g, b, turns, look.additive};
+                  sprite.flip, sprite.alpha, r, g, b, turns, look.additive, look.picture};
     const auto known = g_answers.find(key);
     if (known != g_answers.end())
     {
@@ -140,7 +157,7 @@ std::string Image(uintptr_t pk2, const SPRT_DAT &sprite, const Look &look)
     {
         return answer;
     }
-    TIM2_PICTUREHEADER *picture = FindPicture(pk2, sprite);
+    TIM2_PICTUREHEADER *picture = FindPicture(pk2, sprite, look.picture);
     if (picture == nullptr)
     {
         return answer;
@@ -211,6 +228,11 @@ std::string Image(uintptr_t pk2, const SPRT_DAT &sprite, const Look &look)
 
 std::string Picture(const void *tim2)
 {
+    return Picture(tim2, 0, 0, -1, -1);
+}
+
+std::string Picture(const void *tim2, int u, int v, int w, int h)
+{
     const auto *base = (const unsigned char *)MioPan_GetHostPointer((uintptr_t)tim2);
     if (base == nullptr)
     {
@@ -221,22 +243,35 @@ std::string Picture(const void *tim2)
     {
         return std::string();
     }
-    /* Its header, CLUT and pixels: all of what it looks like. */
-    const unsigned long long key =
-        HashBytes((const unsigned char *)picture, picture->TotalSize);
+    /* The whole picture, or the part asked for, kept inside it. */
+    if (w < 0 || h < 0)
+    {
+        u = 0;
+        v = 0;
+        w = picture->ImageWidth;
+        h = picture->ImageHeight;
+    }
+    if (u < 0 || v < 0 || w <= 0 || h <= 0 || u + w > picture->ImageWidth ||
+        v + h > picture->ImageHeight)
+    {
+        return std::string();
+    }
+    /* Its header, CLUT and pixels -- all of what it looks like -- and the
+     * part. */
+    unsigned long long key = HashBytes((const unsigned char *)picture, picture->TotalSize);
+    const int part[4] = {u, v, w, h};
+    key ^= HashBytes((const unsigned char *)part, sizeof(part));
     const auto known = g_pictures.find(key);
     if (known != g_pictures.end())
     {
         return known->second;
     }
-    const int w = picture->ImageWidth;
-    const int h = picture->ImageHeight;
     std::vector<Uint8> rgba((size_t)w * h * 4);
     for (int y = 0; y < h; y++)
     {
         for (int x = 0; x < w; x++)
         {
-            const u_int c = Tim2GetTextureColor(picture, 0, 0, x, y);
+            const u_int c = Tim2GetTextureColor(picture, 0, 0, u + x, v + y);
             Uint8 *out = &rgba[((size_t)y * w + x) * 4];
             out[0] = (Uint8)(c & 0xff);
             out[1] = (Uint8)(c >> 8 & 0xff);
@@ -248,6 +283,49 @@ std::string Picture(const void *tim2)
     char name[64];
     std::snprintf(name, sizeof(name), "%spicture/%016llx", MioPanRml::kGeneratedPrefix,
                   key);
+    if (!MioPanRml::HasGeneratedImage(name))
+    {
+        MioPanRml::SetGeneratedImage(name, rgba.data(), w, h);
+    }
+    return g_pictures[key] = name;
+}
+
+std::string Texels(uintptr_t addr, int w, int h, int stride)
+{
+    const auto *base = (const unsigned char *)MioPan_GetHostPointer(addr);
+    if (base == nullptr || w <= 0 || h <= 0 || stride < w)
+    {
+        return std::string();
+    }
+    unsigned long long key = 1469598103934665603ull;
+    for (int y = 0; y < h; y++)
+    {
+        key ^= HashBytes(base + (size_t)y * stride * 4, (size_t)w * 4);
+        key *= 1099511628211ull;
+    }
+    const int size[3] = {w, h, stride};
+    key ^= HashBytes((const unsigned char *)size, sizeof(size));
+    const auto known = g_pictures.find(key);
+    if (known != g_pictures.end())
+    {
+        return known->second;
+    }
+    std::vector<Uint8> rgba((size_t)w * h * 4);
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
+        {
+            const unsigned char *in = base + ((size_t)y * stride + x) * 4;
+            Uint8 *out = &rgba[((size_t)y * w + x) * 4];
+            out[0] = in[0];
+            out[1] = in[1];
+            out[2] = in[2];
+            /* Drawn opaque, whatever the capture left in its alpha. */
+            out[3] = 255;
+        }
+    }
+    char name[64];
+    std::snprintf(name, sizeof(name), "%stexels/%016llx", MioPanRml::kGeneratedPrefix, key);
     if (!MioPanRml::HasGeneratedImage(name))
     {
         MioPanRml::SetGeneratedImage(name, rgba.data(), w, h);

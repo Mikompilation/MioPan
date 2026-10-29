@@ -1,0 +1,24 @@
+/*
+ * The Radio page, as menu_radio.c lays it out: the stones on their frames
+ * beside the crystal radio, the one under the cursor glowing in its window,
+ * and a playing recording's lines on the game's plates over the bench.
+ */
+
+/* A recording's line, centred on x 320 on its plate as MovieTitleDispMain()
+ * centres it -- the plate's caps and middle are the radio pak's own. */
+.radio-subtitle
+{
+    position: absolute;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.radio-subtitle span
+{
+    display: inline-block;
+    padding: 0 1.6em;
+    font-size: 2em;
+    line-height: 1.45;
+    color: #f4ead2;
+    font-effect: outline(1dp #0c0806);
+}

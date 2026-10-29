@@ -1,0 +1,32 @@
+/*
+ * The Map page, as menu_map.c lays it out round the game's own map: the
+ * viewport the sheet is drawn in, the snapshot's plate, the two names.
+ */
+
+/* Where the sheet is: left clear for the game's drawing, and taking the
+ * pointer that drags it. */
+.map-viewport
+{
+    position: absolute;
+    cursor: move;
+}
+
+/* MenuMapSnapShotDisp()'s black plate under the room's snapshot. */
+.map-snap-bed
+{
+    position: absolute;
+    background-color: #000000;
+}
+
+/* The sheet's and the room's names on the header plate, stencilled over
+ * their shadow as the game prints them three times a pixel apart. */
+.map-name
+{
+    position: absolute;
+    font-size: 2.1em;
+    line-height: 1.35;
+    letter-spacing: 0.03em;
+    color: #efe0b0;
+    font-effect: shadow(2dp 2dp #231f10);
+    white-space: nowrap;
+}

@@ -1,7 +1,15 @@
 #include "miopan_rmlui.h"
 #include "miopan_rml_options.h"
 #include "miopan_rml_load.h"
+#include "miopan_rml_menu_cam_edit.h"
+#include "miopan_rml_menu_camera.h"
+#include "miopan_rml_menu_file.h"
 #include "miopan_rml_menu_item.h"
+#include "miopan_rml_menu_map.h"
+#include "miopan_rml_menu_memo.h"
+#include "miopan_rml_menu_photo.h"
+#include "miopan_rml_menu_radio.h"
+#include "miopan_rml_menu_soul.h"
 #include "miopan_rml_menu_top.h"
 #include "miopan_rml_pause.h"
 #include "miopan_rml_save.h"
@@ -164,6 +172,8 @@ struct RmlState
     Uint64 nav_next_repeat[4] = {};
     float stick_x = 0.0f;
     float stick_y = 0.0f;
+    /* L2 and R2, as Home and End: only the map's area change takes them. */
+    bool trigger_held[2] = {false, false};
     /* Which device the player last used: the pad, for the button prompts,
      * and the mouse, for whether hover may move a cursor. */
     bool using_pad = false;
@@ -967,6 +977,20 @@ void DispatchEvent(const SDL_Event &event)
         g_rml.using_mouse = true;
         const Rml::Vector2i mouse = ToContext(event.button.x, event.button.y);
         context->ProcessMouseMove(mouse.x, mouse.y, KeyModifiers());
+        /* A right click is back, as the menus' mouse makes it TRIANGLE: every
+         * screen takes Escape as its way back. */
+        if (button == 1)
+        {
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            {
+                context->ProcessKeyDown(Rml::Input::KI_ESCAPE, KeyModifiers());
+            }
+            else
+            {
+                context->ProcessKeyUp(Rml::Input::KI_ESCAPE, KeyModifiers());
+            }
+            break;
+        }
         if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
         {
             context->ProcessMouseButtonDown(button, KeyModifiers());
@@ -1034,6 +1058,29 @@ void DispatchEvent(const SDL_Event &event)
         else if (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY)
         {
             g_rml.stick_y = value;
+        }
+        else if (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
+                 event.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
+        {
+            const int side = event.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER ? 1 : 0;
+            const bool held = value > kStickPress;
+            if (held != g_rml.trigger_held[side])
+            {
+                g_rml.trigger_held[side] = held;
+                g_rml.using_pad = true;
+                g_rml.using_mouse = false;
+                const Rml::Input::KeyIdentifier key =
+                    side != 0 ? Rml::Input::KI_END : Rml::Input::KI_HOME;
+                if (held)
+                {
+                    context->ProcessKeyDown(key, 0);
+                }
+                else
+                {
+                    context->ProcessKeyUp(key, 0);
+                }
+            }
+            break;
         }
         else
         {
@@ -1193,11 +1240,27 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device, SDL_GPUTextureFormat format
     MioPanRmlSetup::Init(g_rml.context);
     MioPanRmlMenuTop::Init(g_rml.context);
     MioPanRmlMenuItem::Init(g_rml.context);
+    MioPanRmlMenuMemo::Init(g_rml.context);
+    MioPanRmlMenuSoul::Init(g_rml.context);
+    MioPanRmlMenuRadio::Init(g_rml.context);
+    MioPanRmlMenuFile::Init(g_rml.context);
+    MioPanRmlMenuPhoto::Init(g_rml.context);
+    MioPanRmlMenuMap::Init(g_rml.context);
+    MioPanRmlMenuCamera::Init(g_rml.context);
+    MioPanRmlMenuCamEdit::Init(g_rml.context);
     return true;
 }
 
 void Shutdown()
 {
+    MioPanRmlMenuCamEdit::Shutdown();
+    MioPanRmlMenuCamera::Shutdown();
+    MioPanRmlMenuMap::Shutdown();
+    MioPanRmlMenuPhoto::Shutdown();
+    MioPanRmlMenuFile::Shutdown();
+    MioPanRmlMenuRadio::Shutdown();
+    MioPanRmlMenuSoul::Shutdown();
+    MioPanRmlMenuMemo::Shutdown();
     MioPanRmlMenuItem::Shutdown();
     MioPanRmlMenuTop::Shutdown();
     MioPanRmlSetup::Shutdown();
@@ -1259,6 +1322,14 @@ void Frame()
     MioPanRmlSetup::Frame();
     MioPanRmlMenuTop::Frame();
     MioPanRmlMenuItem::Frame();
+    MioPanRmlMenuMemo::Frame();
+    MioPanRmlMenuSoul::Frame();
+    MioPanRmlMenuRadio::Frame();
+    MioPanRmlMenuFile::Frame();
+    MioPanRmlMenuPhoto::Frame();
+    MioPanRmlMenuMap::Frame();
+    MioPanRmlMenuCamera::Frame();
+    MioPanRmlMenuCamEdit::Frame();
     g_rml.context->Update();
 
     DrawSnapshot &frame = g_rml.frame;
@@ -1353,6 +1424,28 @@ const char *PadButtonName(SDL_GamepadButton button)
     case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "Right";
     default: return "?";
     }
+}
+
+const char *PadTriggersName()
+{
+    SDL_Gamepad *pad = nullptr;
+    int count = 0;
+    SDL_JoystickID *pads = SDL_GetGamepads(&count);
+    for (int i = 0; pads != nullptr && i < count && pad == nullptr; i++)
+    {
+        pad = SDL_GetGamepadFromID(pads[i]);
+    }
+    SDL_free(pads);
+    if (pad != nullptr)
+    {
+        const SDL_GamepadType type = SDL_GetGamepadType(pad);
+        if (type != SDL_GAMEPAD_TYPE_PS3 && type != SDL_GAMEPAD_TYPE_PS4 &&
+            type != SDL_GAMEPAD_TYPE_PS5)
+        {
+            return "LT / RT";
+        }
+    }
+    return "L2 / R2";
 }
 
 Rml::Context *GetContext()

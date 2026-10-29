@@ -142,6 +142,9 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_soul.h" // the RmlUi page (port)
+
+#include <string.h>                             /* memset (port)             */
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -307,6 +310,8 @@ static void MenuSoulCaptionDisp(int off_x, int off_y, u_char alpha);
 static void MenuSoulNumberDisp(int data, int num, int x, int y, u_char alpha,
                                int pri, u_char zero_flg);
 static void MenuSoulNotHaveListDisp(int off_x, int off_y, u_char alpha);
+static void MenuSoulRmlPad(void);
+static int  MenuSoulRmlDisp(u_char alpha);
 
 /* --------------------------------------------------------------------------
  *  Entry / texture
@@ -477,19 +482,36 @@ void MenuSoul(void)                                                     /* 347 *
     if (menu_wrk.step == MENU_SOUL_STEP_MAIN) {                         /* 403 */
         switch (menu_soul_ctrl.mode) {                                  /* 404 */
         case MENU_SOUL_MODE_LIST:
-            MenuSoulPad();                                              /* 406 */
+            /* PORT: the RmlUi page's input in place of the pad's, here and
+             * in the other two modes. */
+            if (MioPan_RmlMenuSoulIsShown() != 0) {
+                MenuSoulRmlPad();
+            }
+            else {
+                MenuSoulPad();                                          /* 406 */
+            }
 
             MenuCmnCrossFade();                                         /* 409 */
             break;                                                      /* 410 */
 
         case MENU_SOUL_MODE_COMP_MSG:
-            MenuSoulCompMsgPad();                                       /* 412 */
+            if (MioPan_RmlMenuSoulIsShown() != 0) {
+                MenuSoulRmlPad();
+            }
+            else {
+                MenuSoulCompMsgPad();                                   /* 412 */
+            }
 
             MenuCmnCrossFade();                                         /* 415 */
             break;                                                      /* 416 */
 
         case MENU_SOUL_MODE_NO_LIST:
-            MenuSoulNoListPad();                                        /* 418 */
+            if (MioPan_RmlMenuSoulIsShown() != 0) {
+                MenuSoulRmlPad();
+            }
+            else {
+                MenuSoulNoListPad();                                    /* 418 */
+            }
             break;                                                      /* 419 */
 
         default:
@@ -724,6 +746,12 @@ void MenuSoulDisp(void)                                                 /* 654 *
         if (menu_soul_disp.anim_step != MENU_SOUL_ANIM_END) {           /* 665 */
             MenuInOutAnimCtrl(&menu_soul_disp.anim_step,
                               &menu_soul_disp.anim_timer, &alpha);      /* 667 */
+
+            /* PORT: the RmlUi page in place of everything below; the fade
+             * above still paces the hand-back. */
+            if (MenuSoulRmlDisp(alpha) != 0) {
+                return;
+            }
 
             MenuSoulTitleDisp(0, 0, alpha);                             /* 670 */
 
@@ -1377,4 +1405,209 @@ void SetSave_ListCompDispFlg(MC_SAVE_DATA *data)                        /* 1527 
 {
     data->addr = (u_char *)&list_comp_disp_flg;                         /* 1530 */
     data->size = sizeof(list_comp_disp_flg);                            /* 1531 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_soul.h).  The screen
+ *  shows the list and asks; every answer is this file's own -- the cursor
+ *  and the photographs' cross-fade as MenuSoulPad() moves them, reading an
+ *  entry, the congratulation's dismissal, the cues, leaving.
+ * ------------------------------------------------------------------------ */
+
+static void MenuSoulRmlPad(void)
+{
+    int  arg;
+    int  i;
+    int  disp_num;
+    int  ghost_list_label;
+    char load_flg;
+    const int command = MioPan_RmlMenuSoulConsumeCommand(&arg);
+
+    switch (menu_soul_ctrl.mode) {
+    case MENU_SOUL_MODE_LIST:
+        break;
+
+    /* As MenuSoulCompMsgPad(): either button drops back to the list. */
+    case MENU_SOUL_MODE_COMP_MSG:
+        if (command == MIOPAN_RML_MENU_SOUL_ACK) {
+            SystemBankPlay(SE_DECIDE, 1, 0, 0, nullptr, 0x3200, 0x1000);
+            menu_soul_ctrl.mode = MENU_SOUL_MODE_LIST;
+        }
+        else if (command == MIOPAN_RML_MENU_SOUL_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, 0x3200, 0x1000);
+            menu_soul_ctrl.mode = MENU_SOUL_MODE_LIST;
+        }
+        return;
+
+    /* As MenuSoulNoListPad(): only the way back. */
+    default:
+        if (command == MIOPAN_RML_MENU_SOUL_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, 0x3200, 0x1000);
+            MenuSoulOutReq();
+        }
+        return;
+    }
+
+    disp_num = menu_soul_ctrl.ref_ctrl.data_num;
+    if (disp_num > MENU_SOUL_DISP_NUM) {
+        disp_num = MENU_SOUL_DISP_NUM;
+    }
+
+    load_flg = 0;
+    menu_soul_ctrl.before_list_data_pos = menu_soul_ctrl.ref_ctrl.data_pos;
+
+    switch (command) {
+    case MIOPAN_RML_MENU_SOUL_UP:
+        load_flg = (MenuRefMovePadLup(&menu_soul_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                      disp_num, MENU_SOUL_DISP_NUM) != 0);
+        break;
+    case MIOPAN_RML_MENU_SOUL_DOWN:
+        load_flg = (MenuRefMovePadLdown(&menu_soul_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                        disp_num, MENU_SOUL_DISP_NUM) != 0);
+        break;
+    case MIOPAN_RML_MENU_SOUL_PAGE_UP:
+        load_flg = (MenuRefMovePageUp(&menu_soul_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                      disp_num, MENU_SOUL_DISP_NUM) != 0);
+        break;
+    case MIOPAN_RML_MENU_SOUL_PAGE_DOWN:
+        load_flg = (MenuRefMovePageDown(&menu_soul_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                        disp_num, MENU_SOUL_DISP_NUM) != 0);
+        break;
+    /* A row pointed at: stepped to the pad's way, the photographs
+     * cross-fading once from where it started to where it ends. */
+    case MIOPAN_RML_MENU_SOUL_ROW:
+        for (i = 0; (i < MENU_SOUL_DISP_NUM) && (menu_wrk.cursor != arg) &&
+                    (arg >= 0) && (arg < disp_num); i++) {
+            if (arg < menu_wrk.cursor) {
+                load_flg |= (MenuRefMovePadLup(&menu_soul_ctrl.ref_ctrl,
+                                               &menu_wrk.cursor, disp_num,
+                                               MENU_SOUL_DISP_NUM) != 0);
+            }
+            else {
+                load_flg |= (MenuRefMovePadLdown(&menu_soul_ctrl.ref_ctrl,
+                                                 &menu_wrk.cursor, disp_num,
+                                                 MENU_SOUL_DISP_NUM) != 0);
+            }
+        }
+        break;
+    case MIOPAN_RML_MENU_SOUL_CHOOSE:
+        SystemBankPlay(SE_DECIDE, 1, 0, 0, nullptr, 0x3200, 0x1000);
+        ghost_list_label =
+            disp_soul_list_data[menu_soul_ctrl.ref_ctrl.data_pos].ghost_list_label;
+        if (GetPlyrSoulListState(ghost_list_label) == SOUL_LIST_STATE_HAVE) {
+            ReadSoulList(ghost_list_label);
+            MenuCrossFadeInStart(menu_soul_ctrl.cross_fade_flg,
+                                 ghost_list_label + REI_PHT_000_TM2);
+            menu_soul_disp.disp_msg_id[menu_soul_ctrl.cross_fade_flg] =
+                ghost_list_label * SOUL_MSG_PER_GHOST + SOUL_MSG_EXP;
+        }
+        break;
+    case MIOPAN_RML_MENU_SOUL_BACK:
+        SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, 0x3200, 0x1000);
+        MenuSoulOutReq();
+        break;
+    default:
+        break;
+    }
+
+    /* MenuSoulPad()'s tail: the outgoing photograph down and the new row's,
+     * if it has one, up in the other slot. */
+    if (load_flg != 0) {
+        SystemBankPlay(SE_CURSOR, 1, 0, 0, nullptr, 0x3200, 0x1000);
+    }
+    if (load_flg != 0
+        && menu_soul_ctrl.before_list_data_pos != menu_soul_ctrl.ref_ctrl.data_pos) {
+        if (GetPlyrSoulListState(
+                disp_soul_list_data[menu_soul_ctrl.before_list_data_pos].ghost_list_label)
+            == SOUL_LIST_STATE_READ) {
+            MenuCrossFadeOutStart(menu_soul_ctrl.cross_fade_flg);
+            menu_soul_ctrl.cross_fade_flg ^= 1;
+        }
+
+        ghost_list_label =
+            disp_soul_list_data[menu_soul_ctrl.ref_ctrl.data_pos].ghost_list_label;
+
+        if (GetPlyrSoulListState(ghost_list_label) == SOUL_LIST_STATE_READ) {
+            MenuCrossFadeInStart(menu_soul_ctrl.cross_fade_flg,
+                                 ghost_list_label + REI_PHT_000_TM2);
+            menu_soul_disp.disp_msg_id[menu_soul_ctrl.cross_fade_flg] =
+                ghost_list_label * SOUL_MSG_PER_GHOST + SOUL_MSG_EXP;
+        }
+    }
+}
+
+/* The screen up for this frame: the rows shown with their badges and marks
+ * as MenuSoulOrderSignDisp() and MenuSoulNoReadFrameDisp() pick them, the
+ * spirit under the cursor, and the cross-fade's two photographs with their
+ * alphas, worked out as MenuSoulPhotoDisp() works them out. */
+static int MenuSoulRmlDisp(u_char alpha)
+{
+    MIOPAN_RML_MENU_SOUL page;
+    u_char fade_alpha[2];
+    int    disp_num;
+    int    ghost_list_label;
+    int    i;
+    int    j;
+    int    slot;
+
+    memset(&page, 0, sizeof(page));
+
+    disp_num = menu_soul_ctrl.ref_ctrl.data_num;
+    if (disp_num > MENU_SOUL_DISP_NUM) {
+        disp_num = MENU_SOUL_DISP_NUM;
+    }
+
+    switch (menu_soul_ctrl.mode) {
+    case MENU_SOUL_MODE_COMP_MSG: page.mode = MIOPAN_RML_MENU_SOUL_CONGRATS; break;
+    case MENU_SOUL_MODE_NO_LIST:  page.mode = MIOPAN_RML_MENU_SOUL_EMPTY;    break;
+    default:                      page.mode = MIOPAN_RML_MENU_SOUL_LIST;     break;
+    }
+    page.closing = menu_wrk.step != MENU_SOUL_STEP_MAIN;
+    page.cursor  = menu_wrk.cursor;
+    page.start   = menu_soul_ctrl.ref_ctrl.disp_start_pos;
+    page.count   = menu_soul_ctrl.ref_ctrl.data_num;
+    page.rate    = GetSoulListAccomplishmentRate();
+    for (i = 0; i < disp_num; i++) {
+        ghost_list_label =
+            disp_soul_list_data[menu_soul_ctrl.ref_ctrl.disp_start_pos + i].ghost_list_label;
+        page.label[i]     = ghost_list_label;
+        page.enhancing[i] = ghost_list_label >= SOUL_LIST_BASE_MAX;
+        page.order[i]     = -1;
+        for (j = 0; j < MENU_SOUL_ORDER_NUM; j++) {
+            if (GetPlyrSoulListMaxScore(ghost_list_label)
+                == menu_soul_ctrl.max_score_order[j]) {
+                page.order[i] = j;
+                break;
+            }
+        }
+        page.unread[i] = (page.order[i] < 0)
+                         && (GetPlyrSoulListState(ghost_list_label) == SOUL_LIST_STATE_HAVE);
+    }
+    page.picture_msg[0] = -1;
+    page.picture_msg[1] = -1;
+    if (disp_num != 0) {
+        page.selected =
+            disp_soul_list_data[menu_soul_ctrl.ref_ctrl.data_pos].ghost_list_label;
+        page.score = GetPlyrSoulListMaxScore(page.selected);
+
+        fade_alpha[0] = 0;
+        fade_alpha[1] = 0;
+        GetMenuCrossFadeAlpha(fade_alpha);
+
+        if (menu_wrk.step != MENU_SOUL_STEP_MAIN) {
+            fade_alpha[menu_soul_ctrl.cross_fade_flg ^ 1] = 0;
+            fade_alpha[menu_soul_ctrl.cross_fade_flg] = alpha;
+        }
+        for (i = 0; i < 2; i++) {
+            slot = menu_soul_ctrl.cross_fade_flg ^ (i == 0 ? 1 : 0);
+            if ((CheckCrossFadeDisp(slot) != 0) && (fade_alpha[slot] != 0)) {
+                page.picture[i]       = GetCrossFadeDataAddr(slot);
+                page.picture_alpha[i] = fade_alpha[slot];
+                page.picture_msg[i]   = menu_soul_disp.disp_msg_id[slot];
+            }
+        }
+    }
+    page.pak = menu_soul_tex_addr;
+
+    return MioPan_RmlMenuSoulShow(&page);
 }

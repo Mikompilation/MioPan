@@ -143,6 +143,9 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_file.h" // the RmlUi page (port)
+
+#include <string.h>                             /* memset (port)             */
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -397,6 +400,8 @@ static void  MenuFileSmallArrowDisp(float x, float y, u_char alpha, u_char rgb,
                                     char flg);
 static void  MenuFileSelFrameDisp(float x, float y, u_char alpha);
 static void  MenuFileNonSelFrameDisp(float x, float y, u_char alpha);
+static void  MenuFileRmlPad(void);
+static int   MenuFileRmlDisp(u_char alpha);
 
 /* --------------------------------------------------------------------------
  *  Entry / texture
@@ -783,7 +788,11 @@ static void MenuFileMode(void)                                          /* 682 *
     }
 
     if (menu_file_ctrl.sub_step == MENU_FILE_SUB_MAIN) {                /* 736 */
-        if (menu_file_pad[menu_file_ctrl.mode] != nullptr) {            /* 738 */
+        /* PORT: the RmlUi page's input in place of the pad's. */
+        if (MioPan_RmlMenuFileIsShown() != 0) {
+            MenuFileRmlPad();
+        }
+        else if (menu_file_pad[menu_file_ctrl.mode] != nullptr) {       /* 738 */
             (*menu_file_pad[menu_file_ctrl.mode])();                    /* 739 */
         }
 
@@ -1381,6 +1390,12 @@ void MenuFileDisp(void)                                                 /* 1285 
 
             Zero2Anim2D_CsrAnimCtrl(&menu_file_disp.scroll_timer,
                                     &menu_file_disp.rgb);               /* 1298 */
+
+            /* PORT: the RmlUi page in place of everything below; the fades
+             * still pace the hand-back and the change between modes. */
+            if (MenuFileRmlDisp(alpha) != 0) {
+                return;
+            }
 
             MenuFileTitleDisp(0, 0, alpha);                             /* 1301 */
 
@@ -2683,4 +2698,367 @@ static void MenuFileNonSelFrameDisp(float x, float y, u_char alpha)      /* 2835
     ds.alpha = (u_char)(ds.alpha * alpha >> 7);                         /* 2865 */
 
     DispSprD(&ds);                                                      /* 2866 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_file.h).  The screen
+ *  shows the list or a viewer and asks; every answer is this file's own --
+ *  the cursor, the tabs and the pictures' cross-fade as MenuFileTopPad()
+ *  moves them, opening and reading a file, the reader's pages and the
+ *  viewers' steps as their pads turn them, the cues, leaving.
+ * ------------------------------------------------------------------------ */
+
+/* The tab list's answers, as MenuFileTopPad(). */
+static void MenuFileRmlTopPad(int command, int arg)
+{
+    int    file_type;
+    int    file_id;
+    int    disp_num;
+    u_char load_flg;
+    int    i;
+
+    file_type = menu_file_ctrl.tag_csr;
+    disp_num  = menu_file_ctrl.ref_ctrl[file_type].data_num;
+    if (MENU_FILE_DISP_NUM < disp_num) {
+        disp_num = MENU_FILE_DISP_NUM;
+    }
+
+    load_flg = 0;
+    switch (command) {
+    case MIOPAN_RML_MENU_FILE_UP:
+        load_flg = (MenuRefMovePadLup(&menu_file_ctrl.ref_ctrl[file_type],
+                                      &menu_file_ctrl.top_csr[file_type],
+                                      disp_num, MENU_FILE_DISP_NUM) != 0);
+        break;
+    case MIOPAN_RML_MENU_FILE_DOWN:
+        load_flg = (MenuRefMovePadLdown(&menu_file_ctrl.ref_ctrl[file_type],
+                                        &menu_file_ctrl.top_csr[file_type],
+                                        disp_num, MENU_FILE_DISP_NUM) != 0);
+        break;
+    /* A row pointed at: stepped to the pad's way. */
+    case MIOPAN_RML_MENU_FILE_ROW:
+        for (i = 0; (i < MENU_FILE_DISP_NUM) &&
+                    (menu_file_ctrl.top_csr[file_type] != arg) &&
+                    (arg >= 0) && (arg < disp_num); i++) {
+            if (arg < menu_file_ctrl.top_csr[file_type]) {
+                load_flg |= (MenuRefMovePadLup(&menu_file_ctrl.ref_ctrl[file_type],
+                                               &menu_file_ctrl.top_csr[file_type],
+                                               disp_num, MENU_FILE_DISP_NUM) != 0);
+            }
+            else {
+                load_flg |= (MenuRefMovePadLdown(&menu_file_ctrl.ref_ctrl[file_type],
+                                                 &menu_file_ctrl.top_csr[file_type],
+                                                 disp_num, MENU_FILE_DISP_NUM) != 0);
+            }
+        }
+        break;
+    /* The tabs, skipping any with nothing in it. */
+    case MIOPAN_RML_MENU_FILE_TAB_PREV:
+    case MIOPAN_RML_MENU_FILE_TAB_NEXT:
+        for (i = 0; i < FILE_TYPE_MAX; i++) {
+            menu_file_ctrl.tag_csr =
+                (command == MIOPAN_RML_MENU_FILE_TAB_PREV)
+                    ? (menu_file_ctrl.tag_csr + FILE_TYPE_MAX - 1) % FILE_TYPE_MAX
+                    : (menu_file_ctrl.tag_csr + 1) % FILE_TYPE_MAX;
+            if (menu_file_ctrl.ref_ctrl[menu_file_ctrl.tag_csr].data_num != 0) {
+                break;
+            }
+        }
+        if (i != FILE_TYPE_MAX) {
+            load_flg = 1;
+        }
+        break;
+    /* A tab clicked: straight to it, if it holds anything. */
+    case MIOPAN_RML_MENU_FILE_TAB:
+        if ((arg >= 0) && (arg < FILE_TYPE_MAX) && (arg != menu_file_ctrl.tag_csr) &&
+            (menu_file_ctrl.ref_ctrl[arg].data_num != 0)) {
+            menu_file_ctrl.tag_csr = arg;
+            load_flg = 1;
+        }
+        break;
+    case MIOPAN_RML_MENU_FILE_CHOOSE:
+        SystemBankPlay(SE_DECIDE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        file_id = GetMenuFileDispFileID(file_type,
+                                        menu_file_ctrl.ref_ctrl[file_type].data_pos);
+        FileRead(file_type, file_id);
+        MenuFileModeMoveReq((char)menu_file_ctrl.tag_csr);
+        break;
+    case MIOPAN_RML_MENU_FILE_BACK:
+        SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        MenuFileOutReq();
+        break;
+    default:
+        break;
+    }
+
+    if (load_flg != 0) {
+        SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        file_type = menu_file_ctrl.tag_csr;
+        file_id   = GetMenuFileDispFileID(file_type,
+                                          menu_file_ctrl.ref_ctrl[file_type].data_pos);
+        MenuCrossFadeOutStart(menu_file_ctrl.cross_fade_flg);
+        menu_file_ctrl.cross_fade_flg ^= 1;
+        MenuCrossFadeInStart(menu_file_ctrl.cross_fade_flg,
+                             GetFileTexId(file_type, file_id));
+    }
+}
+
+/* The reader's answers, as MenuFilePocketBookPad(): both ways wrap, and
+ * the cue only when the page moved.  SetMsgPage() stands in for MesSetNextPage() and
+ * MesSetBeforePage(), which only step while PrintMsg_P() is drawing the
+ * message -- the screen draws it here. */
+static void MenuFileRmlDocumentPad(int command)
+{
+    int file_type;
+    int file_id;
+    int page_num;
+    int pages;
+
+    file_type = menu_file_ctrl.tag_csr;
+    file_id   = GetMenuFileDispFileID(file_type,
+                                      menu_file_ctrl.ref_ctrl[file_type].data_pos);
+    pages     = GetMsgPageNum(msg_type_tbl[file_type],
+                              file_id * FILE_MSG_PER_FILE + FILE_MSG_DATA);
+    page_num  = GetNowMsgPageNum();
+
+    if (command == MIOPAN_RML_MENU_FILE_PREV) {
+        if (GetNowMsgPageNum() == 0) {
+            SetMsgPage((char)(pages - 1));
+        }
+        else {
+            SetMsgPage((char)(GetNowMsgPageNum() - 1));
+        }
+    }
+    else if (command == MIOPAN_RML_MENU_FILE_NEXT) {
+        if (GetNowMsgPageNum() == pages - 1) {
+            SetMsgPage(0);
+        }
+        else {
+            SetMsgPage((char)(GetNowMsgPageNum() + 1));
+        }
+    }
+    else if (command == MIOPAN_RML_MENU_FILE_BACK) {
+        SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        MenuFileModeMoveReq(MENU_FILE_MODE_TOP);
+        return;
+    }
+    if (page_num != GetNowMsgPageNum()) {
+        SystemBankPlay(SE_PAGE, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+    }
+}
+
+/* The photograph and map viewers' answers, as MenuFilePhotoGraphPad() and
+ * MenuFileMapPad(): a step marks the file it lands on read. */
+static void MenuFileRmlViewerPad(int command, int pict_base)
+{
+    u_char load_flg;
+    int    file_type;
+    int    file_id;
+    int    disp_num;
+
+    file_type = menu_file_ctrl.tag_csr;
+    load_flg  = 0;
+    disp_num  = menu_file_ctrl.ref_ctrl[file_type].data_num;
+    if (MENU_FILE_DISP_NUM < disp_num) {
+        disp_num = MENU_FILE_DISP_NUM;
+    }
+
+    if (command == MIOPAN_RML_MENU_FILE_PREV || command == MIOPAN_RML_MENU_FILE_NEXT) {
+        if (command == MIOPAN_RML_MENU_FILE_PREV) {
+            load_flg = (MenuRefMovePadLup(&menu_file_ctrl.ref_ctrl[file_type],
+                                          &menu_file_ctrl.top_csr[file_type],
+                                          disp_num, MENU_FILE_DISP_NUM) != 0);
+        }
+        else {
+            load_flg = (MenuRefMovePadLdown(&menu_file_ctrl.ref_ctrl[file_type],
+                                            &menu_file_ctrl.top_csr[file_type],
+                                            disp_num, MENU_FILE_DISP_NUM) != 0);
+        }
+        file_id = GetMenuFileDispFileID(file_type,
+                                        menu_file_ctrl.ref_ctrl[file_type].data_pos);
+        FileRead(file_type, file_id);
+    }
+    else if (command == MIOPAN_RML_MENU_FILE_BACK) {
+        SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        MenuFileModeMoveReq(MENU_FILE_MODE_TOP);
+    }
+
+    if (load_flg != 0) {
+        SystemBankPlay(SE_CURSOR, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+        file_id = GetMenuFileDispFileID(file_type,
+                                        menu_file_ctrl.ref_ctrl[file_type].data_pos);
+        MenuCrossFadeOutStart(menu_file_ctrl.cross_fade_flg);
+        menu_file_ctrl.cross_fade_flg ^= 1;
+        MenuCrossFadeInStart(menu_file_ctrl.cross_fade_flg, file_id + pict_base);
+    }
+}
+
+static void MenuFileRmlPad(void)
+{
+    int arg;
+    const int command = MioPan_RmlMenuFileConsumeCommand(&arg);
+
+    switch (menu_file_ctrl.mode) {
+    case MENU_FILE_MODE_POCKETBOOK:
+    case MENU_FILE_MODE_SCRAP:
+    case MENU_FILE_MODE_OLDBOOK:
+        MenuFileRmlDocumentPad(command);
+        break;
+    case MENU_FILE_MODE_PHOTOGRAPH:
+        MenuFileRmlViewerPad(command, PHT_DTL_000_TM2);
+        break;
+    case MENU_FILE_MODE_MAP:
+        MenuFileRmlViewerPad(command, PIC_DTL_000_TM2);
+        break;
+    case MENU_FILE_MODE_TOP:
+        MenuFileRmlTopPad(command, arg);
+        break;
+    /* As MenuFileNoHavePad(): only the way back. */
+    default:
+        if (command == MIOPAN_RML_MENU_FILE_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, (SND_3D_SET *)nullptr, 0x3200, 0x1000);
+            MenuFileOutReq();
+        }
+        break;
+    }
+}
+
+/* The screen up for this frame: the list or the viewer as the mode holds
+ * it, the mode's fade -- run here as MenuFileDisp() runs it -- and the
+ * picture's cross-fade, gated as MenuFileTopPictureDisp() gates it for the
+ * list and as the viewers' centre pictures gate it on the mode's step. */
+static int MenuFileRmlDisp(u_char alpha)
+{
+    MIOPAN_RML_MENU_FILE page;
+    u_char sub_alpha;
+    u_char fade_alpha[MENU_CROSS_FADE_NUM];
+    int    file_type;
+    int    disp_num;
+    int    gated;
+    int    slot;
+    int    i;
+
+    if (MioPan_RmlMenuFileReady() == 0) {
+        return 0;
+    }
+
+    sub_alpha = 0;
+    MenuInOutAnimCtrl(&menu_file_disp.sub_anim_step, &menu_file_disp.sub_anim_timer,
+                      &sub_alpha);
+
+    memset(&page, 0, sizeof(page));
+
+    file_type = menu_file_ctrl.tag_csr;
+    disp_num  = menu_file_ctrl.ref_ctrl[file_type].data_num;
+    if (MENU_FILE_DISP_NUM < disp_num) {
+        disp_num = MENU_FILE_DISP_NUM;
+    }
+
+    switch (menu_file_ctrl.mode) {
+    case MENU_FILE_MODE_POCKETBOOK:
+    case MENU_FILE_MODE_SCRAP:
+    case MENU_FILE_MODE_OLDBOOK:   page.mode = MIOPAN_RML_MENU_FILE_DOCUMENT; break;
+    case MENU_FILE_MODE_PHOTOGRAPH: page.mode = MIOPAN_RML_MENU_FILE_PHOTO;    break;
+    case MENU_FILE_MODE_MAP:       page.mode = MIOPAN_RML_MENU_FILE_MAP;      break;
+    case MENU_FILE_MODE_TOP:       page.mode = MIOPAN_RML_MENU_FILE_LIST;     break;
+    default:                       page.mode = MIOPAN_RML_MENU_FILE_EMPTY;    break;
+    }
+    page.closing    = menu_wrk.step != MENU_FILE_STEP_MAIN;
+    page.busy       = menu_file_ctrl.sub_step != MENU_FILE_SUB_MAIN;
+    page.mode_alpha = ((menu_file_ctrl.sub_step == MENU_FILE_SUB_MAIN ||
+                        menu_file_ctrl.sub_step == MENU_FILE_SUB_MOVE) &&
+                       menu_file_disp.sub_anim_step != MENU_FILE_ANIM_END)
+                          ? sub_alpha : 0;
+    page.tab    = file_type;
+    page.cursor = menu_file_ctrl.top_csr[file_type];
+    page.start  = menu_file_ctrl.ref_ctrl[file_type].disp_start_pos;
+    page.count  = menu_file_ctrl.ref_ctrl[file_type].data_num;
+    page.bank   = msg_type_tbl[file_type];
+    for (i = 0; i < FILE_TYPE_MAX && i < MIOPAN_RML_MENU_FILE_TABS; i++) {
+        page.tab_count[i] = menu_file_ctrl.ref_ctrl[i].data_num;
+    }
+    for (i = 0; i < disp_num; i++) {
+        page.file[i]   = GetMenuFileDispFileID(file_type, page.start + i);
+        page.unread[i] = GetMenuFileDispFileState(file_type, page.start + i)
+                         == FILE_STATE_HAVE;
+    }
+    page.prev_file = -1;
+    page.next_file = -1;
+    page.pak_cmn   = file_cmn_tex_addr;
+    page.pak_top   = file_top_tex_addr;
+
+    if (page.mode != MIOPAN_RML_MENU_FILE_EMPTY && disp_num != 0) {
+        page.selected = GetMenuFileDispFileID(file_type,
+                                              menu_file_ctrl.ref_ctrl[file_type].data_pos);
+        page.caption  = GetMenuFileDispFileState(file_type,
+                                                 menu_file_ctrl.top_csr[file_type])
+                        != FILE_STATE_NONE;
+        page.page     = GetNowMsgPageNum();
+        page.pages    = GetMsgPageNum(msg_type_tbl[file_type],
+                                      page.selected * FILE_MSG_PER_FILE + FILE_MSG_DATA);
+
+        /* The viewers name their neighbours as their thumbnails do, by
+         * stepping the cursor there and back. */
+        if ((page.mode == MIOPAN_RML_MENU_FILE_PHOTO || page.mode == MIOPAN_RML_MENU_FILE_MAP)
+            && 1 < menu_file_ctrl.ref_ctrl[file_type].data_num) {
+            MenuRefMovePadLup(&menu_file_ctrl.ref_ctrl[file_type],
+                              &menu_file_ctrl.top_csr[file_type], disp_num,
+                              MENU_FILE_DISP_NUM);
+            page.prev_file = GetMenuFileDispFileID(
+                file_type, menu_file_ctrl.ref_ctrl[file_type].data_pos);
+            MenuRefMovePadLdown(&menu_file_ctrl.ref_ctrl[file_type],
+                                &menu_file_ctrl.top_csr[file_type], disp_num,
+                                MENU_FILE_DISP_NUM);
+            MenuRefMovePadLdown(&menu_file_ctrl.ref_ctrl[file_type],
+                                &menu_file_ctrl.top_csr[file_type], disp_num,
+                                MENU_FILE_DISP_NUM);
+            page.next_file = GetMenuFileDispFileID(
+                file_type, menu_file_ctrl.ref_ctrl[file_type].data_pos);
+            MenuRefMovePadLup(&menu_file_ctrl.ref_ctrl[file_type],
+                              &menu_file_ctrl.top_csr[file_type], disp_num,
+                              MENU_FILE_DISP_NUM);
+        }
+
+        if (page.mode == MIOPAN_RML_MENU_FILE_LIST ||
+            page.mode == MIOPAN_RML_MENU_FILE_PHOTO ||
+            page.mode == MIOPAN_RML_MENU_FILE_MAP) {
+            gated = (page.mode == MIOPAN_RML_MENU_FILE_LIST)
+                        ? (menu_wrk.step != MENU_FILE_STEP_MAIN)
+                        : (menu_file_ctrl.sub_step != MENU_FILE_SUB_MAIN);
+            fade_alpha[0] = 0;
+            fade_alpha[1] = 0;
+            GetMenuCrossFadeAlpha(fade_alpha);
+            if (gated) {
+                fade_alpha[menu_file_ctrl.cross_fade_flg ^ 1] = 0;
+                fade_alpha[menu_file_ctrl.cross_fade_flg]     = sub_alpha;
+            }
+            for (i = 0; i < 2; i++) {
+                slot = menu_file_ctrl.cross_fade_flg ^ (i == 0 ? 1 : 0);
+                if ((CheckCrossFadeDisp(slot) != 0) && (fade_alpha[slot] != 0)) {
+                    page.picture[i]       = GetCrossFadeDataAddr(slot);
+                    page.picture_alpha[i] = fade_alpha[slot];
+                }
+            }
+        }
+    }
+
+    switch (menu_file_ctrl.mode) {
+    case MENU_FILE_MODE_POCKETBOOK:
+    case MENU_FILE_MODE_SCRAP:
+    case MENU_FILE_MODE_OLDBOOK:
+        page.pak_view = file_doc_tex_addr;
+        break;
+    case MENU_FILE_MODE_PHOTOGRAPH:
+        page.pak_view  = file_photo_tex_addr;
+        page.pak_small = photo_small_tex_addr;
+        break;
+    case MENU_FILE_MODE_MAP:
+        page.pak_view  = file_map_tex_addr;
+        page.pak_small = map_small_tex_addr;
+        break;
+    default:
+        break;
+    }
+
+    return MioPan_RmlMenuFileShow(&page);
 }

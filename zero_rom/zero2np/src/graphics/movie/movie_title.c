@@ -290,3 +290,26 @@ void MovieTitleBaseDisp(float x, float y, float w, u_char alp, u_int pri) /* 314
 void MovieTitleEnd(void)                                                /* 363 */
 {
 }                                                                       /* 371 */
+
+/* --------------------------------------------------------------------------
+ *  PORT: whether MovieTitleDispMain() would print `msg_id` at all -- the same
+ *  test it makes first -- for a screen that prints the line itself (the
+ *  RmlUi radio page).
+ * ------------------------------------------------------------------------ */
+int MovieTitleCheckDisp(int msg_id)
+{
+    int i;
+
+    if (opt_wrk.credits == 1)
+    {
+        return 1;
+    }
+    for (i = 0; every_disp_subtitles[i] != -1; i++)
+    {
+        if (every_disp_subtitles[i] == msg_id)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}

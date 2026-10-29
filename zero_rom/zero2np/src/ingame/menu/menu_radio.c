@@ -142,6 +142,7 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_radio.h" // the RmlUi page (port)
 
 #include <stdio.h>                              /* printf                     */
 #include <string.h>                             /* memset                     */
@@ -339,6 +340,14 @@ static void MenuRadioNonSelFrameDisp(float x, float y, u_char alpha);
 static void MenuRadioNoHearFrameDisp(float x, float y, u_char alpha);
 static void MenuRadioCrystalTitleDebugPad(void);
 static void MenuRadioCrystalTitleTimerDebugDisp(void);
+static void MenuRadioRmlPad(void);
+static int  MenuRadioRmlDisp(u_char alpha);
+
+/* PORT: while the RmlUi page is up, MenuRadioLoadCrystalDisp() still runs
+ * the stone's animation, and its two drawers note what they would draw here
+ * instead of drawing it. */
+static MIOPAN_RML_MENU_RADIO *menu_radio_rml_capture;
+static int menu_radio_rml_stones;
 
 /* --------------------------------------------------------------------------
  *  Entry / exit
@@ -462,17 +471,34 @@ void MenuRadio(void)                                                     /* 312 
     if (menu_wrk.step == MENU_RADIO_STEP_MAIN) {                        /* 344 */
         switch (menu_radio_ctrl.sub_step) {                             /* 345 */
         case MENU_RADIO_SUB_SEL:
-            MenuRadioPad();                                             /* 347 */
+            /* PORT: the RmlUi page's input in place of the pad's, here and
+             * in the other two sub-steps. */
+            if (MioPan_RmlMenuRadioIsShown() != 0) {
+                MenuRadioRmlPad();
+            }
+            else {
+                MenuRadioPad();                                         /* 347 */
+            }
             break;                                                      /* 348 */
 
         case MENU_RADIO_SUB_PLAY:
-            MenuRadioCrystalPlayPad();                                  /* 350 */
+            if (MioPan_RmlMenuRadioIsShown() != 0) {
+                MenuRadioRmlPad();
+            }
+            else {
+                MenuRadioCrystalPlayPad();                              /* 350 */
+            }
 
             MenuRadioCrystalTitleDebugPad();                            /* 352 */
             break;                                                      /* 354 */
 
         case MENU_RADIO_SUB_NO_CRYSTAL:
-            MenuRadioNoHaveCrystalPad();                                /* 356 */
+            if (MioPan_RmlMenuRadioIsShown() != 0) {
+                MenuRadioRmlPad();
+            }
+            else {
+                MenuRadioNoHaveCrystalPad();                            /* 356 */
+            }
             break;                                                      /* 357 */
 
         default:
@@ -729,6 +755,12 @@ void MenuRadioDisp(void)                                                 /* 607 
         if (menu_radio_disp.anim_step != MENU_RADIO_ANIM_END) {         /* 619 */
             MenuInOutAnimCtrl(&menu_radio_disp.anim_step,
                               &menu_radio_disp.anim_timer, &alpha);     /* 621 */
+
+            /* PORT: the RmlUi page in place of everything below; the fade
+             * above still paces the hand-back. */
+            if (MenuRadioRmlDisp(alpha) != 0) {
+                return;
+            }
 
             MenuRadioBgDisp(0, 0, alpha);                               /* 624 */
 
@@ -1310,6 +1342,17 @@ static void MenuRadioCrystalDisp(int off_x, int off_y, u_char alpha,
 {
     DISP_SPRT crystal_ds;
 
+    /* PORT: noted for the RmlUi page rather than drawn. */
+    if (menu_radio_rml_capture != nullptr) {
+        if (menu_radio_rml_stones < 2) {
+            menu_radio_rml_capture->stone[menu_radio_rml_stones] = pk2_addr;
+            menu_radio_rml_capture->stone_alpha[menu_radio_rml_stones] =
+                menu_radio_tex[MR_CRYSTAL].alpha * alpha >> 7;
+            menu_radio_rml_stones++;
+        }
+        return;
+    }
+
     PK2SendVram((uintptr_t)pk2_addr, -1, -1, 0);                        /* 1226 */
 
     CopySprDToSpr(&crystal_ds, &menu_radio_tex[MR_CRYSTAL]);            /* 1230 */
@@ -1325,6 +1368,13 @@ static void MenuRadioCrystalFlareDisp(int off_x, int off_y, u_char alpha,
 {
     int       i;
     DISP_SPRT flare_ds;
+
+    /* PORT: noted for the RmlUi page rather than drawn. */
+    if (menu_radio_rml_capture != nullptr) {
+        menu_radio_rml_capture->flare       = pk2_addr;
+        menu_radio_rml_capture->flare_alpha = alpha;
+        return;
+    }
 
     PK2SendVram((uintptr_t)pk2_addr, -1, -1, 0);                        /* 1250 */
 
@@ -1523,4 +1573,204 @@ static void MenuRadioCrystalTitleTimerDebugDisp(void)                    /* 1533
     SetASCIIString2(0, 470.0f, 10.0f, 1, 0xff, 0xff, 0xff, "TIMER");    /* 1538 */
 
     PrintNumber(menu_radio_disp.title_timer, 0x226, 10, 0, 0x80, 0, 1); /* 1539 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_radio.h).  The screen
+ *  shows the list and asks; every answer is this file's own -- the cursor
+ *  and the stones' cross-fade as MenuRadioPad() moves them, starting and
+ *  stopping a recording, the cues, leaving.
+ * ------------------------------------------------------------------------ */
+
+/* Start the recording of the stone under the cursor, as MenuRadioPad()'s
+ * CROSS does -- once its picture has loaded. */
+static void MenuRadioRmlPlay(void)
+{
+    int play_stream_data;
+
+    if (CheckCrossFadeDisp(menu_radio_ctrl.cross_fade_flg) == 0) {
+        return;
+    }
+
+    HearCrystal(disp_crystal_data[menu_radio_ctrl.ref_ctrl.data_pos].crystal_id);
+
+    play_stream_data = GetCrystalStreamID(
+        disp_crystal_data[menu_radio_ctrl.ref_ctrl.data_pos].crystal_id);
+
+    MenuRadioStreamStop();
+
+    menu_radio_stream_id = StreamAutoPlay(play_stream_data, play_stream_data - 1,
+                                          RADIO_STREAM_PRIORITY, 0, 0,
+                                          RADIO_STREAM_VOL, 0, nullptr);
+
+    menu_radio_disp.title_timer        = 0;
+    menu_radio_disp.crystal_anim_step  = MENU_RADIO_CRYSTAL_ANIM_START;
+    menu_radio_disp.crystal_anim_timer = 0;
+
+    menu_radio_ctrl.sub_step = MENU_RADIO_SUB_PLAY;
+}
+
+static void MenuRadioRmlPad(void)
+{
+    int   arg;
+    int   i;
+    short disp_num;
+    char  load_flg;
+    const int command = MioPan_RmlMenuRadioConsumeCommand(&arg);
+
+    disp_num = menu_radio_ctrl.ref_ctrl.data_num;
+    if (MENU_RADIO_DISP_NUM < disp_num) {
+        disp_num = MENU_RADIO_DISP_NUM;
+    }
+
+    switch (menu_radio_ctrl.sub_step) {
+    case MENU_RADIO_SUB_SEL:
+        load_flg = 0;
+        switch (command) {
+        case MIOPAN_RML_MENU_RADIO_UP:
+            load_flg = (MenuRefMovePadLup(&menu_radio_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                          disp_num, MENU_RADIO_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_RADIO_DOWN:
+            load_flg = (MenuRefMovePadLdown(&menu_radio_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                            disp_num, MENU_RADIO_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_RADIO_PAGE_UP:
+            load_flg = (MenuRefMovePageUp(&menu_radio_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                          disp_num, MENU_RADIO_DISP_NUM) != 0);
+            break;
+        case MIOPAN_RML_MENU_RADIO_PAGE_DOWN:
+            load_flg = (MenuRefMovePageDown(&menu_radio_ctrl.ref_ctrl, &menu_wrk.cursor,
+                                            disp_num, MENU_RADIO_DISP_NUM) != 0);
+            break;
+        /* A row pointed at: stepped to the pad's way, the stones
+         * cross-fading once to where it ends. */
+        case MIOPAN_RML_MENU_RADIO_ROW:
+            for (i = 0; (i < MENU_RADIO_DISP_NUM) && (menu_wrk.cursor != arg) &&
+                        (arg >= 0) && (arg < disp_num); i++) {
+                if (arg < menu_wrk.cursor) {
+                    load_flg |= (MenuRefMovePadLup(&menu_radio_ctrl.ref_ctrl,
+                                                   &menu_wrk.cursor, disp_num,
+                                                   MENU_RADIO_DISP_NUM) != 0);
+                }
+                else {
+                    load_flg |= (MenuRefMovePadLdown(&menu_radio_ctrl.ref_ctrl,
+                                                     &menu_wrk.cursor, disp_num,
+                                                     MENU_RADIO_DISP_NUM) != 0);
+                }
+            }
+            break;
+        case MIOPAN_RML_MENU_RADIO_CHOOSE:
+            MenuRadioRmlPlay();
+            break;
+        case MIOPAN_RML_MENU_RADIO_BACK:
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, RADIO_STREAM_VOL, 0x1000);
+            menu_wrk.step              = MENU_RADIO_STEP_OUT;
+            menu_radio_disp.anim_step  = MENU_RADIO_ANIM_OUT;
+            menu_radio_disp.anim_timer = 0;
+            break;
+        default:
+            break;
+        }
+        if (load_flg != 0) {
+            SystemBankPlay(SE_CURSOR, 1, 0, 0, nullptr, RADIO_STREAM_VOL, 0x1000);
+            MenuCrossFadeOutStart(menu_radio_ctrl.cross_fade_flg);
+            menu_radio_ctrl.cross_fade_flg ^= 1;
+            MenuCrossFadeInStart(
+                menu_radio_ctrl.cross_fade_flg,
+                disp_crystal_data[menu_radio_ctrl.ref_ctrl.data_pos].crystal_id
+                    + RADIO_CRYSTAL_01_PK2);
+            menu_radio_disp.crystal_anim_step = MENU_RADIO_CRYSTAL_ANIM_END;
+        }
+        break;
+
+    /* As MenuRadioCrystalPlayPad(): stopped, or run out. */
+    case MENU_RADIO_SUB_PLAY:
+        if (command == MIOPAN_RML_MENU_RADIO_STOP) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, RADIO_STREAM_VOL, 0x1000);
+            MenuRadioStreamStop();
+            menu_radio_disp.crystal_anim_step  = MENU_RADIO_CRYSTAL_ANIM_OUT;
+            menu_radio_disp.crystal_anim_timer = 0;
+            menu_radio_ctrl.sub_step = MENU_RADIO_SUB_SEL;
+        }
+        else if (StreamAutoIsPlaying(menu_radio_stream_id) == 0) {
+            menu_radio_stream_id = -1;
+            menu_radio_disp.crystal_anim_step  = MENU_RADIO_CRYSTAL_ANIM_OUT;
+            menu_radio_disp.crystal_anim_timer = 0;
+            menu_radio_ctrl.sub_step = MENU_RADIO_SUB_SEL;
+        }
+        break;
+
+    /* As MenuRadioNoHaveCrystalPad(): only the way back. */
+    default:
+        if (command == MIOPAN_RML_MENU_RADIO_BACK) {
+            SystemBankPlay(SE_CANCEL, 1, 0, 0, nullptr, RADIO_STREAM_VOL, 0x1000);
+            menu_wrk.step              = MENU_RADIO_STEP_OUT;
+            menu_radio_disp.anim_step  = MENU_RADIO_ANIM_OUT;
+            menu_radio_disp.anim_timer = 0;
+        }
+        break;
+    }
+}
+
+/* The screen up for this frame: the rows shown, the stone under the cursor
+ * as MenuRadioLoadCrystalDisp() animates it -- run here for its animation,
+ * its drawers noting what they would draw -- and a playing recording's line,
+ * walked on as MenuRadioCrystalPlayDisp() walks it. */
+static int MenuRadioRmlDisp(u_char alpha)
+{
+    MIOPAN_RML_MENU_RADIO page;
+    MOVIE_TITLE_DAT *data;
+    short disp_num;
+    int   tbl_pos;
+    int   i;
+
+    if (MioPan_RmlMenuRadioReady() == 0) {
+        return 0;
+    }
+
+    memset(&page, 0, sizeof(page));
+
+    disp_num = menu_radio_ctrl.ref_ctrl.data_num;
+    if (MENU_RADIO_DISP_NUM < disp_num) {
+        disp_num = MENU_RADIO_DISP_NUM;
+    }
+
+    switch (menu_radio_ctrl.sub_step) {
+    case MENU_RADIO_SUB_PLAY:       page.mode = MIOPAN_RML_MENU_RADIO_PLAY;  break;
+    case MENU_RADIO_SUB_NO_CRYSTAL: page.mode = MIOPAN_RML_MENU_RADIO_EMPTY; break;
+    default:                        page.mode = MIOPAN_RML_MENU_RADIO_LIST;  break;
+    }
+    page.closing  = menu_wrk.step != MENU_RADIO_STEP_MAIN;
+    page.cursor   = menu_wrk.cursor;
+    page.start    = menu_radio_ctrl.ref_ctrl.disp_start_pos;
+    page.count    = menu_radio_ctrl.ref_ctrl.data_num;
+    page.subtitle = -1;
+    for (i = 0; i < disp_num; i++) {
+        page.crystal[i] =
+            disp_crystal_data[menu_radio_ctrl.ref_ctrl.disp_start_pos + i].crystal_id;
+        page.unheard[i] = GetPlyrCrystalState(page.crystal[i]) == CRYSTAL_STATE_HAVE;
+    }
+    page.pak = menu_radio_tex_addr;
+
+    if (menu_radio_ctrl.sub_step != MENU_RADIO_SUB_NO_CRYSTAL) {
+        page.selected =
+            disp_crystal_data[menu_radio_ctrl.ref_ctrl.data_pos].crystal_id;
+
+        menu_radio_rml_capture = &page;
+        menu_radio_rml_stones  = 0;
+        MenuRadioLoadCrystalDisp(0, 0, alpha);
+        menu_radio_rml_capture = nullptr;
+
+        if (menu_radio_ctrl.sub_step == MENU_RADIO_SUB_PLAY) {
+            data    = GetCrystalTitleDat(page.selected);
+            tbl_pos = GetMovieTitleDatTblPos(data, menu_radio_disp.title_timer);
+            if ((tbl_pos != -1) && (MovieTitleCheckDisp(data[tbl_pos].msg_id) != 0)) {
+                page.subtitle = data[tbl_pos].msg_id;
+            }
+            menu_radio_disp.title_timer++;
+        }
+    }
+
+    return MioPan_RmlMenuRadioShow(&page);
 }

@@ -11,20 +11,6 @@
     position: absolute;
 }
 
-/* The scrollbar's arrows pulse, as Zero2Anim2D_CsrAnimCtrl() pulses them. */
-.scroll-arrow
-{
-    position: absolute;
-    cursor: pointer;
-    animation: 0.5s cubic-in-out infinite alternate arrow-pulse;
-}
-
-@keyframes arrow-pulse
-{
-    from { opacity: 0.5; }
-    to   { opacity: 1; }
-}
-
 /* ---- the list ---------------------------------------------------------- */
 
 /* A row's place, over its art, for the pointer. */
@@ -71,45 +57,4 @@
     line-height: 1.405;
     color: #ddd6c8;
     font-effect: outline(1dp #0c0806);
-}
-
-/* ---- the game's windows ------------------------------------------------ */
-
-/* DrawCmnWindow()'s: black glass between gold rails. */
-.menu-window
-{
-    position: absolute;
-    background-color: #050302e8;
-    border-top: 0.2em #b8913e;
-    border-bottom: 0.2em #b8913e;
-    decorator: vertical-gradient(#1a120af0 #050302f0);
-}
-
-.window-text
-{
-    position: absolute;
-    font-size: 1.9em;
-    line-height: 1.35em;
-    color: #f2ebe0;
-}
-
-.window-choice
-{
-    position: absolute;
-    text-align: center;
-    font-size: 2em;
-    line-height: 1.5em;
-    font-style: italic;
-    letter-spacing: 0.1em;
-    color: #e3c27a;
-    font-effect: outline(1dp #1c1006);
-    cursor: pointer;
-}
-
-/* DrawCmnSelCsr()'s amber bar under the answer. */
-.window-choice.selected
-{
-    color: #fff2c8;
-    decorator: image(images/cursor_bar.png);
-    font-effect: outline(1dp #3a1c04), glow(0dp 4dp 0dp 0dp #ffb04a70);
 }

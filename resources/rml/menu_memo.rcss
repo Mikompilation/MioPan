@@ -1,0 +1,56 @@
+/*
+ * The Memo page, as menu_memo.c lays it out: the notebook with the memos'
+ * titles brushed on it, the list on the row frames over it, and the reader
+ * that opens a memo a page at a time.
+ */
+
+/* The list or the reader, on the fade between them. */
+.memo-mode
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+}
+
+/* The reader's window: the notebook it opened from dim behind it. */
+.reader-window
+{
+    decorator: vertical-gradient(#1a120a98 #050302b8);
+}
+
+/* "- title -" across the top of the reader, as PrintMsg_Arrange() centres
+ * it on x 320. */
+.reader-title
+{
+    position: absolute;
+    text-align: center;
+    font-size: 2.1em;
+    line-height: 1.35;
+    letter-spacing: 0.04em;
+    color: #f2d58e;
+    font-effect: outline(1dp #1c1006);
+    white-space: nowrap;
+}
+
+/* The memo's page in the game's own lines, 25 of its pixels apart. */
+.reader-body
+{
+    position: absolute;
+    font-size: 1.9em;
+    line-height: 1.32;
+    color: #f2ebe0;
+    font-effect: outline(1dp #0c0806);
+}
+
+/* "- n / total -" under it. */
+.reader-count
+{
+    position: absolute;
+    text-align: center;
+    font-size: 1.9em;
+    line-height: 1.35;
+    color: #ddd6c8;
+    white-space: nowrap;
+}

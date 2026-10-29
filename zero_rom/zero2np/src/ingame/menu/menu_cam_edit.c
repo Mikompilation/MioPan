@@ -125,6 +125,7 @@
 #include "../../graphics/graph2d/draw_cmn.h"    /* DrawCmnWindow / CapGroup_W */
 #include "../../graphics/graph2d/g2d_draw.h"    /* DISP_SPRT / DISP_SQAR      */
 #include "../../graphics/graph2d/message.h"     /* PrintMsg / PrintNumber_N   */
+#include "../../miopan/miopan_ui/miopan_rml_menu_cam_edit.h" // the RmlUi page (port)
 #include "../../graphics/graph2d/tim2.h"        /* PK2SendVram                */
 #include "../../graphics/graph3d/ctl/fixed_array.h"  /* fixed_array           */
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET                 */
@@ -427,6 +428,24 @@ static void MenuCamEditScrollDisp(int off_x, int off_y, u_char alpha);
 static void MenuCamEditMsgWindowDisp(int off_x, int off_y, u_char alpha);
 static void MenuCamEditConfYesNoDisp(int off_x, int off_y, u_char alpha);
 static void MenuCamEditCaptionDisp(int off_x, int off_y, u_char alpha);
+static void MenuCamEditRmlPad(void);
+static int  MenuCamEditRmlShow(void);
+
+/* PORT: the RmlUi page is up this frame -- it has the title, the window, its
+ * line, the questions' Yes / No and the hints, and this file leaves them out
+ * of its drawing, noting the line instead of printing it. */
+static int menu_cam_edit_rml;
+static int menu_cam_edit_rml_line;
+
+static void MenuCamEditPrintLine(int msg_type, int msg_id, int x, int y,
+                                 int col, u_char alpha, int pri)
+{
+    if (menu_cam_edit_rml != 0) {
+        menu_cam_edit_rml_line = msg_id;
+        return;
+    }
+    PrintMsg(msg_type, msg_id, x, y, col, alpha, pri);
+}
 
 /* --------------------------------------------------------------------------
  *  Data
@@ -573,7 +592,11 @@ int MenuCamEditMain(void)                                               /* 446 *
 
     if (menu_cam_edit_ctrl.step == MENU_CAM_EDIT_STEP_MAIN) {           /* 460 */
         if (menu_cam_edit_ctrl.gem_anim_flg == 0) {                     /* 461 */
-            if (menu_cam_edit_pad[menu_cam_edit_ctrl.mode] != nullptr) { /* 463 */
+            /* PORT: the RmlUi page's input, as presses of this pad. */
+            if (MioPan_RmlMenuCamEditIsShown() != 0) {
+                MenuCamEditRmlPad();
+            }
+            else if (menu_cam_edit_pad[menu_cam_edit_ctrl.mode] != nullptr) { /* 463 */
                 (*menu_cam_edit_pad[menu_cam_edit_ctrl.mode])();        /* 464 */
             }
         }
@@ -1723,10 +1746,17 @@ void MenuCamEditDisp(void)                                              /* 1470 
                                           MENU_CAM_EDIT_FADE_OUT_TIME); /* 1479 */
 
         if (menu_cam_edit_disp.anim_step != MENU_CAM_EDIT_ANIM_END) {   /* 1481 */
+            menu_cam_edit_rml      = MioPan_RmlMenuCamEditReady();   /* PORT */
+            menu_cam_edit_rml_line = -1;
+
             if (menu_cam_edit_disp_func[menu_cam_edit_ctrl.mode]
                 != nullptr) {                                           /* 1482 */
                 (*menu_cam_edit_disp_func[menu_cam_edit_ctrl.mode])(
                     0, 0, alpha);                                       /* 1483 */
+            }
+
+            if (menu_cam_edit_rml != 0) {   /* PORT */
+                MenuCamEditRmlShow();
             }
         }
     }
@@ -1757,7 +1787,7 @@ static void MenuCamEditSelMenuDisp(int off_x, int off_y, u_char alpha)   /* 1501
     MenuCamEditBaseGemDisp(off_x, off_y, alpha);                        /* 1523 */
     MenuCamEditLensGemDisp(off_x, off_y, alpha);                        /* 1526 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, msg_id[menu_cam_edit_ctrl.menu_csr],
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, msg_id[menu_cam_edit_ctrl.menu_csr],
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1530 */
 }
 
@@ -1771,7 +1801,7 @@ static void MenuCamEditLensNothingErrorDisp(int off_x, int off_y,
     MenuCamEditBaseGemDisp(off_x, off_y, alpha);                        /* 1557 */
     MenuCamEditLensGemDisp(off_x, off_y, alpha);                        /* 1560 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, MSG_LENS_NOTHING,
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_LENS_NOTHING,
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1564 */
 }
 
@@ -1807,7 +1837,7 @@ static void MenuCamEditSelLensEquipPosDisp(int off_x, int off_y,
     MenuCamEditBaseGemDisp(off_x, off_y, alpha);                        /* 1610 */
     MenuCamEditLensGemDisp(off_x, off_y, alpha);                        /* 1613 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, MSG_SEL_LENS_EQUIP_POS,
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_SEL_LENS_EQUIP_POS,
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1616 */
 }
 
@@ -1880,7 +1910,7 @@ static void MenuCamEditSelEquipLensDisp(int off_x, int off_y,
 
     if (lens_msg_tbl[disp_lens_data[menu_cam_edit_ctrl.ref_ctrl.data_pos]
                          .lens_label] != -1) {
-        PrintMsg(MENU_CAM_MSG_TYPE,
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE,
                  lens_msg_tbl[disp_lens_data[
                      menu_cam_edit_ctrl.ref_ctrl.data_pos].lens_label],
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);
@@ -1900,12 +1930,12 @@ static void MenuCamEditSelGemAddPosDisp(int off_x, int off_y,
     MenuCamEditGemAddCmnDisp(off_x, off_y, alpha);                      /* 1716 */
 
     if (menu_cam_edit_ctrl.edit_sel_csr < MENU_CAM_BASIC_NUM) {         /* 1719 */
-        PrintMsg(MENU_CAM_MSG_TYPE,
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE,
                  base_msg_tbl[menu_cam_edit_ctrl.edit_sel_csr],
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);
     }
     else if (lens_msg_tbl[lens_label] != -1) {
-        PrintMsg(MENU_CAM_MSG_TYPE, lens_msg_tbl[lens_label],
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, lens_msg_tbl[lens_label],
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);
     }
 }
@@ -1917,11 +1947,11 @@ static void MenuCamEditGemAddConfDisp(int off_x, int off_y,
     MenuCamEditConfYesNoDisp(off_x, off_y, alpha);                      /* 1747 */
 
     if (menu_cam_edit_ctrl.edit_sel_csr < MENU_CAM_BASIC_NUM) {         /* 1750 */
-        PrintMsg(MENU_CAM_MSG_TYPE, MSG_GEM_ADD_CONF_BASE,
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_GEM_ADD_CONF_BASE,
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);    /* 1752 */
     }
     else {
-        PrintMsg(MENU_CAM_MSG_TYPE, MSG_GEM_ADD_CONF_LENS,
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_GEM_ADD_CONF_LENS,
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);
     }
 }
@@ -1931,7 +1961,7 @@ static void MenuCamEditGemAddErrorDisp(int off_x, int off_y,
 {
     MenuCamEditGemAddCmnDisp(off_x, off_y, alpha);                      /* 1773 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, MSG_GEM_ADD_ERR,
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_GEM_ADD_ERR,
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1776 */
 }
 
@@ -1940,7 +1970,7 @@ static void MenuCamEditGemNothingErrorDisp(int off_x, int off_y,
 {
     MenuCamEditGemAddCmnDisp(off_x, off_y, alpha);                      /* 1791 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, MSG_GEM_NOTHING,
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_GEM_NOTHING,
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1794 */
 }
 
@@ -1961,11 +1991,11 @@ static void MenuCamEditSelPowerUpPosDisp(int off_x, int off_y,
     if (menu_cam_edit_ctrl.edit_sel_csr < MENU_CAM_BASIC_NUM) {         /* 1816 */
         if (GetMenuCamBasicLv(menu_cam_edit_ctrl.edit_sel_csr)
             == MENU_CAM_LV_MAX) {                                       /* 1818 */
-            PrintMsg(MENU_CAM_MSG_TYPE, MSG_LV_MAX,
+            MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_LV_MAX,
                      off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0); /* 1820 */
         }
         else {
-            PrintMsg(MENU_CAM_MSG_TYPE,
+            MenuCamEditPrintLine(MENU_CAM_MSG_TYPE,
                      MSG_BASIC_DESC_BASE
                          + menu_cam_edit_ctrl.edit_sel_csr * 3
                          + GetMenuCamBasicLv(
@@ -1976,11 +2006,11 @@ static void MenuCamEditSelPowerUpPosDisp(int off_x, int off_y,
     else {
         if (m_plyr_camera.eq_tray.mSave.mSubFuncLv[lens_label].Get()
             == MENU_CAM_LV_MAX) {
-            PrintMsg(MENU_CAM_MSG_TYPE, MSG_LV_MAX,
+            MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_LV_MAX,
                      off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0); /* 1832 */
         }
         else {
-            PrintMsg(MENU_CAM_MSG_TYPE,
+            MenuCamEditPrintLine(MENU_CAM_MSG_TYPE,
                      MSG_LENS_DESC_BASE + lens_label * 3
                          + m_plyr_camera.eq_tray.mSave
                                .mSubFuncLv[lens_label].Get(),
@@ -1996,11 +2026,11 @@ static void MenuCamEditPowerUpConfDisp(int off_x, int off_y,
     MenuCamEditConfYesNoDisp(off_x, off_y, alpha);                      /* 1856 */
 
     if (menu_cam_edit_ctrl.edit_sel_csr < MENU_CAM_BASIC_NUM) {         /* 1859 */
-        PrintMsg(MENU_CAM_MSG_TYPE, MSG_POWER_UP_CONF_BASE,
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_POWER_UP_CONF_BASE,
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);    /* 1861 */
     }
     else {
-        PrintMsg(MENU_CAM_MSG_TYPE, MSG_POWER_UP_CONF_LENS,
+        MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_POWER_UP_CONF_LENS,
                  off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);
     }
 }
@@ -2010,7 +2040,7 @@ static void MenuCamEditPowerUpLvMaxErrorDisp(int off_x, int off_y,
 {
     MenuCamEditPowerUpCmnDisp(off_x, off_y, alpha);                     /* 1882 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, MSG_POWER_UP_LV_MAX,
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_POWER_UP_LV_MAX,
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1885 */
 }
 
@@ -2019,7 +2049,7 @@ static void MenuCamEditPowerUpNothingErrorDisp(int off_x, int off_y,
 {
     MenuCamEditPowerUpCmnDisp(off_x, off_y, alpha);                     /* 1900 */
 
-    PrintMsg(MENU_CAM_MSG_TYPE, MSG_POWER_UP_NOTHING,
+    MenuCamEditPrintLine(MENU_CAM_MSG_TYPE, MSG_POWER_UP_NOTHING,
              off_x + MSG_OFF_X, off_y + MSG_OFF_Y, 1, alpha, 0);        /* 1903 */
 }
 
@@ -2204,6 +2234,9 @@ static void MenuCamEditTitleFrameDisp(int off_x, int off_y,
 static void MenuCamEditTitleDisp(int off_x, int off_y, u_char alpha)   /* 2158 */
 {
     DISP_SPRT title_ds;
+    if (menu_cam_edit_rml != 0) {   /* PORT: the page's crisp title */
+        return;
+    }
 
     CopySprDToSpr(&title_ds, &menu_camera_tex[MCE_TEX_TITLE]);          /* 2164 */
 
@@ -3495,6 +3528,9 @@ static void MenuCamEditScrollDisp(int off_x, int off_y, u_char alpha)   /* 3470 
 static void MenuCamEditMsgWindowDisp(int off_x, int off_y,
                                      u_char alpha)                     /* 3574 */
 {
+    if (menu_cam_edit_rml != 0) {   /* PORT: the page's window */
+        return;
+    }
     DrawCmnWindow(0, (float)(off_x + 0x18), (float)(off_y + 0x160),
                   592.0f, 100.0f, alpha, 0x66);                         /* 3578 */
 }
@@ -3502,6 +3538,9 @@ static void MenuCamEditMsgWindowDisp(int off_x, int off_y,
 static void MenuCamEditConfYesNoDisp(int off_x, int off_y,
                                      u_char alpha)                     /* 3589 */
 {
+    if (menu_cam_edit_rml != 0) {   /* PORT: the page's Yes / No */
+        return;
+    }
     DrawCmnSelCsr(0,
                   (float)(menu_cam_edit_ctrl.conf_csr * 0xce + off_x + 0x9b),
                   (float)(off_y + 0x193), alpha, 0.0f, 0);              /* 3594 */
@@ -3515,5 +3554,217 @@ static void MenuCamEditConfYesNoDisp(int off_x, int off_y,
 
 static void MenuCamEditCaptionDisp(int off_x, int off_y, u_char alpha) /* 3609 */
 {
+    if (menu_cam_edit_rml != 0) {   /* PORT: the page's hints */
+        return;
+    }
     DrawCmnCapGroup_W(0, 0, alpha, 0);                                  /* 3612 */
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_cam_edit.h).  This file
+ *  still draws the editor's art and still decides everything.  The screen's
+ *  commands come back here as the one press of the game's pad each stands
+ *  for, laid over the (suppressed, so empty) pad for the length of one call
+ *  of the mode's own pad function -- so every cursor ladder, purchase and
+ *  question is the editor's own code, cues and all.
+ * ------------------------------------------------------------------------ */
+
+#define MCE_RML_PRESS_CROSS     0x10000
+#define MCE_RML_PRESS_TRIANGLE  0x20000
+
+/* Run the mode's pad once with `press` held for this frame only: direction
+ * bits in now / one / rpt, CROSS and TRIANGLE through their action
+ * counters. */
+static void MenuCamEditRmlPress(int press)
+{
+    PAD_STRUCT saved;
+    u_short    cross;
+    u_short    triangle;
+    u_short    bits;
+
+    if (menu_cam_edit_pad[menu_cam_edit_ctrl.mode] == nullptr) {
+        return;
+    }
+
+    saved    = pad[0];
+    cross    = *paddat[0];
+    triangle = *paddat[1];
+
+    bits = (u_short)(press & 0xffff);
+    pad[0].now = bits;
+    pad[0].one = bits;
+    pad[0].rpt = bits;
+    *paddat[0] = (press & MCE_RML_PRESS_CROSS) != 0 ? 1 : 0;
+    *paddat[1] = (press & MCE_RML_PRESS_TRIANGLE) != 0 ? 1 : 0;
+
+    (*menu_cam_edit_pad[menu_cam_edit_ctrl.mode])();
+
+    *paddat[0] = cross;
+    *paddat[1] = triangle;
+    pad[0] = saved;
+}
+
+/* Where the editor's cursor is among the places this mode offers the
+ * pointer, and those places, as its own mouse code lays them out. */
+static int MenuCamEditRmlPlaces(MIOPAN_RML_MENU_CAM_EDIT *page)
+{
+    int i;
+    int count;
+    int disp_num;
+
+    disp_num = menu_cam_edit_ctrl.ref_ctrl.data_num;
+    if (disp_num > MENU_CAM_EDIT_LIST_DISP_NUM) {
+        disp_num = MENU_CAM_EDIT_LIST_DISP_NUM;
+    }
+
+    count = 0;
+    switch (menu_cam_edit_ctrl.mode) {
+    case MENU_CAM_EDIT_MODE_SEL_MENU:
+        for (i = 0; i < MENU_CAM_EDIT_ROW_NUM; i++, count++) {
+            if (page != nullptr) {
+                page->hit[count][0] = MENU_ROW_X;
+                page->hit[count][1] = MENU_ROW_TOP + 1.0f + i * MENU_ROW_PITCH;
+                page->hit[count][2] = MENU_ROW_W;
+                page->hit[count][3] = MENU_ROW_PITCH;
+            }
+        }
+        if (page != nullptr) {
+            page->hits = count;
+        }
+        return menu_cam_edit_ctrl.menu_csr;
+
+    case MENU_CAM_EDIT_MODE_SEL_LENS_EQUIP_POS:
+        count = GetEquipReinforcedLensNum() + 1;
+        if (count > EQUIP_SPECIAL_NUM) {
+            count = EQUIP_SPECIAL_NUM;
+        }
+        for (i = 0; page != nullptr && i < count; i++) {
+            page->hit[i][0] = SLOT_FRAME_X + 6.0f + i * SLOT_PITCH;
+            page->hit[i][1] = SLOT_FRAME_Y - 3.0f;
+            page->hit[i][2] = SLOT_PITCH;
+            page->hit[i][3] = 62.0f;
+        }
+        if (page != nullptr) {
+            page->hits   = count;
+            page->across = 1;
+        }
+        return menu_cam_edit_ctrl.equip_pos_csr;
+
+    case MENU_CAM_EDIT_MODE_EQUIP_LENS_SEL:
+        for (i = 0; page != nullptr && i < disp_num; i++) {
+            page->hit[i][0] = (float)ROW_BG_X;
+            page->hit[i][1] = LENS_ROW_TOP - 2.0f + i * ROW_PITCH;
+            page->hit[i][2] = (float)ROW_BG_W;
+            page->hit[i][3] = ROW_PITCH;
+        }
+        if (page != nullptr) {
+            page->hits = disp_num;
+        }
+        return menu_cam_edit_ctrl.lens_csr;
+
+    /* The combined list: the three basic rows, then the lens rows shown. */
+    case MENU_CAM_EDIT_MODE_SEL_GEM_ADD_POS:
+    case MENU_CAM_EDIT_MODE_SEL_POWER_UP_POS:
+        for (i = 0; page != nullptr && i < MENU_CAM_BASIC_NUM + disp_num; i++) {
+            page->hit[i][0] = (float)ROW_BG_X;
+            page->hit[i][1] = (i < MENU_CAM_BASIC_NUM)
+                                  ? BASE_ROW_TOP - 2.0f + i * ROW_PITCH
+                                  : LENS_ROW_TOP - 2.0f + (i - MENU_CAM_BASIC_NUM) * ROW_PITCH;
+            page->hit[i][2] = (float)ROW_BG_W;
+            page->hit[i][3] = ROW_PITCH;
+        }
+        if (page != nullptr) {
+            page->hits = MENU_CAM_BASIC_NUM + disp_num;
+        }
+        if (menu_cam_edit_ctrl.edit_sel_csr < MENU_CAM_BASIC_NUM) {
+            return menu_cam_edit_ctrl.edit_sel_csr;
+        }
+        return MENU_CAM_BASIC_NUM + menu_cam_edit_ctrl.ref_ctrl.data_pos
+               - menu_cam_edit_ctrl.ref_ctrl.disp_start_pos;
+
+    default:
+        return -1;
+    }
+}
+
+static void MenuCamEditRmlPad(void)
+{
+    int arg;
+    int at;
+    int was;
+    int i;
+    int across;
+    const int command = MioPan_RmlMenuCamEditConsumeCommand(&arg);
+
+    switch (command) {
+    case MIOPAN_RML_MENU_CAM_EDIT_UP:     MenuCamEditRmlPress(PAD_RPT_UP);    break;
+    case MIOPAN_RML_MENU_CAM_EDIT_DOWN:   MenuCamEditRmlPress(PAD_RPT_DOWN);  break;
+    case MIOPAN_RML_MENU_CAM_EDIT_LEFT:   MenuCamEditRmlPress(PAD_RPT_LEFT);  break;
+    case MIOPAN_RML_MENU_CAM_EDIT_RIGHT:  MenuCamEditRmlPress(PAD_RPT_RIGHT); break;
+    case MIOPAN_RML_MENU_CAM_EDIT_CHOOSE: MenuCamEditRmlPress(MCE_RML_PRESS_CROSS);    break;
+    case MIOPAN_RML_MENU_CAM_EDIT_BACK:   MenuCamEditRmlPress(MCE_RML_PRESS_TRIANGLE); break;
+
+    /* A place pointed at: walked to a press at a time, as the editor's own
+     * mouse steps its lists, until the cursor is there or stops moving. */
+    case MIOPAN_RML_MENU_CAM_EDIT_ROW:
+        across = menu_cam_edit_ctrl.mode == MENU_CAM_EDIT_MODE_SEL_LENS_EQUIP_POS;
+        for (i = 0; i < 16; i++) {
+            at = MenuCamEditRmlPlaces(nullptr);
+            if (at < 0 || at == arg) {
+                break;
+            }
+            MenuCamEditRmlPress(arg < at ? (across ? PAD_RPT_LEFT : PAD_RPT_UP)
+                                         : (across ? PAD_RPT_RIGHT : PAD_RPT_DOWN));
+            was = at;
+            if (MenuCamEditRmlPlaces(nullptr) == was) {
+                break;
+            }
+        }
+        break;
+
+    /* Yes or No clicked: the cursor over to it, then CROSS. */
+    case MIOPAN_RML_MENU_CAM_EDIT_ANSWER:
+        if (menu_cam_edit_ctrl.conf_csr != arg) {
+            MenuCamEditRmlPress(PAD_RPT_LEFT);
+        }
+        MenuCamEditRmlPress(MCE_RML_PRESS_CROSS);
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* The screen up for this frame, the editor's art already drawn and its line
+ * noted: what kind of mode this is, its places and cursor, a question's
+ * answer. */
+static int MenuCamEditRmlShow(void)
+{
+    MIOPAN_RML_MENU_CAM_EDIT page;
+
+    memset(&page, 0, sizeof(page));
+    page.closing = menu_cam_edit_ctrl.step != MENU_CAM_EDIT_STEP_MAIN;
+    page.busy    = menu_cam_edit_ctrl.gem_anim_flg != 0;
+    page.line    = menu_cam_edit_rml_line;
+    page.answer  = menu_cam_edit_ctrl.conf_csr;
+
+    switch (menu_cam_edit_ctrl.mode) {
+    case MENU_CAM_EDIT_MODE_GEM_ADD_CONF:
+    case MENU_CAM_EDIT_MODE_POWER_UP_CONF:
+        page.kind = MIOPAN_RML_MENU_CAM_EDIT_CONFIRM;
+        break;
+    case MENU_CAM_EDIT_MODE_LENS_NOTHING_ERR:
+    case MENU_CAM_EDIT_MODE_GEM_ADD_ERR:
+    case MENU_CAM_EDIT_MODE_GEM_NOTHING_ERR:
+    case MENU_CAM_EDIT_MODE_POWER_UP_LV_MAX_ERR:
+    case MENU_CAM_EDIT_MODE_POWER_UP_NOTHING_ERR:
+        page.kind = MIOPAN_RML_MENU_CAM_EDIT_NOTICE;
+        break;
+    default:
+        page.kind   = MIOPAN_RML_MENU_CAM_EDIT_PICK;
+        page.hit_at = MenuCamEditRmlPlaces(&page);
+        break;
+    }
+
+    return MioPan_RmlMenuCamEditShow(&page);
 }

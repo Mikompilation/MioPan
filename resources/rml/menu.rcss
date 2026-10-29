@@ -41,6 +41,26 @@
     height: 0;
 }
 
+/* What Zero2Anim2D_CsrAnimCtrl() pulses: a scrollbar's arrows, a cursor's
+ * triangles. */
+.scroll-arrow
+{
+    position: absolute;
+    cursor: pointer;
+    animation: 0.5s cubic-in-out infinite alternate arrow-pulse;
+}
+
+.pulse
+{
+    animation: 0.5s cubic-in-out infinite alternate arrow-pulse;
+}
+
+@keyframes arrow-pulse
+{
+    from { opacity: 0.5; }
+    to   { opacity: 1; }
+}
+
 /* ---- the gold lettering of the game's plates --------------------------- */
 
 .menu-title,
@@ -60,6 +80,14 @@
     color: #f2d58e;
 }
 
+/* A long title kept on its plate: "Function Upgrades". */
+.menu-title.long
+{
+    font-size: 2.1em;
+    line-height: 1.5em;
+    letter-spacing: 0.05em;
+}
+
 /* ---- the status plate (miopan_rml_menu_status.cpp) --------------------- */
 
 .plate
@@ -75,27 +103,6 @@
     line-height: 1.1em;
     color: #eee2c6;
     font-effect: outline(1dp #1c1006);
-}
-
-/* ---- the caption window along the bottom ------------------------------ */
-
-/* DrawCmnWindow()'s: black glass between gold rails. */
-.caption
-{
-    position: absolute;
-    box-sizing: border-box;
-    padding: 2.2em 2.4em 0 2.4em;
-    background-color: #050302d0;
-    border-top: 0.2em #b8913e;
-    border-bottom: 0.2em #b8913e;
-    decorator: vertical-gradient(#1a120ad8 #050302e0);
-}
-
-.caption p
-{
-    font-size: 1.9em;
-    line-height: 1.35em;
-    color: #f2ebe0;
 }
 
 /* ---- button hints, where the game puts its own ------------------------ */
@@ -127,4 +134,93 @@
     color: #f2ebe0;
     border-color: #b8913e;
     background-color: #1b1213e0;
+}
+
+/* ---- the game's windows ------------------------------------------------ */
+
+/* DrawCmnWindow()'s glass, inside the gold frame miopan_rml_menu_art.cpp
+ * lays over its edges from the game's own art: dark, but the page shows
+ * through it, as the game's 0x66 lets it. */
+.menu-window
+{
+    position: absolute;
+    decorator: vertical-gradient(#1a120aa8 #050302c4);
+}
+
+/* DrawCmnTwoLineWindow()'s band between its rounded ends: black at 0.8. */
+.menu-glass
+{
+    position: absolute;
+    background-color: #000000cc;
+}
+
+.window-text
+{
+    position: absolute;
+    font-size: 1.9em;
+    line-height: 1.35em;
+    color: #f2ebe0;
+}
+
+.window-choice
+{
+    position: absolute;
+    text-align: center;
+    font-size: 2em;
+    line-height: 1.5em;
+    font-style: italic;
+    letter-spacing: 0.1em;
+    color: #e3c27a;
+    font-effect: outline(1dp #1c1006);
+    cursor: pointer;
+}
+
+/* DrawCmnSelCsr()'s amber bar under the answer. */
+.window-choice.selected
+{
+    color: #fff2c8;
+    decorator: image(images/cursor_bar.png);
+    font-effect: outline(1dp #3a1c04), glow(0dp 4dp 0dp 0dp #ffb04a70);
+}
+
+/* ---- list rows on the game's row frames -------------------------------- */
+
+/* A line the height of the row frame, 33 of the game's pixels. */
+.row-text
+{
+    position: absolute;
+    font-size: 2.05em;
+    line-height: 1.6;
+    letter-spacing: 0.04em;
+    color: #eadb9e;
+    font-effect: outline(1dp #1c1006);
+    white-space: nowrap;
+}
+
+.row-text.lit
+{
+    color: #fff1ea;
+    font-effect: outline(1dp #4a1e08);
+}
+
+/* Centred in its box, as PrintMsg_Arrange() centres a line. */
+.centred
+{
+    text-align: center;
+}
+
+/* A row's place, over its art, for the pointer. */
+.row-hit
+{
+    position: absolute;
+    cursor: pointer;
+}
+
+/* The caption window's line along the bottom of a list page. */
+.caption-text
+{
+    position: absolute;
+    font-size: 1.9em;
+    line-height: 1.35;
+    color: #f2ebe0;
 }

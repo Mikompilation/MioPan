@@ -69,6 +69,8 @@ bool UsingPad();
 /* What the connected pad calls `button` -- "Cross", "A", "L1", "RB" -- or the
  * DUALSHOCK name when no pad is open. */
 const char *PadButtonName(SDL_GamepadButton button);
+/* The two triggers' names, as one prompt shows them: L2 / R2 or LT / RT. */
+const char *PadTriggersName();
 /* Whether the mouse was the last thing the player used.  RmlUi re-runs hover
  * whenever content moves under a resting pointer -- a list scrolled by the
  * pad, a screen opening where the pointer happens to be -- so a screen lets

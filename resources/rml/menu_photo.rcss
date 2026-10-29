@@ -1,0 +1,22 @@
+/*
+ * The Photo page, as menu_photo.c lays it out: the album's cells, the
+ * enlarged photograph in its frame, the data window, and the pop-ups.
+ */
+
+/* MenuPhotoLargePhotoWinDisp()'s dark red bed under the photograph, at
+ * 0x33. */
+.photo-bed
+{
+    position: absolute;
+    background-color: #130c0866;
+}
+
+/* What the data window says, in the game's ink, message colour 2. */
+.photo-ink
+{
+    position: absolute;
+    font-size: 1.9em;
+    line-height: 1.3;
+    color: #271a0b;
+    white-space: nowrap;
+}

@@ -407,8 +407,17 @@ std::string Window()
         break;
     default: return std::string();
     }
-    std::string rml = "<div id=\"item-window\" class=\"menu-window\" style=\"" +
-                      Place(kWindowX, kWindowY, kWindowW, kWindowH) + "\"></div>";
+    /* The empty page's line in message 0x36's own window. */
+    if (page.mode == MIOPAN_RML_MENU_ITEM_EMPTY)
+    {
+        using namespace MioPanRmlMenuArt;
+        return MioPanRmlMenuArt::Window(g_item.scale, kNoticeX, kNoticeY, kNoticeW, kNoticeH,
+                                        "item-window") +
+               Text(g_item.scale, MioPanGameText::Message(msg_type, msg_id), kNoticeTextX,
+                    kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
+    }
+    std::string rml = MioPanRmlMenuArt::Window(g_item.scale, kWindowX, kWindowY, kWindowW,
+                                               kWindowH, "item-window");
     rml += Text(g_item.scale,
                 MioPanRmlCommon::NameButtonIcons(MioPanGameText::Message(msg_type, msg_id)),
                 68, 196, 520, "window-text");

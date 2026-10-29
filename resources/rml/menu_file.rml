@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>File</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="menu.rcss"/>
+    <link type="text/rcss" href="menu_file.rcss"/>
+</head>
+<body id="menu-file">
+    <!-- Over the menu's shoji backdrop, which the game still draws: the game's
+         own picture, composed by miopan_rml_menu_file.cpp. -->
+    <div id="stage" class="stage"></div>
+</body>
+</rml>

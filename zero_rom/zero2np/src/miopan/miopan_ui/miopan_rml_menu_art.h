@@ -49,6 +49,30 @@ std::string ImageIn(const Scale &scale, const std::string &src, float x, float y
  * draw them: a cap, a stretched run and the other cap. */
 std::string RailAcross(const Scale &scale, float x, float y, float w);
 std::string RailDown(const Scale &scale, float x, float y, float h);
+/* A list row's frame, lit under the cursor or dim, as MenuCmnSelFrameDisp()
+ * and MenuCmnNonSelFrameDisp() draw it: a half and its mirror, each scaled
+ * to half of `w`. */
+std::string RowFrame(const Scale &scale, float x, float y, float w, bool lit);
+/* DrawCmnWindow()'s window over x, y, w, h: its glass -- menu.rcss's
+ * .menu-window, with `id` and `cls` on it when they are given -- and its gold
+ * frame. */
+std::string Window(const Scale &scale, float x, float y, float w, float h,
+                   const char *id = nullptr, const char *cls = nullptr);
+/* Decode the windows' frame art out of the boot's resident 2D pak while it
+ * still holds it -- MioPan_RmlMenuArtKeepResident(), from the boot. */
+void KeepResidentArt();
+/* DrawCmnTwoLineWindow()'s: a band with rounded ends and a line above and
+ * below. */
+std::string TwoLineWindow(const Scale &scale, float x, float y, float w, float h);
+/* Where the game opens the window a page with nothing in it shows its line
+ * in -- "No items.", "No notes." -- message 0x36's own window, and where the
+ * line starts in it. */
+constexpr float kNoticeX = 145.0f;
+constexpr float kNoticeY = 207.0f;
+constexpr float kNoticeW = 353.0f;
+constexpr float kNoticeH = 62.0f;
+constexpr float kNoticeTextX = 175.0f;
+constexpr float kNoticeTextY = 222.0f;
 /* `text` (UTF-8, escaped here) in a box at x, y, `width` wide, with `cls` for
  * its look -- where the game prints a number or a line. */
 std::string Text(const Scale &scale, const std::string &text, float x, float y,
@@ -57,5 +81,7 @@ std::string Text(const Scale &scale, const std::string &text, float x, float y,
 std::string Number(const Scale &scale, const std::string &text, float x, float y,
                    float width, const char *cls);
 }
+
+extern "C" void MioPan_RmlMenuArtKeepResident(void);
 
 #endif

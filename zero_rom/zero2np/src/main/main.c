@@ -353,6 +353,10 @@ void end_Boot_Init(void)
 {
 }
 
+/* PORT: the RmlUi menus decode their windows' frame art out of the resident
+ * 2D pak while it is still there (miopan_rml_menu_art.h). */
+extern "C" void MioPan_RmlMenuArtKeepResident(void);
+
 // Wait for every queued load to finish, blit the loaded image to VRAM, then
 // advance to the pad-check phase.
 GPHASE_ENUM one_Boot_Init(GPHASE_ENUM dummy)
@@ -360,6 +364,7 @@ GPHASE_ENUM one_Boot_Init(GPHASE_ENUM dummy)
     if (IsLoadEndAll() != 0)
     {
         PK2SendVram(PACKET2D_ADDR, -1, -1, 0);
+        MioPan_RmlMenuArtKeepResident();   /* PORT */
         SetNextGPhase(GID_BOOT_PADCHECK);
     }
 

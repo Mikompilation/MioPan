@@ -94,7 +94,11 @@ std::string PromptsRml(const Prompt *prompts, int count)
             rml += "\"";
         }
         std::string key = pad ? MioPanRml::PadButtonName(prompt.pad) : prompt.key;
-        if (pad && prompt.pad_pair != SDL_GAMEPAD_BUTTON_INVALID)
+        if (pad && prompt.pad_text != nullptr)
+        {
+            key = prompt.pad_text;
+        }
+        else if (pad && prompt.pad_pair != SDL_GAMEPAD_BUTTON_INVALID)
         {
             key += " / ";
             key += MioPanRml::PadButtonName(prompt.pad_pair);

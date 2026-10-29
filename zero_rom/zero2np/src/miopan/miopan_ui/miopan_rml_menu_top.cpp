@@ -54,6 +54,8 @@ constexpr int kCaptionX = 24;
 constexpr int kCaptionY = 346;
 constexpr int kCaptionW = 592;
 constexpr int kCaptionH = 100;
+constexpr int kCaptionTextX = 48;
+constexpr int kCaptionTextY = 366;
 
 /* menu_top[]: the title's two plates; the play-data sheet and the cap over
  * the chapter's pillar.  menu_cmn_dat[]: a row's frame, lit and dim, each a
@@ -216,9 +218,10 @@ std::string Stage()
            Place(kStatusX, kStatusY, 300, 70) + "\"></div>";
 
     /* The caption window along the bottom, and the hints over the top. */
-    rml += "<div class=\"caption\" style=\"" +
-           Place(kCaptionX, kCaptionY, kCaptionW, kCaptionH) +
-           "\"><p id=\"help\"></p></div>";
+    rml += MioPanRmlMenuArt::Window(scale, kCaptionX, kCaptionY, kCaptionW, kCaptionH);
+    rml += "<p id=\"help\" class=\"caption-text\" style=\"" +
+           Place(kCaptionTextX, kCaptionTextY, kCaptionW - 2 * (kCaptionTextX - kCaptionX), 70) +
+           "\"></p>";
     rml += "<div id=\"prompts\" class=\"menu-prompts\" style=\"" +
            Place(330, 30, 300, 30) + "\"></div>";
     return rml;

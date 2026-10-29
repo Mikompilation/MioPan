@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Function Upgrades</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="menu.rcss"/>
+    
+</head>
+<body id="menu-cam-edit">
+    <!-- Over the menu's shoji backdrop, which the game still draws: the game's
+         own picture, composed by miopan_rml_menu_cam_edit.cpp. -->
+    <div id="stage" class="stage"></div>
+</body>
+</rml>

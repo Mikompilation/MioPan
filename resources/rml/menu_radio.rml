@@ -1,0 +1,13 @@
+<rml>
+<head>
+    <title>Radio</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="menu.rcss"/>
+    <link type="text/rcss" href="menu_radio.rcss"/>
+</head>
+<body id="menu-radio">
+    <!-- Over the menu's shoji backdrop, which the game still draws: the game's
+         own picture, composed by miopan_rml_menu_radio.cpp. -->
+    <div id="stage" class="stage"></div>
+</body>
+</rml>

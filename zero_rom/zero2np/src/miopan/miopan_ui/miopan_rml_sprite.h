@@ -35,6 +35,9 @@ struct Look
     int turns = 0;
     /* alphar 0x48, Cs * As + Cd: it adds to what is under it. */
     bool additive = false;
+    /* Only the pak's picture at this index, as PK2SendVramOne() sends one --
+     * a thumbnail out of a pak of them all at the same address; -1 for any. */
+    int picture = -1;
 };
 
 std::string Image(uintptr_t pk2, const SPRT_DAT &sprite, const Look &look);
@@ -46,6 +49,14 @@ std::string Image(uintptr_t pk2, const SPRT_DAT &sprite, int r = 0x80,
  * picture gives another image; decoded only the first time those contents
  * are seen. */
 std::string Picture(const void *tim2);
+/* Its part at u, v, w, h, as a sprite samples a picture streamed into VRAM --
+ * a spirit's photograph. */
+std::string Picture(const void *tim2, int u, int v, int w, int h);
+
+/* A picture the game keeps as bare 32-bit texels rather than a TIM2 -- a
+ * photograph, at `addr` in EE memory, w x h of rows `stride` texels long --
+ * as DrawPhotoBuffer() uploads it.  Named by its contents. */
+std::string Texels(uintptr_t addr, int w, int h, int stride);
 
 void Forget();
 }

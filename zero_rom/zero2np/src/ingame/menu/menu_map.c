@@ -118,6 +118,9 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/miopan_ui/miopan_rml_menu_map.h" // the RmlUi page (port)
+
+#include <string.h>                             /* memset (port)             */
 
 /* --------------------------------------------------------------------------
  *  Constants
@@ -298,6 +301,8 @@ static void MenuMapSnapShotDisp(int off_x, int off_y, u_char alpha);
 static void MenuMapWindowDisp(int off_x, int off_y, u_char alpha);
 static void MenuMapInfoDisp(int off_x, int off_y, u_char alpha);
 static void MenuMapCaptionDisp(int off_x, int off_y, u_char alpha);
+static void MenuMapRmlPad(void);
+static int  MenuMapRmlDisp(u_char alpha);
 
 /* --------------------------------------------------------------------------
  *  Setup
@@ -416,7 +421,13 @@ void MenuMap(void)                                                      /* 398 *
 
     case MENU_MAP_STEP_MAIN:
         if (menu_map_disp.anim_step == MENU_MAP_ANIM_MAIN) {            /* 441 */
-            MenuMapPad();                                               /* 443 */
+            /* PORT: the RmlUi page's input in place of the pad's. */
+            if (MioPan_RmlMenuMapIsShown() != 0) {
+                MenuMapRmlPad();
+            }
+            else {
+                MenuMapPad();                                           /* 443 */
+            }
 
             if ((u_char)menu_map_ctrl.plyr_map < MAP_LABEL_NUM) {
                 MenuCmnCrossFade();                                     /* 445 */
@@ -1183,8 +1194,14 @@ void MenuMapDisp(void)                                                  /* 1262 
     u_char alpha;
     u_long scissor_backup;
     u_char fade_alpha[2];
+    int    rml;
 
     alpha = 0x80;                                                       /* 1269 */
+
+    /* PORT: with the RmlUi page up, this file draws only what lies under the
+     * sheet and the sheet itself; the page has the title and everything
+     * over it. */
+    rml = MioPan_RmlMenuMapReady();
 
     fade_alpha[0] = 0;                                                  /* 1272 */
     fade_alpha[1] = 0;                                                  /* 1273 */
@@ -1194,7 +1211,9 @@ void MenuMapDisp(void)                                                  /* 1262 
         MenuInOutAnimCtrl(&menu_map_disp.anim_step,
                           &menu_map_disp.anim_timer, &alpha);           /* 1280 */
 
-        MenuMapTitleDisp(0, 0, alpha);                                  /* 1282 */
+        if (rml == 0) {
+            MenuMapTitleDisp(0, 0, alpha);                              /* 1282 */
+        }
         MenuMapBaseDisp(0, 0, alpha);                                   /* 1285 */
 
         /* The sheet is the only thing clipped to the viewport; the frame,
@@ -1222,6 +1241,10 @@ void MenuMapDisp(void)                                                  /* 1262 
         }
 
         SetScissorRegister(0, scissor_backup);                          /* 1311 */
+
+        if (rml != 0 && MenuMapRmlDisp(alpha) != 0) {
+            return;
+        }
 
         MenuMapCenterDisp(0, 0, alpha);                                 /* 1314 */
 
@@ -2361,4 +2384,196 @@ static void MenuMapCaptionDisp(int off_x, int off_y, u_char alpha)      /* 2549 
     else if (menu_map_disp.map_scall_flg == MENU_MAP_SCALL_BIG) {       /* 2557 */
         DrawCmnCapGroup_W(2, 2, alpha, 0);                              /* 2558 */
     }
+}
+
+/* --------------------------------------------------------------------------
+ *  PORT DEVIATION: the RmlUi page (miopan_rml_menu_map.h).  The screen lays
+ *  the frame, the arrows, the snapshot and the names over the sheet this
+ *  file still draws, and says what is held and dragged; every move is this
+ *  file's own -- the scroll and its bounds as MenuMapPad() runs them, the
+ *  drag as MenuMapMouse() does, zooming, the floor and area changes and
+ *  their dissolve, leaving.
+ * ------------------------------------------------------------------------ */
+
+/* The sheet dragged under the crosshair by dx, dy of the screen, each way
+ * clamped toward the bound it runs at, as MenuMapMouse() does. */
+static void MenuMapRmlDrag(float dx, float dy)
+{
+    float scale;
+    float size;
+
+    scale = menu_map_disp.map_scall_flg == MENU_MAP_SCALL_BIG ? 2.0f : 1.0f;
+    dx /= scale;
+    dy /= scale;
+
+    menu_map_disp.map_off_x += dx;
+    size = (float)map_size_dat[menu_map_disp.disp_map_label].w
+           * map_scall_dat[menu_map_disp.disp_map_label].normal;
+    if (dx > 0.0f && menu_map_disp.map_off_x > MENU_MAP_SCROLL_MAX_X) {
+        menu_map_disp.map_off_x = MENU_MAP_SCROLL_MAX_X;
+    }
+    else if (dx < 0.0f && menu_map_disp.map_off_x < MENU_MAP_SCROLL_MIN_X - size) {
+        menu_map_disp.map_off_x = MENU_MAP_SCROLL_MIN_X - size;
+    }
+
+    menu_map_disp.map_off_y += dy;
+    size = (float)map_size_dat[menu_map_disp.disp_map_label].h
+           * map_scall_dat[menu_map_disp.disp_map_label].normal;
+    if (dy > 0.0f && menu_map_disp.map_off_y > MENU_MAP_SCROLL_MAX_Y) {
+        menu_map_disp.map_off_y = MENU_MAP_SCROLL_MAX_Y;
+    }
+    else if (dy < 0.0f && menu_map_disp.map_off_y < MENU_MAP_SCROLL_MIN_Y - size) {
+        menu_map_disp.map_off_y = MENU_MAP_SCROLL_MIN_Y - size;
+    }
+}
+
+static void MenuMapRmlPad(void)
+{
+    int    i;
+    int    held;
+    int    command;
+    int    changed;
+    float  dx;
+    float  dy;
+    float  map_size_w;
+    float  map_size_h;
+    u_char fade_alpha[2];
+
+    held    = MioPan_RmlMenuMapHeld();
+    command = MioPan_RmlMenuMapConsumeCommand();
+
+    for (i = 0; i < MENU_MAP_TRI_NUM; i++) {
+        menu_map_disp.tri_pad_flg[i] = 0;
+    }
+
+    fade_alpha[0] = 0;
+    fade_alpha[1] = 0;
+
+    if ((u_char)menu_map_ctrl.plyr_map < MAP_LABEL_NUM) {
+        GetMenuCrossFadeAlpha(fade_alpha);
+
+        /* A way held scrolls on every frame it is held, as the d-pad's `now`
+         * bits do. */
+        if ((held & MIOPAN_RML_MENU_MAP_HELD_UP) != 0) {
+            menu_map_disp.map_off_y += MENU_MAP_SCROLL_SPEED;
+            if (menu_map_disp.map_off_y > MENU_MAP_SCROLL_MAX_Y) {
+                menu_map_disp.map_off_y = MENU_MAP_SCROLL_MAX_Y;
+            }
+            menu_map_disp.tri_pad_flg[MENU_MAP_TRI_UP] = 1;
+        }
+        if ((held & MIOPAN_RML_MENU_MAP_HELD_DOWN) != 0) {
+            menu_map_disp.map_off_y -= MENU_MAP_SCROLL_SPEED;
+            map_size_h = (float)map_size_dat[menu_map_disp.disp_map_label].h
+                         * map_scall_dat[menu_map_disp.disp_map_label].normal;
+            if (menu_map_disp.map_off_y < MENU_MAP_SCROLL_MIN_Y - map_size_h) {
+                menu_map_disp.map_off_y = MENU_MAP_SCROLL_MIN_Y - map_size_h;
+            }
+            menu_map_disp.tri_pad_flg[MENU_MAP_TRI_DOWN] = 1;
+        }
+        if ((held & MIOPAN_RML_MENU_MAP_HELD_LEFT) != 0) {
+            menu_map_disp.map_off_x += MENU_MAP_SCROLL_SPEED;
+            if (menu_map_disp.map_off_x > MENU_MAP_SCROLL_MAX_X) {
+                menu_map_disp.map_off_x = MENU_MAP_SCROLL_MAX_X;
+            }
+            menu_map_disp.tri_pad_flg[MENU_MAP_TRI_LEFT] = 1;
+        }
+        if ((held & MIOPAN_RML_MENU_MAP_HELD_RIGHT) != 0) {
+            menu_map_disp.map_off_x -= MENU_MAP_SCROLL_SPEED;
+            map_size_w = (float)map_size_dat[menu_map_disp.disp_map_label].w
+                         * map_scall_dat[menu_map_disp.disp_map_label].normal;
+            if (menu_map_disp.map_off_x < MENU_MAP_SCROLL_MIN_X - map_size_w) {
+                menu_map_disp.map_off_x = MENU_MAP_SCROLL_MIN_X - map_size_w;
+            }
+            menu_map_disp.tri_pad_flg[MENU_MAP_TRI_RIGHT] = 1;
+        }
+
+        if (MioPan_RmlMenuMapConsumeDrag(&dx, &dy) != 0) {
+            MenuMapRmlDrag(dx, dy);
+        }
+
+        /* Paging waits for the snapshot, and a change for the dissolve to
+         * have settled. */
+        if (menu_map_ctrl.snap_load.step == MENU_MAP_LOAD_END) {
+            changed = 0;
+            switch (command) {
+            case MIOPAN_RML_MENU_MAP_ZOOM:
+                menu_map_disp.map_scall_flg ^= 1;
+                break;
+            case MIOPAN_RML_MENU_MAP_FLOOR_PREV:
+            case MIOPAN_RML_MENU_MAP_FLOOR_NEXT:
+            case MIOPAN_RML_MENU_MAP_AREA_PREV:
+            case MIOPAN_RML_MENU_MAP_AREA_NEXT:
+                if (CheckCrossFadeDisp(menu_map_ctrl.cross_fade_flg) != 0
+                    && fade_alpha[menu_map_ctrl.cross_fade_flg] == 0x80) {
+                    if (command == MIOPAN_RML_MENU_MAP_FLOOR_PREV) {
+                        changed = MenuMapFloorChange(MENU_MAP_CHANGE_PREV);
+                    }
+                    else if (command == MIOPAN_RML_MENU_MAP_FLOOR_NEXT) {
+                        changed = MenuMapFloorChange(MENU_MAP_CHANGE_NEXT);
+                    }
+                    else if (command == MIOPAN_RML_MENU_MAP_AREA_PREV) {
+                        changed = MenuMapChange(MENU_MAP_CHANGE_PREV);
+                    }
+                    else {
+                        changed = MenuMapChange(MENU_MAP_CHANGE_NEXT);
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+            if (changed != 0) {
+                MenuCrossFadeOutStart(menu_map_ctrl.cross_fade_flg);
+                menu_map_ctrl.cross_fade_flg ^= 1;
+                MenuCrossFadeInStart(menu_map_ctrl.cross_fade_flg,
+                                     map_info_dat[menu_map_disp.disp_map_label].map_tex_id);
+                MenuMapDispStartPos();
+            }
+        }
+    }
+    else {
+        MioPan_RmlMenuMapConsumeDrag(&dx, &dy);
+    }
+
+    if (command == MIOPAN_RML_MENU_MAP_BACK) {
+        SystemBankPlay(1, 1, 0, 0, nullptr, 0x3200, 0x1000);
+        MenuMapOutReq();
+    }
+}
+
+/* The screen up for this frame, the sheet already drawn under it: the
+ * arrows' fade as MenuMapCenterDisp() runs it, the snapshot and the names
+ * on MenuMapSnapShotDisp()'s and MenuMapInfoDisp()'s own conditions. */
+static int MenuMapRmlDisp(u_char alpha)
+{
+    MIOPAN_RML_MENU_MAP page;
+    int hit_room;
+
+    memset(&page, 0, sizeof(page));
+
+    MenuMapCenterAnim();
+
+    hit_room = menu_map_ctrl.hit_room;
+
+    page.closing      = menu_wrk.step != MENU_MAP_STEP_MAIN;
+    page.has_map      = (u_char)menu_map_ctrl.plyr_map < MAP_LABEL_NUM;
+    page.area         = menu_map_disp.disp_map_label;
+    page.room         = -1;
+    page.zoomed       = menu_map_disp.map_scall_flg == MENU_MAP_SCALL_BIG;
+    page.arrows_alpha = (menu_wrk.step == MENU_MAP_STEP_MAIN) ? menu_map_disp.tri_alpha : 0;
+    page.pak          = menu_map_bg_addr;
+
+    if (menu_map_disp.disp_map_label != -1) {
+        if ((menu_map_disp.disp_map_label != 0 || MenuMapCheckHouseCondition(hit_room) != 0)
+            && hit_room != -1 && GetRoomInfo(hit_room) == 1) {
+            page.room = hit_room;
+        }
+        if (hit_room != -1 && menu_map_ctrl.snap_load.step == MENU_MAP_LOAD_END
+            && MenuMapCheckHouseCondition(hit_room) != 0 && GetRoomInfo(hit_room) == 1) {
+            page.snap = snap_data_addr;
+        }
+    }
+    (void)alpha;
+
+    return MioPan_RmlMenuMapShow(&page);
 }
