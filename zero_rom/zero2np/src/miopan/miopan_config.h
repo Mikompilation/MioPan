@@ -114,6 +114,9 @@ typedef struct MioPan_ConfigAudio
 {
     float volume;                /* master, 0..1 slider position; gain is its square */
     int   mute_in_background;    /* 0 off, 1 on                              */
+    /* The cast's language, once Options > Special has imported the Japanese
+     * voices (io/miopan_undub.h).  Nothing changes until they are there. */
+    int   japanese_voices;       /* 0 English, 1 Japanese                    */
 } MioPan_ConfigAudio;
 
 /* The F1 overlay. */

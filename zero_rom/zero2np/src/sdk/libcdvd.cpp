@@ -11,6 +11,7 @@
 #include "../miopan/os/miopan_time.h" // MioPan_GetLocalTime (RTC)
 #include "../miopan/io/miopan_file.h" // host file I/O
 #include "../miopan/io/miopan_paths.h" // the data folder
+#include "../miopan/io/miopan_undub.h" // the imported Japanese voices
 
 #define MIOPAN_CD_FILE_LSN_BASE 0x71000000u
 #define MIOPAN_CD_MAX_FILES     64
@@ -180,6 +181,23 @@ static int CdReadSectors(u_int lsn, u_int sectors, void *buf)
         ReportCdFailure("null destination", lsn, sectors, buf);
         cd_last_error = 1;
         return 0;
+    }
+
+    /* The Japanese voices Options > Special imports are not in IMG_BD.BIN:
+     * their CD table rows name sectors past its end, and miopan_undub reads
+     * those from the copies.  A voice stream is read by sector alone, so this
+     * is the only place it can be redirected. */
+    {
+        const int undub = MioPan_UndubRead(lsn, buf, (size_t)sectors * 0x800u);
+        if (undub >= 0)
+        {
+            if (undub == 0)
+            {
+                ReportCdFailure("imported Japanese voice unreadable", lsn, sectors, buf);
+            }
+            cd_last_error = undub != 0 ? 0 : 1;
+            return undub;
+        }
     }
 
     file = FindFileByLsn(lsn);

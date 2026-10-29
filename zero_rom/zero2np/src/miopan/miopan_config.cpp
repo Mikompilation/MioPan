@@ -3,6 +3,7 @@
 #include "io/miopan_file.h"
 #include "io/miopan_input.h"
 #include "io/miopan_paths.h"
+#include "io/miopan_undub.h"
 #include "miopan_ui/miopan_ui.h"
 #include "rendering/miopan_renderer.h"
 #include "iop_voice.h"
@@ -127,6 +128,9 @@ MioPan_Config miopan_config = {
         /* On: alt-tabbing away to read a walkthrough should not leave the
          * Manor's ambience playing over it. */
         /* .mute_in_background = */ 1,
+        /* On: nobody imports the Japanese voices to keep the English ones,
+         * and until they are imported it does nothing. */
+        /* .japanese_voices   = */ 1,
     },
     /* .ui = */ {
         /* .scale             = */ 0.0f,
@@ -1623,6 +1627,7 @@ static void ConfigLoadOnce(void)
     ReadFloat("audio", "volume", &miopan_config.audio.volume);
     ReadInt("audio", "mute_in_background",
             &miopan_config.audio.mute_in_background);
+    ReadInt("audio", "japanese_voices", &miopan_config.audio.japanese_voices);
     ReadFloat("ui", "scale", &miopan_config.ui.scale);
     ReadEnum("render", "mode", kRenderModes, &r->render_mode);
     ReadFloat("render", "scale", &r->render_scale);
@@ -1791,6 +1796,12 @@ int MioPan_ConfigSave(void)
         ";   The game itself carries on -- see [window] pause_in_background\n"
         ";   for stopping it.  0 off, 1 on.\n"
         "mute_in_background = %d\n"
+        "; The cast's language once Options > Special has imported the\n"
+        ";   Japanese voices from a copy of the Japanese release: spoken\n"
+        ";   lines and cutscene soundtracks, with the subtitles retimed to\n"
+        ";   them.  0 English, 1 Japanese.  Nothing changes until they are\n"
+        ";   imported.\n"
+        "japanese_voices = %d\n"
         "\n"
         "[ui]\n"
         "; Size of the F1 overlay.  0 follows the display's own scale setting,\n"
@@ -1985,6 +1996,7 @@ int MioPan_ConfigSave(void)
         r->pause_in_background,
         (double)miopan_config.audio.volume,
         miopan_config.audio.mute_in_background,
+        miopan_config.audio.japanese_voices,
         (double)miopan_config.ui.scale,
         EnumToName(kRenderModes, r->render_mode),
         (double)r->render_scale,
@@ -2236,6 +2248,7 @@ void MioPan_ConfigApply(void)
     MioPan_RendererSetVsync(vsync);
     MioPan_RendererSetPauseInBackground(r->pause_in_background);
     MioPan_RendererSetMuteInBackground(miopan_config.audio.mute_in_background);
+    MioPan_UndubSetEnabled(miopan_config.audio.japanese_voices);
     /* The voice engine may or may not be up yet -- the IOP boots on its own
      * schedule -- and holds the value for its stream either way. */
     MioPan_VoiceSetOutputVolume(volume);
@@ -2286,6 +2299,7 @@ void MioPan_ConfigCapture(void)
     miopan_config.audio.volume = MioPan_VoiceGetOutputVolume();
     miopan_config.audio.mute_in_background =
         MioPan_RendererGetMuteInBackground();
+    miopan_config.audio.japanese_voices = MioPan_UndubGetEnabled();
     miopan_config.ui.scale = MioPanUi::GetScaleOverride();
 
     /* The windowed size, which the renderer latches while the window is not

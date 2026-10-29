@@ -1323,7 +1323,7 @@ void PersistSettingsIfChanged()
      * breaks that rather than letting the compare read indeterminate bytes. */
     static_assert(sizeof(MioPan_ConfigRenderer) == 40 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
-    static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigAudio) == 3 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigUi) == 1 * sizeof(int),
                   "MioPan_ConfigUi gained padding; compare by field");

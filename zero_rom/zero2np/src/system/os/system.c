@@ -90,6 +90,7 @@ int          system_sound_bank_id;          // sdata 3f462c : handle for the sys
 #include "../../debug/zero2_perf.h"          // C_ZERO2_PERF_CNT c_zero2_perf_cnt (sdata 3f4908)
 #include "../../miopan/miopan_memory.h"      // host backing for fixed EE addresses
 #include "../../miopan/io/miopan_xbox_assets.h" // PORT: the converted Xbox extras
+#include "../../miopan/io/miopan_undub.h"       // PORT: the imported Japanese voices
 
 // ──────────────────────────────────────────────────────────────────────
 // CD data tables handed to cddatInit().  IMG_BD.BIN holds 0x118b (4491)
@@ -9459,7 +9460,11 @@ void InitSystemON(void)
     // CD data table: 0x118b files, paths rooted at "host0:".
     //
     // PORT: plus a slot for each of the Xbox extras, whether or not it has
-    // been imported yet -- see the note above cd_dat_tbl[].
+    // been imported yet -- see the note above cd_dat_tbl[].  And the Japanese
+    // voices, which add no rows: they re-point the ROM's own while they are
+    // switched on (miopan/io/miopan_undub.h).
+    MioPan_UndubRegister(cd_dat_tbl, filename_dat, filename_path,
+                         MIOPAN_ROM_FILE_NUM);
     cddatInit("IMG_BD.BIN", "host0:", filename_dat, filename_path,
               cd_dat_tbl, file_ext_tbl,
               MioPan_XboxAssetsRegister(cd_dat_tbl, filename_dat, file_ext_tbl,

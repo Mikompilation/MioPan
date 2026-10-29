@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "../miopan_memory.h"        // MioPan_TryGetHostPointer
+#include "miopan_undub.h"            // MioPan_UndubRead
 #include "libcdvd.h"                 // sceCdSearchFile / sceCdReadFile / sceCdlFILE
 #include "../../system/encodes/cmp.h" // CMP_HEADER / CMP_Init / CMP_Decode
 
@@ -66,9 +67,20 @@ static int ReadNamed(const char *file_name, int offset, void *target,
 
 static int ReadArchive(int start_sector, void *target, unsigned int request_size)
 {
+    int undub;
+
     if (target == (void *)0)
     {
         return 0;
+    }
+
+    // An imported Japanese voice's row names a sector past the end of the
+    // archive (miopan_undub.h).  It is normally served by name before this,
+    // so this only catches a copy whose name could not be resolved.
+    undub = MioPan_UndubRead((u_int)start_sector, target, request_size);
+    if (undub >= 0)
+    {
+        return undub;
     }
 
     return sceCdReadFile("\\IMG_BD.BIN;1", (u_int)start_sector * 0x800u, target, request_size);
