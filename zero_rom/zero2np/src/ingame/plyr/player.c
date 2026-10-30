@@ -90,6 +90,7 @@
 #include "../../ingame/event/prg/ev_macro.h"     /* GetSynchroModeFlg         */
 #include "../../ingame/camera/map_camera.h"      /* ReqFinderInOverRap        */
 #include "../../ingame/camera/finder_camera.h"   /* ReqFinderCamera           */
+#include "../../ingame/camera/first_person_camera.h" /* PORT: first person    */
 #include "../../ingame/photo/m_plyr_camera.h"    /* m_plyr_camera             */
 #include "../../miopan/io/miopan_input.h"        /* PORT: movement schemes    */
 #include "../../ingame/photo/finder.h"           /* ReqFinderFadeIn / Out     */
@@ -873,6 +874,14 @@ void SetPlyrFinderIn(void)                                              /* 1534 
     SetPlyrNeckFlg(0);                                                  /* 1543 */
 
     plyr_wrk.frot_x    = 0.0f;                                          /* 1547 */
+
+    /* PORT: from the first-person view the finder comes up where she was
+     * already looking.  A ghost to swing onto still wins, below. */
+    if (FirstPersonViewActive() != 0)
+    {
+        plyr_wrk.frot_x = FirstPersonGetPitch();
+    }
+
     plyr_wrk.fp[0]     = 320;                                           /* 1548 */
     plyr_wrk.fp[1]     = 224;                                           /* 1549 */
     plyr_wrk.finder_tm = 0;                                             /* 1550 */
@@ -1390,11 +1399,14 @@ static void _SetFlashlightHand(int move_sw)                             /* 4290 
         return;                                                         /* 4389 */
     }
 
-    /* The arm only aims while she is upright and in control. */
+    /* The arm only aims while she is upright and in control.
+     * PORT: in the first-person view the right stick looks instead, and the
+     * torch follows the view (below). */
     if (move_sw != 0 &&                                                 /* 4436 */
         (u_char)(plyr_wrk.cmn_wrk.mode - 1) >= 4 &&                     /* 4437 */
         plyr_wrk.cmn_wrk.mode != 8 &&
-        plyr_wrk.move_lock_cnt == 0)
+        plyr_wrk.move_lock_cnt == 0 &&
+        FirstPersonViewActive() == 0)
     {
         PlyrSpotMoveCtrl();                                             /* 4438 */
     }
@@ -1405,6 +1417,16 @@ static void _SetFlashlightHand(int move_sw)                             /* 4290 
         y    = 42.0f;                                                   /* 4452 */
         yrot = plyr_wrk.cmn_wrk.mbox.rot[1];                            /* 4454 */
         xrot = plyr_wrk.frot_x;
+    }
+    else if (FirstPersonViewActive() != 0)
+    {
+        /* PORT: the first-person view's torch shines where she looks, as the
+         * finder's does, from her hand as ever.  The shoulder's aim is let go
+         * so it does not snap back on if the view goes to another camera. */
+        plyr_wrk.spot_rot[0] = 0.0f;
+        plyr_wrk.spot_rot[1] = 0.0f;
+        yrot = plyr_wrk.cmn_wrk.mbox.rot[1];
+        xrot = FirstPersonGetPitch();
     }
     else
     {
@@ -4506,6 +4528,89 @@ u_char PlyrFinderAnaReplace(void)
     }
 }
 
+/* PORT: steering in the first-person view (first_person_camera.h).
+ *
+ * The body faces the view -- FirstPersonLookCtrl() has already turned it --
+ * so nothing here turns her towards the stick the way PlyrMoveChk() does.
+ * Instead the step itself is turned: GetMoveSpeed()'s pace, which the walk and
+ * run clips give as ever, goes off along the view plus the stick's heading, so
+ * pushing sideways sidesteps and pulling back backs away.  The camera-cut hold,
+ * the rapid about-face and the turn-in-place have no place in it; a turn left
+ * over from the third-person controls is dropped.
+ *
+ * Under the tank type, left and right turn the view at PlyrMoveChkV()'s 4
+ * degrees a frame, up walks and down backs away rather than about-facing.
+ * Run held with nothing pushed runs straight ahead, as it does in third
+ * person.  `heading` outlives a push so the slide after letting go follows
+ * the last one. */
+static void PlyrMoveChkFirstPerson(MOVE_BOX *mb, float *tv, float rot)
+{
+    static float heading;                   /* off the view's yaw */
+
+    u_char no_move;
+    float  fr[4];
+    float  s;
+    float  c;
+
+    if ((plyr_wrk.cmn_wrk.st.mvsta & 0x1800) != 0)
+    {
+        mb->rspd[1] = 0.0f;
+        mb->mloop   = 0.0f;
+    }
+    plyr_wrk.cmn_wrk.st.mvsta &= ~0x1e00;
+    cam_cng_tm = 0;
+
+    if (plyr_move_operate_now == 1 && rot != 10.0f)
+    {
+        s = sinf(rot);
+        c = cosf(rot);
+
+        /* sin 22.5 degrees: the octants either side of straight up count as
+         * up, as ConvertRot2Dir() would have them. */
+        if (s > 0.38268343f)
+        {
+            mb->rot[1] += 0.069813162f;
+        }
+        else if (s < -0.38268343f)
+        {
+            mb->rot[1] -= 0.069813162f;
+        }
+        RotLimitChk(&mb->rot[1]);
+
+        if (c > 0.38268343f)
+        {
+            rot = 0.0f;
+        }
+        else if (c < -0.38268343f)
+        {
+            rot = 3.1415925f;
+        }
+        else
+        {
+            rot = 10.0f;                    /* turning only */
+        }
+    }
+
+    no_move = PlyrMoveStaChk(rot);
+    GetMoveSpeed(tv);
+
+    if (rot != 10.0f)
+    {
+        heading = rot;
+    }
+    else if (no_move != 0)
+    {
+        heading = 0.0f;
+    }
+
+    fr[0] = 0.0f;
+    fr[1] = mb->rot[1] + heading;
+    fr[2] = 0.0f;
+    fr[3] = 0.0f;
+    RotLimitChk(&fr[1]);
+    RotFvector(fr, tv);
+}
+
 /* Free-look ground movement.  Runs the camera-relative stick vector through
  * the turn logic, then hands the result to PlyrPosSet(). */
 void PlyrNModeCtrl(void)                                                /* 1829 */
@@ -4520,6 +4625,15 @@ void PlyrNModeCtrl(void)                                                /* 1829 
 
     PlyrDWalkTmCtrl(&plyr_wrk.cmn_wrk);                                 /* 1835 */
 
+    /* PORT: in the first-person view she looks first, and the camera is her
+     * own eye, straight above her -- its heading from her is no heading at
+     * all, so it is the view's. */
+    if (FirstPersonViewActive() != 0)
+    {
+        FirstPersonLookCtrl();
+        plyr_wrk.prot = plyr_wrk.cmn_wrk.mbox.rot[1];
+    }
+
     /* opt_wrk.move_operate: 0 = normal, 1 = "vehicle" (tank) controls.
      *
      * PORT: the ROM tests the option and then reads the pad.  The heading is
@@ -4529,7 +4643,11 @@ void PlyrNModeCtrl(void)                                                /* 1829 
     {
         const float rot = PlyrMovePad();
 
-        if (plyr_move_operate_now == 1)                                 /* 1840 */
+        if (FirstPersonViewActive() != 0)                               /* PORT */
+        {
+            PlyrMoveChkFirstPerson(&plyr_wrk.cmn_wrk.mbox, tv, rot);
+        }
+        else if (plyr_move_operate_now == 1)                            /* 1840 */
         {
             PlyrMoveChkV(&plyr_wrk.cmn_wrk.mbox, tv, rot);              /* 1843 */
         }

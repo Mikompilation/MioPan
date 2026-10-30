@@ -5,6 +5,7 @@
 #include "../io/miopan_input.h"
 #include "../io/miopan_undub.h"
 #include "../io/miopan_xbox_assets.h"
+#include "../miopan_config.h"
 #include "../rendering/miopan_renderer.h"
 #include "iop_voice.h"
 
@@ -998,8 +999,8 @@ Page ControlsPage()
     rows.push_back(Heading("Mouse"));
     rows.push_back(InputToggle(
         "Mouse aiming",
-        Fixed("The cursor is captured while the Camera Obscura is raised and "
-              "the mouse turns it."),
+        Fixed("The cursor is captured while the Camera Obscura is raised, or "
+              "while walking in the first-person view, and the mouse turns it."),
         [] { return MioPan_InputGetMouseLook() != 0; },
         [](bool on) { MioPan_InputSetMouseLook(on ? 1 : 0); }));
     const auto mouse_on = [] { return MioPan_InputGetMouseLook() != 0; };
@@ -1083,6 +1084,8 @@ Page ControlsPage()
 
 /* ---------------------------------------------------------------------------
  *  Special -- what the port adds to the game itself.
+ *
+ *  The first-person view, a setting like any other (first_person_camera.h).
  *
  *  Both imports read the player's own copy of another release of the game: a
  *  folder or file dialog, then a worker does the work while the screen reports
@@ -1243,6 +1246,31 @@ Page SpecialPage()
 {
     Page page{"special", "Special", {}};
     std::vector<Row> &rows = page.rows;
+
+    /* ingame/camera/first_person_camera.h.  Written in place; the overlay's
+     * settle-and-save notices and writes [game]. */
+    rows.push_back(Heading("Camera"));
+    rows.push_back(Toggle(
+        "First-person view",
+        Fixed("See through Mio's eyes as she walks, as the Director's Cut "
+              "could. The left stick moves and sidesteps, the right stick or "
+              "the mouse looks around, and the Camera Obscura comes up where "
+              "she is looking. Events and cutscenes keep their own cameras."),
+        [] { return miopan_config.game.first_person != 0; },
+        [](bool on) { miopan_config.game.first_person = on ? 1 : 0; }));
+    rows.push_back(When(
+        Slider("Field of view",
+               Fixed("How much the first-person view takes in, top to bottom. "
+                     "A wide window shows more at the sides."),
+               MIOPAN_FIRST_PERSON_FOV_MIN, MIOPAN_FIRST_PERSON_FOV_MAX, 5.0f,
+               [] { return miopan_config.game.first_person_fov; },
+               [](float value) {
+                   miopan_config.game.first_person_fov =
+                       std::clamp(value, MIOPAN_FIRST_PERSON_FOV_MIN,
+                                  MIOPAN_FIRST_PERSON_FOV_MAX);
+               },
+               Format("%.0f\xC2\xB0")),
+        [] { return miopan_config.game.first_person != 0; }));
 
     rows.push_back(Heading("Xbox Director's Cut"));
     Row import = Action(

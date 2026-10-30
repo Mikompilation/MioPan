@@ -259,6 +259,12 @@ int MioPan_InputCursorIdle(void);
 void MioPan_InputRequestMouseLook(void);
 int  MioPan_InputMouseLook(float *yaw, float *pitch);
 
+// The same capture for walking in the first-person view (Options > Special),
+// repeated every tick the player is free to look.  It is not aiming: the gyro
+// stays out of it, and goes on learning its bias while the pad lies still.
+// MouseLook answers for both requests alike.
+void MioPan_InputRequestWalkLook(void);
+
 // Settings, persisted in [input].  Sensitivity is a multiplier on
 // MIOPAN_MOUSE_LOOK_DEG_PER_COUNT and is clamped to the range below.
 #define MIOPAN_MOUSE_LOOK_DEG_PER_COUNT 0.05f

@@ -28,6 +28,7 @@
 #include "../ingame_effect.h"                      /* IgEffectRenzFlareDispFlgSet */
 #include "../../graphics/graph3d/g3dBoundingVolume.h"
 #include "../../graphics/graph3d/g3dGeom.h"
+#include "../camera/first_person_camera.h"      /* PORT: FirstPersonViewActive */
 #include "../../graphics/graph3d/g3dLight.h"
 #include "../../graphics/graph3d/g3ddbg.h"
 #include "../../graphics/graph3d/g3dxVu0.h"
@@ -767,6 +768,13 @@ void PlayerDrawUnlock(void)
 void DrawGirl(void)
 {
     if (IsReadyPlyrMdl() == 0 || GetPlyrDrawFLG() == 0 || plyr_data.IsLocked() != 0)
+    {
+        return;
+    }
+
+    /* PORT: the first-person view is her own eye, inside her head.  Her
+     * shadow, drawn apart from this, stays on the floor. */
+    if (FirstPersonViewActive() != 0)
     {
         return;
     }

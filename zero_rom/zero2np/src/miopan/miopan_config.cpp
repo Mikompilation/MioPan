@@ -145,6 +145,11 @@ MioPan_Config miopan_config = {
         /* Off: see MioPan_ConfigDeveloper. */
         /* .debug_menu        = */ 0,
     },
+    /* .game = */ {
+        /* Off: the game's own cameras are how it was composed. */
+        /* .first_person      = */ 0,
+        /* .first_person_fov  = */ MIOPAN_FIRST_PERSON_FOV_DEFAULT,
+    },
     /* .title = */ {
         /* Room: it is what the setting exists for, and the logo, the menu and
          * every screen behind them are the original's either way. */
@@ -1869,6 +1874,12 @@ static void ConfigLoadOnce(void)
     ReadInt("developer", "debug_menu", &miopan_config.developer.debug_menu);
     miopan_config.developer.debug_menu =
         miopan_config.developer.debug_menu != 0 ? 1 : 0;
+    ReadInt("game", "first_person", &miopan_config.game.first_person);
+    miopan_config.game.first_person = miopan_config.game.first_person != 0 ? 1 : 0;
+    ReadFloat("game", "first_person_fov", &miopan_config.game.first_person_fov);
+    miopan_config.game.first_person_fov =
+        SDL_clamp(miopan_config.game.first_person_fov, MIOPAN_FIRST_PERSON_FOV_MIN,
+                  MIOPAN_FIRST_PERSON_FOV_MAX);
 
     ReadTitle(&miopan_config.title, true);
     const int title_merged = MergeTitleBuiltins(&miopan_config.title);
@@ -2197,6 +2208,16 @@ int MioPan_ConfigSave(void)
         ";   either way.\n"
         "debug_menu = %d\n"
         "\n"
+        "[game]\n"
+        "; See the game through Mio's eyes as she walks. The left stick\n"
+        ";   moves and sidesteps, the right stick or the mouse looks around,\n"
+        ";   and raising the Camera Obscura keeps the aim. Events, cutscenes\n"
+        ";   and a ghost's grab keep the game's own cameras. 0 off, 1 on.\n"
+        "first_person = %d\n"
+        "; Vertical field of view in that view, in degrees, 45..90. The\n"
+        ";   viewfinder's own is 44.4; a wide window shows more at the sides.\n"
+        "first_person_fov = %.1f\n"
+        "\n"
         "%s%s",
         miopan_config.paths.data_folder,
         EnumToName(kWindowModes, r->window_mode),
@@ -2244,6 +2265,8 @@ int MioPan_ConfigSave(void)
         (double)r->finder_mask_tint,
         (double)r->finder_mask_scale,
         miopan_config.developer.debug_menu,
+        miopan_config.game.first_person,
+        (double)miopan_config.game.first_person_fov,
         title_section.c_str(),
         input_section.c_str());
     };

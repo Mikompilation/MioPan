@@ -156,6 +156,24 @@ typedef struct MioPan_ConfigDeveloper
 } MioPan_ConfigDeveloper;
 
 /*
+ * What the port adds to how the game plays.  ingame/camera/first_person_camera.h
+ * is what reads it, and its banner says how the view hangs off the ROM's
+ * cameras; Options > Special is what writes it.
+ *
+ * Every field is 4 bytes, so the overlay's settle-and-save compare can memcmp
+ * it the way it does the structs above.
+ */
+#define MIOPAN_FIRST_PERSON_FOV_MIN     45.0f
+#define MIOPAN_FIRST_PERSON_FOV_MAX     90.0f
+#define MIOPAN_FIRST_PERSON_FOV_DEFAULT 60.0f
+
+typedef struct MioPan_ConfigGame
+{
+    int   first_person;       /* 0 the game's own cameras, 1 Mio's eyes      */
+    float first_person_fov;   /* vertical, degrees; the finder's is 44.4     */
+} MioPan_ConfigGame;
+
+/*
  * The title screen's backdrop and music.  outgame/title_room.h is what reads
  * it, and its banner says how it hangs off the ROM's title; the overlay's
  * Settings > Title screen window is what writes it.
@@ -268,6 +286,7 @@ typedef struct MioPan_Config
     MioPan_ConfigUi        ui;
     MioPan_ConfigPaths     paths;
     MioPan_ConfigDeveloper developer;
+    MioPan_ConfigGame      game;
     MioPan_ConfigTitle     title;
 } MioPan_Config;
 

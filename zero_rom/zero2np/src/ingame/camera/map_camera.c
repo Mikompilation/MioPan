@@ -18,12 +18,17 @@
  *  in: type 9 rectangles carry a four-corner "special" camera (MDAT_CAM_SP)
  *  that is bilinearly blended across the rectangle, everything else uses the
  *  single MDAT_CAM record and one of six follow modes.
+ *
+ *  PORT: with the first-person view on (first_person_camera.h), the last two
+ *  are followed by FirstPersonCameraCtrl(), which moves the camera to Mio's
+ *  eye whenever the map camera, rather than an event, holds the view.
  * ======================================================================== */
 
 #include "map_camera.h"
 
 #include "event_camera.h"
 #include "finder_camera.h"
+#include "first_person_camera.h"                /* PORT: the first-person view */
 
 #include "../../common/utility.h"
 #include "../../common/variable.h"
@@ -151,9 +156,13 @@ void CameraMain(void)                                                   /* 136 *
     {
         gra3dcamSetTarget((float *)*pMcCtrl->pFinCamTarget, 1);         /* 143 */
         gra3dApplyCamera(0, 1);                                         /* 144 */
+
+        FirstPersonCameraYield();                       /* PORT: a pinned shot */
     }
     else
     {
+        /* PORT: raising the finder places no camera, so the first-person
+         * view, if it was up, stays up and Mio stays out of the shot. */
         if (plyr_wrk.cmn_wrk.mode == PLMODE_FINDER_IN)                  /* 148 */
         {
             FinderInCameraCtrl();                                       /* 151 */
@@ -161,9 +170,16 @@ void CameraMain(void)                                                   /* 136 *
         else if (plyr_wrk.cmn_wrk.mode == PLMODE_FINDER)                /* 153 */
         {
             FinderModeCameraCtrl();                                     /* 155 */
+            FirstPersonFinderCtrl();                    /* PORT: the aim */
         }
         else
         {
+            /* PORT: the game's camera runs as ever, from the shot it left;
+             * the first-person view takes over afterwards unless an event
+             * camera, the approach camera or Mayu holds it -- see
+             * first_person_camera.h. */
+            FirstPersonCameraRestore();
+
             if (app_camera.mode != MAP_CAM_MODE_NORMAL)                 /* 159 */
             {
                 PlyrApproachCameraCtrl(RectCamFlg);                     /* 160 */
@@ -172,6 +188,10 @@ void CameraMain(void)                                                   /* 136 *
             {
                 MapCamNormalCameraCtrl(RectCamFlg);                     /* 162 */
             }
+
+            FirstPersonCameraCtrl(app_camera.mode == MAP_CAM_MODE_NORMAL &&
+                                  pMcCtrl->EventCamFlg == 0 &&
+                                  pMcCtrl->CamTarget == 0);
         }
     }
 
