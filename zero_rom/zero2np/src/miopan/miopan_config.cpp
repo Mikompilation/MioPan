@@ -247,22 +247,27 @@ MioPan_Config miopan_config = {
                          8893.0f, -1243.0f,  6816.0f,   8916.0f, -1420.0f,  8528.0f,  47.0f,
                          8905.0f, -1336.0f,  7711.0f,   8916.0f, -1420.0f,  8528.0f,  47.0f),
             /* RKS04, the interior garden, as the Xbox Director's Cut opens its
-             * title on it: from beside the stone lantern at the foot of the
-             * stairs, rising a little and tilting up past the pine while the
-             * lantern sinks out of the bottom of the frame, then a fade.
-             * Matched by eye against that title, frame for frame every three
-             * seconds over its thirty, at its 4:3. */
+             * title on it: from the corner of the walkway at the foot of the
+             * stairs, the flight big on the left and the stone lantern on the
+             * right, the camera climbs -- up and forward past the edge of the
+             * walkway roof, about a storey -- until it looks down on the
+             * stairs with the pine and the lattice beyond, while the lantern
+             * sinks out of the bottom of the frame; then a fade.  Straight up
+             * from the corner runs into the upper floor, hence the forward
+             * part.  Found by scoring a few hundred renders against that
+             * title's frames and matched frame for frame every three seconds
+             * over its thirty, at its 4:3. */
             {
                 /* .name              = */ "Garden (Xbox title)",
                 /* .enabled           = */ 1,
                 /* .room              = */ 44,
                 /* .camera_set        = */ 1,
-                /* .a_eye             = */ { 5500.0f, -1350.0f,  9650.0f },
-                /* .a_target          = */ { 5500.0f, -1245.0f, 12648.0f },
-                /* .a_fov             = */ 70.0f,
-                /* .b_eye             = */ { 5500.0f, -1650.0f,  9650.0f },
-                /* .b_target          = */ { 5500.0f, -2822.0f, 12412.0f },
-                /* .b_fov             = */ 70.0f,
+                /* .a_eye             = */ { 4950.0f, -1550.0f,  9600.0f },
+                /* .a_target          = */ { 6878.0f, -1550.0f, 11898.0f },
+                /* .a_fov             = */ 62.0f,
+                /* .b_eye             = */ { 5150.0f, -2500.0f, 10150.0f },
+                /* .b_target          = */ { 6969.0f, -1979.0f, 12478.0f },
+                /* .b_fov             = */ 62.0f,
                 /* .travel_seconds    = */ 30.0f,
                 /* .hold_seconds      = */ 0.0f,
                 /* .motion            = */ MIOPAN_TITLE_MOTION_ONCE,
