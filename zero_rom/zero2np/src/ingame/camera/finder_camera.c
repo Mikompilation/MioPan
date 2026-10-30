@@ -45,6 +45,7 @@
 #include "../../miopan/io/miopan_input.h"       /* PORT: mouse and gyro look   */
 #include "../../system/os/system.h"             /* GetPALMode                  */
 #include "../../system/pad/pad.h"               /* paddat                      */
+#include "../photo/finder_dpad.h"               /* PORT: FinderDpadOwnsDpad    */
 #include "../photo/freq_camera.h"               /* FreqCamera                  */
 #include "../photo/m_plyr_camera.h"             /* m_plyr_camera               */
 #include "../plyr/player.h"                     /* IsFinderLocked              */
@@ -94,6 +95,19 @@ static int  FinderModePadChk(char *pad_x, char *pad_y, float *ax, float *ay,
                              u_char *jyuji_on);
 static void PlyrCamCondChk(PLYR_WRK *pPlyrWrk, MOVE_BOX *pMoveBox);
 static void PconMahiCameraCtrl(MOVE_BOX *pMoveBox);
+
+/* PORT ADDITION.  pad[0].now as the aim reads it: without the d-pad while the
+ * d-pad changes film and items instead (photo/finder_dpad.h).  With it gone,
+ * a pad without sticks aims only by the mouse or a gyro. */
+static u_short FinderAimPadNow(void)
+{
+    if (FinderDpadOwnsDpad() != 0)
+    {
+        return (u_short)(pad[0].now & ~FC_PAD_DPAD);
+    }
+
+    return pad[0].now;
+}
 
 /* --------------------------------------------------------------------------
  *  FinderModeCameraCtrl
@@ -319,11 +333,11 @@ static void SetFinderRot(PLYR_WRK *pPlyrWrk, MOVE_BOX *pMoveBox)
         rot *= 1.2f;                                                    /* 253 */
     }
 
-    if ((pad[0].now & FC_PAD_LEFT) != 0 || pad_x < 0)                   /* 256 */
+    if ((FinderAimPadNow() & FC_PAD_LEFT) != 0 || pad_x < 0)            /* 256 */
     {
         pMoveBox->rot[1] -= rot;                                        /* 257 */
     }
-    else if ((pad[0].now & FC_PAD_RIGHT) != 0 || 0 < pad_x)             /* 260 */
+    else if ((FinderAimPadNow() & FC_PAD_RIGHT) != 0 || 0 < pad_x)      /* 260 */
     {
         pMoveBox->rot[1] += rot;                                        /* 261 */
     }
@@ -421,7 +435,7 @@ static int FinderModePadChk(char *pad_x, char *pad_y, float *ax, float *ay,
     *pad_x = 0; *pad_y = 0; *jyuji_on = 0;                              /* 300 */
     *ax = 0.0f; *ay = 0.0f;                                             /* 301 */
 
-    if ((pad[0].now & FC_PAD_DPAD) != 0)                                /* 303 */
+    if ((FinderAimPadNow() & FC_PAD_DPAD) != 0)                         /* 303 */
     {
         *jyuji_on = 1;                                                  /* 304 */
     }
@@ -430,20 +444,20 @@ static int FinderModePadChk(char *pad_x, char *pad_y, float *ax, float *ay,
      * d-pad can steer. */
     if (pad[0].id == FC_PAD_ID_ANALOG || *jyuji_on != 0)                /* 307 */
     {
-        if ((pad[0].now & FC_PAD_UP) != 0)                              /* 310 */
+        if ((FinderAimPadNow() & FC_PAD_UP) != 0)                       /* 310 */
         {
             *ay = -40.0f;                                               /* 311 */
         }
-        else if ((pad[0].now & FC_PAD_DOWN) != 0)                       /* 314 */
+        else if ((FinderAimPadNow() & FC_PAD_DOWN) != 0)                /* 314 */
         {
             *ay = 40.0f;                                                /* 315 */
         }
 
-        if ((pad[0].now & FC_PAD_RIGHT) != 0)                           /* 317 */
+        if ((FinderAimPadNow() & FC_PAD_RIGHT) != 0)                    /* 317 */
         {
             *ax = 40.0f;                                                /* 318 */
         }
-        else if ((pad[0].now & FC_PAD_LEFT) != 0)                       /* 321 */
+        else if ((FinderAimPadNow() & FC_PAD_LEFT) != 0)                /* 321 */
         {
             *ax = -40.0f;                                               /* 322 */
         }

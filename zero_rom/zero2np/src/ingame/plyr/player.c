@@ -91,6 +91,7 @@
 #include "../../ingame/camera/map_camera.h"      /* ReqFinderInOverRap        */
 #include "../../ingame/camera/finder_camera.h"   /* ReqFinderCamera           */
 #include "../../ingame/camera/first_person_camera.h" /* PORT: first person    */
+#include "../../ingame/photo/finder_dpad.h"      /* PORT: FinderDpadCtrl      */
 #include "../../ingame/photo/m_plyr_camera.h"    /* m_plyr_camera             */
 #include "../../miopan/io/miopan_input.h"        /* PORT: movement schemes    */
 #include "../../ingame/photo/finder.h"           /* ReqFinderFadeIn / Out     */
@@ -3672,6 +3673,10 @@ void PlyrFinderCtrl(void)                                               /* 2642 
     m_plyr_camera.eq_tray.SetUp();                      /* 2655 */
 
     photo_ok = PlyrPhotoChk2();                                         /* 2657 */
+
+    /* PORT: the d-pad's film and healing items, when Options > Special has
+     * given it them (photo/finder_dpad.h). */
+    FinderDpadCtrl();
 
     PlyrCamTurnChk();                                                   /* 2658 */
     PlyrFModeMoveCtrl();                                                /* 2659 */

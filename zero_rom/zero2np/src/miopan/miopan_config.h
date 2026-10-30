@@ -157,8 +157,8 @@ typedef struct MioPan_ConfigDeveloper
 
 /*
  * What the port adds to how the game plays.  ingame/camera/first_person_camera.h
- * is what reads it, and its banner says how the view hangs off the ROM's
- * cameras; Options > Special is what writes it.
+ * and ingame/photo/finder_dpad.h are what read it, and their banners say how
+ * each hangs off the ROM; Options > Special is what writes it.
  *
  * Every field is 4 bytes, so the overlay's settle-and-save compare can memcmp
  * it the way it does the structs above.
@@ -171,6 +171,8 @@ typedef struct MioPan_ConfigGame
 {
     int   first_person;       /* 0 the game's own cameras, 1 Mio's eyes      */
     float first_person_fov;   /* vertical, degrees; the finder's is 44.4     */
+    int   finder_dpad;        /* 0 the d-pad aims the finder, 1 it changes
+                               * film and uses healing items (finder_dpad.h) */
 } MioPan_ConfigGame;
 
 /*

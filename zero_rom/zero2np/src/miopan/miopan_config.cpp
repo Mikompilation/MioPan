@@ -149,6 +149,8 @@ MioPan_Config miopan_config = {
         /* Off: the game's own cameras are how it was composed. */
         /* .first_person      = */ 0,
         /* .first_person_fov  = */ MIOPAN_FIRST_PERSON_FOV_DEFAULT,
+        /* Off: in the ROM the d-pad aims the finder. */
+        /* .finder_dpad       = */ 0,
     },
     /* .title = */ {
         /* Room: it is what the setting exists for, and the logo, the menu and
@@ -1880,6 +1882,8 @@ static void ConfigLoadOnce(void)
     miopan_config.game.first_person_fov =
         SDL_clamp(miopan_config.game.first_person_fov, MIOPAN_FIRST_PERSON_FOV_MIN,
                   MIOPAN_FIRST_PERSON_FOV_MAX);
+    ReadInt("game", "finder_dpad", &miopan_config.game.finder_dpad);
+    miopan_config.game.finder_dpad = miopan_config.game.finder_dpad != 0 ? 1 : 0;
 
     ReadTitle(&miopan_config.title, true);
     const int title_merged = MergeTitleBuiltins(&miopan_config.title);
@@ -2217,6 +2221,11 @@ int MioPan_ConfigSave(void)
         "; Vertical field of view in that view, in degrees, 45..90. The\n"
         ";   viewfinder's own is 44.4; a wide window shows more at the sides.\n"
         "first_person_fov = %.1f\n"
+        "; With the Camera Obscura raised, the d-pad changes film (up and\n"
+        ";   down), picks a healing item (left) and uses it (right), and the\n"
+        ";   item is shown in the viewfinder. The d-pad then no longer aims;\n"
+        ";   the sticks and the mouse still do. 0 off, 1 on.\n"
+        "finder_dpad = %d\n"
         "\n"
         "%s%s",
         miopan_config.paths.data_folder,
@@ -2267,6 +2276,7 @@ int MioPan_ConfigSave(void)
         miopan_config.developer.debug_menu,
         miopan_config.game.first_person,
         (double)miopan_config.game.first_person_fov,
+        miopan_config.game.finder_dpad,
         title_section.c_str(),
         input_section.c_str());
     };

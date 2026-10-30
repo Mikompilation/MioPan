@@ -1085,7 +1085,8 @@ Page ControlsPage()
 /* ---------------------------------------------------------------------------
  *  Special -- what the port adds to the game itself.
  *
- *  The first-person view, a setting like any other (first_person_camera.h).
+ *  The first-person view and the finder's d-pad, settings like any other
+ *  (first_person_camera.h, finder_dpad.h).
  *
  *  Both imports read the player's own copy of another release of the game: a
  *  folder or file dialog, then a worker does the work while the screen reports
@@ -1271,6 +1272,17 @@ Page SpecialPage()
                },
                Format("%.0f\xC2\xB0")),
         [] { return miopan_config.game.first_person != 0; }));
+
+    /* ingame/photo/finder_dpad.h, written the same way. */
+    rows.push_back(Heading("Camera Obscura"));
+    rows.push_back(Toggle(
+        "Film and items on the d-pad",
+        Fixed("With the camera raised, up and down change the film, left picks "
+              "a healing item and right uses it, without opening the menu. The "
+              "item is shown in the viewfinder. The d-pad no longer aims; the "
+              "sticks and the mouse still do."),
+        [] { return miopan_config.game.finder_dpad != 0; },
+        [](bool on) { miopan_config.game.finder_dpad = on ? 1 : 0; }));
 
     rows.push_back(Heading("Xbox Director's Cut"));
     Row import = Action(

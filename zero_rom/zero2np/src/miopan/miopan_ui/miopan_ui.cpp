@@ -1327,7 +1327,7 @@ void PersistSettingsIfChanged()
                   "MioPan_ConfigAudio gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigUi) == 1 * sizeof(int),
                   "MioPan_ConfigUi gained padding; compare by field");
-    static_assert(sizeof(MioPan_ConfigGame) == 2 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigGame) == 3 * sizeof(int),
                   "MioPan_ConfigGame gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigTitleScene) ==
                       MIOPAN_TITLE_NAME_MAX + 22 * sizeof(int) +
