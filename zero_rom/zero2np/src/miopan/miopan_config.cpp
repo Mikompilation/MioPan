@@ -30,6 +30,11 @@
         30.0f, 4.0f, MIOPAN_TITLE_MOTION_PINGPONG, MIOPAN_TITLE_EASING_SMOOTH, \
     }
 
+/* Which set of built-in title scenes the defaults below are.  A miopan.ini
+ * whose [title] builtins is lower gets the ones its list lacks, once; raise
+ * it whenever the list gains a scene. */
+#define TITLE_BUILTINS 2
+
 /* Defaults.  The window size is the one EnsureRenderer() used before this
  * existed -- twice the ROM's 640x448 -- so a first run with no file behaves
  * exactly as the port did before settings were persisted at all. */
@@ -153,14 +158,15 @@ MioPan_Config miopan_config = {
         /* Off: the room is the thing to look at while the title sits idle,
          * and the movie would take it away every fifteen seconds. */
         /* .attract_movie     = */ 0,
-        /* .scene_count       = */ 21,
+        /* .builtins          = */ TITLE_BUILTINS,
+        /* .scene_count       = */ 22,
         /* .scenes            = */ {
-            /* Every scene but the courtyard starts from one of the room's
-             * own map cameras -- the shots the game frames Mio with -- and
-             * moves a little way from there.  Each path was rendered at nine
-             * points along it, at 16:9 and at 5120x1417, and nothing crosses
-             * the lens at either: no post, wall, net or lantern passes in
-             * front of it. */
+            /* Every scene but the courtyard and the two in the garden starts
+             * from one of the room's own map cameras -- the shots the game frames
+             * Mio with -- and moves a little way from there.  Each path was
+             * rendered at nine or more points along it, at 16:9 and at
+             * 5120x1417, and nothing crosses the lens at either: no post,
+             * wall, net or lantern passes in front of it. */
 
             /* RKS00, the lantern courtyard outside the Kurosawa house: a slow
              * truck across it, both ends looking at the same point among the
@@ -195,11 +201,6 @@ MioPan_Config miopan_config = {
             TITLE_SCENE("Lantern gate", 11,
                         19304.0f,  4487.0f, 53810.0f,  18845.0f,  4344.0f, 56118.0f,  39.0f,
                         19071.0f,  4414.0f, 54985.0f,  18845.0f,  4344.0f, 56118.0f,  39.0f),
-            /* RY13: the overlook's braziers against the dusk, through the
-             * frame of a broken torii. */
-            TITLE_SCENE("Braziers at dusk", 65,
-                        -1317.0f, -3564.0f, 11871.0f,   1005.0f, -3723.0f, 11998.0f,  44.1f,
-                         -918.0f, -3591.0f, 11892.0f,   1005.0f, -3723.0f, 11998.0f,  44.1f),
 
             /* The Osaka house. */
 
@@ -245,6 +246,79 @@ MioPan_Config miopan_config = {
             TITLE_SCENE("Moon window", 41,
                          8893.0f, -1243.0f,  6816.0f,   8916.0f, -1420.0f,  8528.0f,  47.0f,
                          8905.0f, -1336.0f,  7711.0f,   8916.0f, -1420.0f,  8528.0f,  47.0f),
+            /* RKS04, the interior garden, as the Xbox Director's Cut opens its
+             * title on it: from beside the stone lantern at the foot of the
+             * stairs, rising a little and tilting up past the pine while the
+             * lantern sinks out of the bottom of the frame, then a fade.
+             * Matched by eye against that title, frame for frame every three
+             * seconds over its thirty, at its 4:3. */
+            {
+                /* .name              = */ "Garden (Xbox title)",
+                /* .enabled           = */ 1,
+                /* .room              = */ 44,
+                /* .camera_set        = */ 1,
+                /* .a_eye             = */ { 5500.0f, -1350.0f,  9650.0f },
+                /* .a_target          = */ { 5500.0f, -1245.0f, 12648.0f },
+                /* .a_fov             = */ 70.0f,
+                /* .b_eye             = */ { 5500.0f, -1650.0f,  9650.0f },
+                /* .b_target          = */ { 5500.0f, -2822.0f, 12412.0f },
+                /* .b_fov             = */ 70.0f,
+                /* .travel_seconds    = */ 30.0f,
+                /* .hold_seconds      = */ 0.0f,
+                /* .motion            = */ MIOPAN_TITLE_MOTION_ONCE,
+                /* .easing            = */ MIOPAN_TITLE_EASING_LINEAR,
+            },
+            /* RKS04, the interior garden: from the upper floor down the two
+             * flights that wind round its corner -- bamboo on one side, the
+             * outer wall on the other -- to the foot of the stairs, then a
+             * fade to the next scene rather than a climb back up.  The waypoints keep to the wall side of the stairs:
+             * on the garden side the bamboo over the landing filled the lens.
+             * Each aims seven tenths of the way from a thousand units down
+             * the path to the middle of the open well (6000, -2200, 10600),
+             * so the bamboo and the rain stay in view over the railing, and
+             * the aim tilts up as the camera goes down -- level with that at
+             * the top, 45 degrees higher at the foot, where it looks up the
+             * well into the rain. */
+            {
+                /* .name              = */ "Garden stairs",
+                /* .enabled           = */ 1,
+                /* .room              = */ 44,
+                /* .camera_set        = */ 1,
+                /* .a_eye             = */ { 7400.0f, -4050.0f, 11790.0f },
+                /* .a_target          = */ { 6147.0f, -2557.0f, 10957.0f },
+                /* .a_fov             = */ 55.0f,
+                /* .b_eye             = */ { 4980.0f, -2050.0f,  9950.0f },
+                /* .b_target          = */ { 6430.0f, -2625.0f, 10307.0f },
+                /* .b_fov             = */ 55.0f,
+                /* .travel_seconds    = */ 40.0f,
+                /* .hold_seconds      = */ 4.0f,
+                /* .motion            = */ MIOPAN_TITLE_MOTION_ONCE,
+                /* .easing            = */ MIOPAN_TITLE_EASING_SMOOTH,
+                /* .via_count         = */ 8,
+                /* .via_eye           = */ {
+                    { 6700.0f, -4000.0f, 11790.0f },  /* top of the upper flight */
+                    { 6200.0f, -3500.0f, 11790.0f },
+                    { 5750.0f, -3050.0f, 11790.0f },  /* onto the landing        */
+                    { 5200.0f, -2900.0f, 11840.0f },
+                    { 4800.0f, -2900.0f, 11700.0f },  /* round the corner        */
+                    { 4760.0f, -2950.0f, 11200.0f },  /* top of the lower flight */
+                    { 4760.0f, -2500.0f, 10750.0f },
+                    { 4760.0f, -2100.0f, 10300.0f },  /* its foot                */
+                },
+                /* .via_target        = */ {
+                    { 5911.0f, -2509.0f, 10854.0f },
+                    { 5739.0f, -2482.0f, 10791.0f },
+                    { 5619.0f, -2541.0f, 10763.0f },
+                    { 5679.0f, -2722.0f, 10636.0f },
+                    { 5736.0f, -2822.0f, 10541.0f },
+                    { 5855.0f, -2750.0f, 10397.0f },
+                    { 5773.0f, -2688.0f, 10380.0f },
+                    { 5602.0f, -2694.0f, 10265.0f },
+                },
+                /* .via_fov           = */ {
+                    55.0f, 55.0f, 55.0f, 55.0f, 55.0f, 55.0f, 55.0f, 55.0f,
+                },
+            },
             /* RKS06: a little way into the candle-lit library.  Further in,
              * a shelf crowds the left of a wide window. */
             TITLE_SCENE("Library", 46,
@@ -1273,9 +1347,8 @@ const MioPan_ConfigTitleScene kTitleSceneDefault = {
 };
 
 /* The scenes this build ships with: the defaults' list, kept by
- * ConfigLoadOnce() before the file replaces it.  A miopan.ini that has scenes
- * of its own never sees the defaults otherwise, and the overlay offers these
- * back to it. */
+ * ConfigLoadOnce() before the file replaces it, for merging into a list of
+ * the file's own and for the overlay's "Restore built-in". */
 MioPan_ConfigTitle g_title_builtin;
 
 /* A scene counts as already in the list when one in the same room has its
@@ -1291,6 +1364,70 @@ bool TitleHasScene(const MioPan_ConfigTitle &t, const MioPan_ConfigTitleScene &s
         }
     }
     return false;
+}
+
+/* The built-ins `t` lacks, after its own scenes, up to the limit.  Returns
+ * how many went in. */
+int AppendTitleBuiltins(MioPan_ConfigTitle *t)
+{
+    int added = 0;
+
+    for (int i = 0; i < g_title_builtin.scene_count && t->scene_count < MIOPAN_TITLE_SCENE_MAX;
+         i++)
+    {
+        if (!TitleHasScene(*t, g_title_builtin.scenes[i]))
+        {
+            t->scenes[t->scene_count++] = g_title_builtin.scenes[i];
+            added++;
+        }
+    }
+    return added;
+}
+
+/* Scenes an earlier set of built-ins had and this one does not. */
+struct TitleRetired
+{
+    int         room;
+    const char *name;
+};
+
+const TitleRetired kTitleRetired[] = {
+    { 65, "Braziers at dusk" },     /* replaced by "Garden stairs" */
+};
+
+/* A list from a miopan.ini written before this set of built-ins gets them as
+ * well as its own -- the built-ins are the defaults, and a list of one's own
+ * would otherwise hide them for good -- and loses the built-ins the set has
+ * dropped since.  Once only: the set is recorded, so a built-in deleted
+ * afterwards stays deleted.  Returns how many scenes came or went. */
+int MergeTitleBuiltins(MioPan_ConfigTitle *t)
+{
+    if (t->builtins >= TITLE_BUILTINS)
+    {
+        return 0;
+    }
+
+    int changed = 0;
+    for (const TitleRetired &r : kTitleRetired)
+    {
+        for (int i = 0; i < t->scene_count; i++)
+        {
+            if (t->scenes[i].room == r.room && SDL_strcasecmp(t->scenes[i].name, r.name) == 0)
+            {
+                for (int j = i; j < t->scene_count - 1; j++)
+                {
+                    t->scenes[j] = t->scenes[j + 1];
+                }
+                t->scene_count--;
+                i--;
+                changed++;
+            }
+        }
+    }
+
+    changed += AppendTitleBuiltins(t);
+    t->builtins = TITLE_BUILTINS;
+    return changed;
 }
 
 /* Nothing between this file and outgame/title_room.c clamps these, and a room
@@ -1317,6 +1454,11 @@ void ClampTitleScene(MioPan_ConfigTitleScene *s)
     if (s->easing != MIOPAN_TITLE_EASING_LINEAR)
     {
         s->easing = MIOPAN_TITLE_EASING_SMOOTH;
+    }
+    s->via_count = SDL_clamp(s->via_count, 0, MIOPAN_TITLE_VIA_MAX);
+    for (int i = 0; i < s->via_count; i++)
+    {
+        s->via_fov[i] = SDL_clamp(s->via_fov[i], 10.0f, 120.0f);
     }
     s->name[MIOPAN_TITLE_NAME_MAX - 1] = '\0';
 }
@@ -1360,6 +1502,28 @@ void ReadTitleScene(const char *section, int number, MioPan_ConfigTitleScene *s)
     ReadFloat(section, "hold_seconds", &s->hold_seconds);
     ReadEnum(section, "motion", kTitleMotions, &s->motion);
     ReadEnum(section, "easing", kTitleEasings, &s->easing);
+
+    /* The waypoints, numbered from 1 in path order; the first number with no
+     * eye ends them.  A waypoint without a target or a field of view of its
+     * own takes B's. */
+    for (int i = 0; i < MIOPAN_TITLE_VIA_MAX; i++)
+    {
+        char key[24];
+
+        SDL_snprintf(key, sizeof(key), "via%d_eye", i + 1);
+        if (Lookup(section, key) == nullptr)
+        {
+            break;
+        }
+        ReadVec3(section, key, s->via_eye[i]);
+        SDL_memcpy(s->via_target[i], s->b_target, sizeof(s->via_target[i]));
+        SDL_snprintf(key, sizeof(key), "via%d_target", i + 1);
+        ReadVec3(section, key, s->via_target[i]);
+        s->via_fov[i] = s->b_fov;
+        SDL_snprintf(key, sizeof(key), "via%d_fov", i + 1);
+        ReadFloat(section, key, &s->via_fov[i]);
+        s->via_count = i + 1;
+    }
     ClampTitleScene(s);
 }
 
@@ -1424,6 +1588,10 @@ void ReadTitle(MioPan_ConfigTitle *t, bool scenes)
 
     if (scenes)
     {
+        /* A file that does not say predates the built-ins altogether. */
+        t->builtins = 0;
+        ReadInt("title", "builtins", &t->builtins);
+
         MioPan_ConfigTitleScene found[MIOPAN_TITLE_SCENE_MAX];
         const int n = CollectTitleScenes(found, MIOPAN_TITLE_SCENE_MAX);
 
@@ -1453,7 +1621,7 @@ std::string TitleSceneName(const char *name)
 
 std::string TitleSceneText(const MioPan_ConfigTitleScene &s, int number)
 {
-    char buf[1024];
+    char buf[512];
     SDL_snprintf(
         buf, sizeof(buf),
         "[title.scene%d]\n"
@@ -1463,7 +1631,34 @@ std::string TitleSceneText(const MioPan_ConfigTitleScene &s, int number)
         "camera_set = %d\n"
         "a_eye = %.2f %.2f %.2f\n"
         "a_target = %.2f %.2f %.2f\n"
-        "a_fov = %.2f\n"
+        "a_fov = %.2f\n",
+        number,
+        TitleSceneName(s.name).c_str(),
+        s.enabled,
+        s.room,
+        s.camera_set,
+        (double)s.a_eye[0], (double)s.a_eye[1], (double)s.a_eye[2],
+        (double)s.a_target[0], (double)s.a_target[1], (double)s.a_target[2],
+        (double)s.a_fov);
+    std::string out = buf;
+
+    /* In path order, between A and B, so the section reads as the path. */
+    for (int i = 0; i < s.via_count; i++)
+    {
+        SDL_snprintf(
+            buf, sizeof(buf),
+            "via%d_eye = %.2f %.2f %.2f\n"
+            "via%d_target = %.2f %.2f %.2f\n"
+            "via%d_fov = %.2f\n",
+            i + 1, (double)s.via_eye[i][0], (double)s.via_eye[i][1], (double)s.via_eye[i][2],
+            i + 1, (double)s.via_target[i][0], (double)s.via_target[i][1],
+            (double)s.via_target[i][2],
+            i + 1, (double)s.via_fov[i]);
+        out += buf;
+    }
+
+    SDL_snprintf(
+        buf, sizeof(buf),
         "b_eye = %.2f %.2f %.2f\n"
         "b_target = %.2f %.2f %.2f\n"
         "b_fov = %.2f\n"
@@ -1472,14 +1667,6 @@ std::string TitleSceneText(const MioPan_ConfigTitleScene &s, int number)
         "motion = %s\n"
         "easing = %s\n"
         "\n",
-        number,
-        TitleSceneName(s.name).c_str(),
-        s.enabled,
-        s.room,
-        s.camera_set,
-        (double)s.a_eye[0], (double)s.a_eye[1], (double)s.a_eye[2],
-        (double)s.a_target[0], (double)s.a_target[1], (double)s.a_target[2],
-        (double)s.a_fov,
         (double)s.b_eye[0], (double)s.b_eye[1], (double)s.b_eye[2],
         (double)s.b_target[0], (double)s.b_target[1], (double)s.b_target[2],
         (double)s.b_fov,
@@ -1487,7 +1674,7 @@ std::string TitleSceneText(const MioPan_ConfigTitleScene &s, int number)
         (double)s.hold_seconds,
         EnumToName(kTitleMotions, s.motion),
         EnumToName(kTitleEasings, s.easing));
-    return buf;
+    return out + buf;
 }
 
 std::string TitleText()
@@ -1520,16 +1707,23 @@ std::string TitleText()
         "; 1 lets the attract movie start after fifteen idle seconds, as the\n"
         ";   original does.  Room backdrop only: classic always does.\n"
         "attract_movie = %d\n"
+        "; Which set of the game's built-in scenes the list below has had.\n"
+        ";   A build with a newer set adds the scenes the list lacks, once;\n"
+        ";   one deleted after that stays deleted.\n"
+        "builtins = %d\n"
         "\n"
         "; The scenes, one section each.  room is 0..65 as the disc counts\n"
         ";   them: 0..12 RY00..RY12, 13 ROS00, 19 RTB00, 30 RRY00, 40 RKS00,\n"
         ";   58 RCH00, 65 RY13.  camera_set 0 has the camera placed by itself\n"
         ";   when the room loads.  The points are where the eye is and what\n"
         ";   it looks at, in the game's world units (Y grows downwards), and\n"
-        ";   the field of view in degrees.  travel_seconds is one pass from A\n"
-        ";   to B, hold_seconds the rest at each end.  motion: pingpong (there\n"
-        ";   and back) | loop (cut back to A) | once.  easing: smooth | linear.\n"
-        ";   enabled 0 keeps a scene out of the rotation.\n"
+        ";   the field of view in degrees.  Between A and B the path may also\n"
+        ";   pass through via1_eye / via1_target / via1_fov, via2_..., in\n"
+        ";   order, up to 12; then it is a smooth curve through them all.\n"
+        ";   travel_seconds is one pass from A to B, hold_seconds the rest at\n"
+        ";   each end.  motion: pingpong (there and back) | loop (cut back to\n"
+        ";   A) | once.  easing: smooth | linear.  enabled 0 keeps a scene\n"
+        ";   out of the rotation.\n"
         "\n",
         EnumToName(kTitleBackdrops, t.backdrop),
         EnumToName(kTitleChanges, t.change),
@@ -1537,7 +1731,8 @@ std::string TitleText()
         (double)t.dim,
         t.music,
         (double)t.music_volume,
-        t.attract_movie);
+        t.attract_movie,
+        t.builtins);
 
     std::string out = buf;
     for (int i = 0; i < t.scene_count; i++)
@@ -1671,6 +1866,7 @@ static void ConfigLoadOnce(void)
         miopan_config.developer.debug_menu != 0 ? 1 : 0;
 
     ReadTitle(&miopan_config.title, true);
+    const int title_merged = MergeTitleBuiltins(&miopan_config.title);
 
     /* The window size is the one value with no setter to clamp it, and a zero
      * or negative one would fail SDL_CreateWindow outright. */
@@ -1687,6 +1883,15 @@ static void ConfigLoadOnce(void)
 
     g_entries.clear();
     SDL_Log("MioPan: loaded settings from %s", path);
+
+    /* The file should say what the title does: the built-ins just merged in
+     * are written into it now, not on the next unrelated change. */
+    if (title_merged > 0)
+    {
+        SDL_Log("MioPan: brought the title scenes up to built-in set %d (%d changed)",
+                TITLE_BUILTINS, title_merged);
+        MioPan_ConfigSave();
+    }
 }
 
 void MioPan_ConfigLoad(void)
@@ -2129,18 +2334,7 @@ int MioPan_ConfigTitleBuiltinMissing(void)
 
 int MioPan_ConfigTitleAddBuiltin(void)
 {
-    MioPan_ConfigTitle &t = miopan_config.title;
-    int added = 0;
-
-    for (int i = 0; i < g_title_builtin.scene_count && t.scene_count < MIOPAN_TITLE_SCENE_MAX; i++)
-    {
-        if (!TitleHasScene(t, g_title_builtin.scenes[i]))
-        {
-            t.scenes[t.scene_count++] = g_title_builtin.scenes[i];
-            added++;
-        }
-    }
-    return added;
+    return AppendTitleBuiltins(&miopan_config.title);
 }
 
 int MioPan_ConfigTitleText(char *buf, int size)
