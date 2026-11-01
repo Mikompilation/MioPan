@@ -1054,7 +1054,7 @@ static void MenuPlyrItemDisp(int off_x, int off_y, u_char alpha)        /* 999 *
                 item_ds.y += (float)off_y;                              /* 1075 */
                 item_ds.alpha = (u_char)(item_ds.alpha * alpha >> 7);   /* 1076 */
                 item_ds.rot = 90.0f;
-                item_ds.csx = item_ds.x;   item_ds.csy = item_ds.y;     /* 1077 */
+                item_ds.crx = item_ds.x;   item_ds.cry = item_ds.y;     /* 1077 */
                 DispSprD(&item_ds);                                     /* 1078 */
             }                                                           /* 1079 */
 
