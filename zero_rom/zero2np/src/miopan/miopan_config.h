@@ -255,6 +255,8 @@ typedef struct MioPan_Config
     MioPan_ConfigDeveloper developer;
     MioPan_ConfigTitle     title;
 } MioPan_Config;
+    int profiler_summary;
+    int profiler_fps_only;
 
 extern MioPan_Config miopan_config;
 

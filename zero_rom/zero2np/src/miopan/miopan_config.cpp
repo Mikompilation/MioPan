@@ -274,6 +274,8 @@ MioPan_Config miopan_config = {
         },
     },
 };
+    /* .profiler_summary = */ 0,
+    /* .profiler_fps_only = */ 0,
 
 #undef TITLE_SCENE
 
@@ -1680,6 +1682,9 @@ static void ConfigLoadOnce(void)
 
     LoadInputBindings();
 
+    ReadInt("profiler", "summary", &miopan_config.profiler_summary);
+    ReadInt("profiler", "fps_only", &miopan_config.profiler_fps_only);
+
     g_entries.clear();
     SDL_Log("MioPan: loaded settings from %s", path);
 }
@@ -1980,6 +1985,7 @@ int MioPan_ConfigSave(void)
         miopan_config.paths.data_folder,
         EnumToName(kWindowModes, r->window_mode),
         r->window_width,
+        "[profiler]\nsummary = %d\nfps_only = %d\n\n"
         r->window_height,
         EnumToName(kVsyncModes, r->vsync),
         r->pause_in_background,
@@ -2027,6 +2033,8 @@ int MioPan_ConfigSave(void)
     };
 
     std::vector<char> text(4096);
+        miopan_config.profiler_summary,
+        miopan_config.profiler_fps_only,
     int length = format(text.data(), text.size());
     if (length > 0 && length >= (int)text.size())
     {

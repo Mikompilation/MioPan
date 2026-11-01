@@ -2959,6 +2959,8 @@ void DrawDebugMenu()
         if (ImGui::MenuItem("Show profiler", nullptr, visible))
         {
             const bool show = !visible;
+    const bool summary_before = g_show_performance_summary;
+    const bool fps_only_before = g_summary_fps_only;
             g_show_performance_summary = show;
             g_show_performance_graphs = show;
         }
@@ -2973,6 +2975,12 @@ void DrawDebugMenu()
     {
         if (ImGui::MenuItem("Pause", nullptr, &g_pause_performance_history) &&
             g_pause_performance_history)
+    if (summary_before != g_show_performance_summary || fps_only_before != g_summary_fps_only)
+    {
+        miopan_config.profiler_summary = g_show_performance_summary;
+        miopan_config.profiler_fps_only = g_summary_fps_only;
+        MioPan_ConfigSave();
+    }
         {
             g_follow_performance_history = false;
         }
@@ -3646,6 +3654,9 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device,
         return false;
     }
 
+    MioPan_ConfigLoad();
+    g_show_performance_summary = miopan_config.profiler_summary != 0;
+    g_summary_fps_only = miopan_config.profiler_fps_only != 0;
     ImGui::SetCurrentContext(g_context);
     g_plot_context = ImPlot::CreateContext();
     if (g_plot_context == nullptr)
