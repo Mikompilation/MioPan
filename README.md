@@ -145,6 +145,11 @@ Close the game's save/load screen before transferring. Saves made during a
 scripted Mayu action must be saved again after that action finishes before
 conversion.
 
+## Language
+
+Choose the game language at startup. Game text and RmlUi menus follow it; the
+ImGui overlay stays in English. Other saved settings load normally.
+
 ## Font texture replacements
 
 Export the original atlases with Python 3:

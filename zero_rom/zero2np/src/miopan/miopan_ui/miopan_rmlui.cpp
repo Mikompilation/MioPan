@@ -1,3 +1,4 @@
+#include "miopan_rml_language.h"
 #include "miopan_rmlui.h"
 #include "miopan_rml_options.h"
 #include "miopan_rml_load.h"
@@ -408,6 +409,12 @@ public:
 class SystemInterface final : public Rml::SystemInterface
 {
 public:
+    int TranslateString(Rml::String &translated, const Rml::String &input) override
+    {
+        translated = MioPanRmlLanguage::Translate(input);
+        return translated != input ? 1 : 0;
+    }
+
     double GetElapsedTime() override
     {
         return (double)SDL_GetTicksNS() / 1e9;

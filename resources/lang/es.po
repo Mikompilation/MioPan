@@ -1,0 +1,997 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: es\n"
+
+msgid "%.0f nits"
+msgstr "%.0f nits"
+
+msgid "(Not available with the current settings.)"
+msgstr "(No disponible con los ajustes actuales.)"
+
+msgid "1 extra"
+msgstr "1 adicional"
+
+msgid "1.00 is the original frame; smaller covers part of the picture."
+msgstr "1,00 conserva el encuadre original; un valor menor cubre parte de la imagen."
+
+msgid "1.00x turns the view as far as the controller turns."
+msgstr "Con 1,00×, la vista gira tanto como el mando."
+
+msgid "2 extra"
+msgstr "2 adicionales"
+
+msgid "3 extra"
+msgstr "3 adicionales"
+
+msgid "A window on the desktop, or the whole screen. Alt+Enter switches too."
+msgstr "Ventana o pantalla completa. Alt+Intro también cambia el modo."
+
+msgid "Accessory"
+msgstr "Accesorio"
+
+msgid "Aim the raised Camera Obscura by moving the controller, alongside the stick."
+msgstr "Apunta con la Cámara oscura moviendo el mando, además del stick."
+
+msgid "Album"
+msgstr "Álbum"
+
+msgid "All four back to 1.00, which skips the pass."
+msgstr "Restablecer los cuatro valores a 1,00 para desactivar la corrección."
+
+msgid "All three back to the game's setting."
+msgstr "Restablecer los tres controles al ajuste del juego."
+
+msgid "Anisotropic filtering keeps floors sharp at grazing angles. Close to free."
+msgstr "El filtrado anisotrópico mantiene nítidos los suelos en ángulos rasantes, con poco coste."
+
+msgid "Anti-aliasing"
+msgstr "Suavizado de bordes"
+
+msgid "Anything since your last save will be lost."
+msgstr "Se perderá el progreso desde la última partida guardada."
+
+msgid "Aspect ratio"
+msgstr "Relación de aspecto"
+
+msgid "Audio"
+msgstr "Sonido"
+
+msgid "Auto"
+msgstr "Auto"
+
+msgid "Auto fills the window and shows more of the world at the sides. Original keeps the PS2's 640x448 framing."
+msgstr "Automático llena la ventana y amplía los laterales. Original conserva el encuadre de PS2 de 640×448."
+
+msgid "Back"
+msgstr "Volver"
+
+msgid "Bilinear filtering on text, sprites and effects. Off samples them as the PS2 did."
+msgstr "Filtrado bilineal para texto, sprites y efectos. Desactivado usa el muestreo de PS2."
+
+msgid "Bindings"
+msgstr "Asignaciones"
+
+msgid "Blur"
+msgstr "Desenfoque"
+
+msgid "Borderless fullscreen"
+msgstr "Pantalla completa sin bordes"
+
+msgid "Brightness"
+msgstr "Brillo"
+
+msgid "Brightness of the finished picture, after the game's own filter."
+msgstr "Brillo de la imagen final, tras el filtro del juego."
+
+msgid "Bring in the Director's Cut's extra costumes (TYPE I to N) and accessories from your own Xbox copy of the game: choose its folder, the one with default.xbe in it. They join New Game's setup."
+msgstr "Importa los trajes adicionales (TYPE I a N) y accesorios del Director's Cut desde tu copia de Xbox. Elige la carpeta con default.xbe. Aparecerán al crear una partida."
+
+msgid "Browse"
+msgstr "Examinar"
+
+msgid "Button layout"
+msgstr "Distribución de botones"
+
+msgid "Camera"
+msgstr "Cámara"
+
+msgid "Camera-relative"
+msgstr "Según la cámara"
+
+msgid "Camera-relative: Mio heads where you push, as the camera sees it. Tank: left and right turn her and up walks forward."
+msgstr "Según la cámara: Mio sigue la dirección de la pantalla. Clásico: izquierda/derecha giran y arriba avanza."
+
+msgid "Captions under the spoken lines of the movies."
+msgstr "Subtítulos de los diálogos de las películas."
+
+msgid "Change"
+msgstr "Cambiar"
+
+msgid "Change Film"
+msgstr "Cambiar película"
+
+msgid "Change Page"
+msgstr "Cambiar página"
+
+msgid "Change Tab"
+msgstr "Cambiar pestaña"
+
+msgid "Chapter Select"
+msgstr "Seleccionar capítulo"
+
+msgid "Choosing..."
+msgstr "Seleccionando..."
+
+msgid "Circle"
+msgstr "Círculo"
+
+msgid "Cleared"
+msgstr "Completado"
+
+msgid "Cleared once"
+msgstr "Completado una vez"
+
+msgid "Continue"
+msgstr "CONTINUAR"
+
+msgid "Contrast"
+msgstr "Contraste"
+
+msgid "Controls"
+msgstr "Controles"
+
+msgid "Costume"
+msgstr "TRAJE"
+
+msgid "Costumes and accessories"
+msgstr "Trajes y accesorios"
+
+msgid "Crimson"
+msgstr "Carmesí"
+
+msgid "Cross"
+msgstr "Cruz"
+
+msgid "Custom"
+msgstr "Personalizado"
+
+msgid "Custom ratio"
+msgstr "Relación personalizada"
+
+msgid "Cut-out sharpening"
+msgstr "Nitidez de contornos transparentes"
+
+msgid "Cut-out threshold"
+msgstr "Umbral de transparencia"
+
+msgid "D-pad steering"
+msgstr "Movimiento con cruceta"
+
+msgid "Darken"
+msgstr "Oscurecimiento"
+
+msgid "Debug Menu"
+msgstr "Menú de depuración"
+
+msgid "Delete this photo?"
+msgstr "¿Eliminar esta foto?"
+
+msgid "Difficulty"
+msgstr "DIFICULTAD"
+
+msgid "Discards any texel fainter than this. A blunter tool; 0 is off."
+msgstr "Descarta los téxeles menos opacos que este umbral. Es una herramienta más agresiva; 0 la desactiva."
+
+msgid "Display"
+msgstr "Pantalla"
+
+msgid "Display-rate smoothing"
+msgstr "Fluidez según la pantalla"
+
+msgid "Easy"
+msgstr "Fácil"
+
+msgid "Enlarge"
+msgstr "Ampliar"
+
+msgid "Enter"
+msgstr "Intro"
+
+msgid "Equip"
+msgstr "Equipar"
+
+msgid "Esc"
+msgstr "Esc"
+
+msgid "Every key, mouse button and controller button back to the defaults. F1 opens the overlay to rebind them one by one."
+msgstr "Restablece todas las teclas y botones. F1 abre el menú para reasignarlos individualmente."
+
+msgid "Everything, movies included, on top of the game's own Volume on the Game page."
+msgstr "Volumen general, incluidas las películas, además del volumen del juego en la página Juego."
+
+msgid "Exit Game"
+msgstr "Salir del juego"
+
+msgid "Exit the game?"
+msgstr "¿Salir del juego?"
+
+msgid "Expansion knee"
+msgstr "Inicio de la expansión"
+
+msgid "Extra frames"
+msgstr "Fotogramas adicionales"
+
+msgid "File"
+msgstr "Documento"
+
+msgid "Film grain"
+msgstr "Grano de película"
+
+msgid "Floors"
+msgstr "Plantas"
+
+msgid "Follow display"
+msgstr "Según la pantalla"
+
+msgid "Follow system"
+msgstr "Según el sistema"
+
+msgid "Forget the learned drift; set the controller down and keep it still to learn it again."
+msgstr "Olvida la deriva aprendida. Deja el mando inmóvil para recalibrarlo."
+
+msgid "Frame Rate"
+msgstr "Frecuencia de fotogramas"
+
+msgid "Frame size"
+msgstr "Tamaño de imagen"
+
+msgid "Function Upgrades"
+msgstr "Mejoras de funciones"
+
+msgid "Gallery"
+msgstr "Galería"
+
+msgid "Game"
+msgstr "Juego"
+
+msgid "Game Start"
+msgstr "EMPEZAR PARTIDA"
+
+msgid "Game setting ("
+msgstr "Ajuste del juego ("
+
+msgid "Game setting (%s)"
+msgstr "Ajuste del juego (%s)"
+
+msgid "Game setting (left aims)"
+msgstr "Ajuste del juego (apuntar con izquierdo)"
+
+msgid "Game setting (right aims)"
+msgstr "Ajuste del juego (apuntar con derecho)"
+
+msgid "Gamma"
+msgstr "Gamma"
+
+msgid "Glasses"
+msgstr "Gafas"
+
+msgid "Graphics"
+msgstr "Gráficos"
+
+msgid "Gyro"
+msgstr "Giroscopio"
+
+msgid "Gyro aiming"
+msgstr "Apuntado giroscópico"
+
+msgid "Gyro aiming back to its defaults."
+msgstr "Restablece el apuntado giroscópico."
+
+msgid "Gyro sensitivity"
+msgstr "Sensibilidad del giroscopio"
+
+msgid "HDR"
+msgstr "HDR"
+
+msgid "HDR output"
+msgstr "Salida HDR"
+
+msgid "HDR10"
+msgstr "HDR10"
+
+msgid "Hard"
+msgstr "Difícil"
+
+msgid "Hard (PS2)"
+msgstr "Nítidas (PS2)"
+
+msgid "Hard is the PS2's one-tap edge; soft averages it."
+msgstr "Nítidas usa una muestra como en PS2; Suaves promedia las muestras."
+
+msgid "Highlight expansion"
+msgstr "Expansión de luces altas"
+
+msgid "Hold the whole game -- sound and movies too -- and carry on from the same frame when the window comes back."
+msgstr "Pausa el juego, el sonido y las películas cuando la ventana está inactiva."
+
+msgid "Home / End"
+msgstr "Inicio / Fin"
+
+msgid "How a smaller picture is enlarged to the window."
+msgstr "Cómo se amplía una imagen pequeña a la ventana."
+
+msgid "How bright the game's white is in HDR: the system's SDR white, or a level of your own."
+msgstr "Blanco del juego en HDR: blanco SDR del sistema o nivel personalizado."
+
+msgid "How dark it is; full with no blur is plain black."
+msgstr "Oscurecimiento de la periferia. Al máximo y sin desenfoque queda negra."
+
+msgid "How far one movement turns the view."
+msgstr "Cuánto gira la vista con un movimiento."
+
+msgid "How far out of focus the surround falls."
+msgstr "Intensidad del desenfoque periférico."
+
+msgid "How much of the Camera Obscura's red it takes on."
+msgstr "Intensidad del tono rojo de la Cámara oscura."
+
+msgid "Import"
+msgstr "Importar"
+
+msgid "In the background"
+msgstr "En segundo plano"
+
+msgid "Installed: %d costume%s and %d accessory set%s."
+msgstr "Trajes instalados: %1$d; conjuntos de accesorios: %3$d."
+
+msgid "Interpolate camera"
+msgstr "Interpolar cámara"
+
+msgid "Interpolate motion"
+msgstr "Interpolar movimiento"
+
+msgid "Invert gyro X"
+msgstr "Invertir X del giroscopio"
+
+msgid "Invert gyro Y"
+msgstr "Invertir Y del giroscopio"
+
+msgid "Invert mouse X"
+msgstr "Invertir X del ratón"
+
+msgid "Invert mouse Y"
+msgstr "Invertir Y del ratón"
+
+msgid "Inverted"
+msgstr "Invertido"
+
+msgid "Item"
+msgstr "Objeto"
+
+msgid "Its drift is learned whenever it lies still."
+msgstr "La deriva se aprende cuando el mando está inmóvil."
+
+msgid "L1"
+msgstr "L1"
+
+msgid "L2 / R2"
+msgstr "L2 / R2"
+
+msgid "LB"
+msgstr "LB"
+
+msgid "LT / RT"
+msgstr "LT / RT"
+
+msgid "Learning its drift: set it down and keep it still."
+msgstr "Aprendiendo la deriva: deja el mando inmóvil."
+
+msgid "Leave"
+msgstr "Salir"
+
+msgid "Left"
+msgstr "Izquierda"
+
+msgid "Left / Right"
+msgstr "Izquierda / Derecha"
+
+msgid "Left aims"
+msgstr "Apuntar con izquierdo"
+
+msgid "Left stick"
+msgstr "Stick izquierdo"
+
+msgid "Let the controller shake when the game calls for it."
+msgstr "Hace vibrar el mando cuando el juego lo pide."
+
+msgid "Lifts or deepens the mid-tones without touching black or white."
+msgstr "Aclara u oscurece los tonos medios sin alterar el blanco ni el negro."
+
+msgid "Lighting"
+msgstr "Iluminación"
+
+msgid "Lighting and effects"
+msgstr "Iluminación y efectos"
+
+msgid "Load Game"
+msgstr "Cargar partida"
+
+msgid "Load this save?"
+msgstr "¿Cargar esta partida guardada?"
+
+msgid "Look at the album?"
+msgstr "¿Ver el álbum?"
+
+msgid "Mailbox"
+msgstr "Último fotograma disponible"
+
+msgid "Manual"
+msgstr "Manual"
+
+msgid "Map"
+msgstr "Mapa"
+
+msgid "Master volume"
+msgstr "Volumen general"
+
+msgid "Match the window, the PS2's own 640x448 times a scale, or the window times a scale."
+msgstr "Tamaño de ventana, resolución PS2 de 640×448 escalada o ventana escalada."
+
+msgid "Match window"
+msgstr "Ajustar a ventana"
+
+msgid "Mayu"
+msgstr "Mayu"
+
+msgid "Memo"
+msgstr "Nota"
+
+msgid "Menu"
+msgstr "Menú"
+
+msgid "Mio"
+msgstr "Mio"
+
+msgid "Mission"
+msgstr "Misión"
+
+msgid "Mission Select"
+msgstr "Seleccionar misión"
+
+msgid "Mono"
+msgstr "Mono"
+
+msgid "Motion"
+msgstr "Movimiento"
+
+msgid "Mouse"
+msgstr "Ratón"
+
+msgid "Mouse aiming"
+msgstr "Apuntado con ratón"
+
+msgid "Mouse aiming back to its defaults."
+msgstr "Restablece el apuntado con ratón."
+
+msgid "Mouse sensitivity"
+msgstr "Sensibilidad del ratón"
+
+msgid "Move characters and objects between the game's frames too, not only the camera."
+msgstr "Interpola también personajes y objetos entre los fotogramas del juego."
+
+msgid "Move the camera between the game's frames. Off repeats the same picture."
+msgstr "Interpola la cámara entre fotogramas. Desactivado repite la misma imagen."
+
+msgid "Movement"
+msgstr "Movimiento"
+
+msgid "Multisampling smooths the edges of the world. Costly in scenes full of effects, and the depth read-back that stops a ghost being shot through a wall is off with it."
+msgstr "Suaviza los bordes del mundo. Es costoso con muchos efectos y desactiva la lectura de profundidad que impide disparar a través de paredes."
+
+msgid "Mute"
+msgstr "Silenciar"
+
+msgid "Native PS2"
+msgstr "PS2 original"
+
+msgid "Native resolution"
+msgstr "Resolución original"
+
+msgid "New Game"
+msgstr "Nueva partida"
+
+msgid "Nightmare"
+msgstr "PESADILLA"
+
+msgid "Nits at the top of the range."
+msgstr "Brillo máximo en nits."
+
+msgid "Nits for the game's white."
+msgstr "Brillo del blanco del juego en nits."
+
+msgid "No"
+msgstr "No"
+
+msgid "No Data"
+msgstr "Sin datos"
+
+msgid "No controller is connected."
+msgstr "No hay ningún mando conectado."
+
+msgid "No."
+msgstr "N.º"
+
+msgid "None are installed yet."
+msgstr "Todavía no hay elementos instalados."
+
+msgid "Normal"
+msgstr "NORMAL"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Off"
+msgstr "Desactivado"
+
+msgid "On"
+msgstr "Activado"
+
+msgid "On never tears. Off never waits, and tears. Mailbox shows the newest frame without either, where the driver has it."
+msgstr "Activado evita el desgarro; desactivado no espera. Último fotograma disponible evita ambos si el controlador lo permite."
+
+msgid "Options"
+msgstr "Opciones"
+
+msgid "Original (PS2)"
+msgstr "Original (PS2)"
+
+msgid "Overrides the game's Movement for the d-pad alone. In the game's camera-relative mode the d-pad does not walk."
+msgstr "Cambia el movimiento solo para la cruceta. En el modo del juego según la cámara, la cruceta no camina."
+
+msgid "Overrides the game's Movement for the left stick alone. Whichever control is pushing steers."
+msgstr "Cambia el movimiento solo para el stick izquierdo. Dirige el control que se utilice."
+
+msgid "Overrides the game's Viewfinder aim: which stick aims and which sidesteps."
+msgstr "Cambia el apuntado del visor: qué stick apunta y cuál desplaza lateralmente."
+
+msgid "PS2"
+msgstr "PS2"
+
+msgid "Paper white"
+msgstr "Blanco de referencia"
+
+msgid "Paper white level"
+msgstr "Nivel de blanco de referencia"
+
+msgid "Pause"
+msgstr "Pausa"
+
+msgid "Peak brightness"
+msgstr "Brillo máximo"
+
+msgid "Peak level"
+msgstr "Nivel máximo"
+
+msgid "Per-pixel spotlights"
+msgstr "Focos por píxel"
+
+msgid "Per-pixel, all lights"
+msgstr "Todas las luces por píxel"
+
+msgid "PgUp / PgDn"
+msgstr "RePág / AvPág"
+
+msgid "Photo"
+msgstr "Foto"
+
+msgid "Picture"
+msgstr "Imagen"
+
+msgid "Play"
+msgstr "Tiempo"
+
+msgid "Play time  %03d:%02d:%02d"
+msgstr "Tiempo de juego  %03d:%02d:%02d"
+
+msgid "Present once per monitor refresh, each frame blended to the moment it reaches the screen. The game still runs at its own pace."
+msgstr "Presenta una imagen interpolada en cada actualización de pantalla. El ritmo del juego no cambia."
+
+msgid "Presenting in HDR."
+msgstr "Mostrando en HDR."
+
+msgid "Presenting in SDR."
+msgstr "Mostrando en SDR."
+
+msgid "Press"
+msgstr "Pulsar"
+
+msgid "Press Start"
+msgstr "Pulsa Start"
+
+msgid "Put every setting on this page back as it was."
+msgstr "Restablece todos los ajustes de esta página."
+
+msgid "Q / E"
+msgstr "Q / E"
+
+msgid "R1"
+msgstr "R1"
+
+msgid "RB"
+msgstr "RB"
+
+msgid "Radio"
+msgstr "Radio"
+
+msgid "Re-import"
+msgstr "Volver a importar"
+
+msgid "Recalibrate"
+msgstr "Recalibrar"
+
+msgid "Recalibrate gyro"
+msgstr "Recalibrar giroscopio"
+
+msgid "Reduce"
+msgstr "Reducir"
+
+msgid "Remove"
+msgstr "Quitar"
+
+msgid "Render resolution"
+msgstr "Resolución de renderizado"
+
+msgid "Reset"
+msgstr "Restablecer"
+
+msgid "Reset all bindings"
+msgstr "Restablecer asignaciones"
+
+msgid "Reset every binding to its default?"
+msgstr "¿Restablecer todas las asignaciones?"
+
+msgid "Reset gyro"
+msgstr "Restablecer giroscopio"
+
+msgid "Reset mouse"
+msgstr "Restablecer ratón"
+
+msgid "Reset picture"
+msgstr "Restablecer imagen"
+
+msgid "Reset steering"
+msgstr "Restablecer movimiento"
+
+msgid "Resolution scale"
+msgstr "Escala de resolución"
+
+msgid "Restore"
+msgstr "Restaurar"
+
+msgid "Restore defaults"
+msgstr "Restaurar valores predeterminados"
+
+msgid "Restore the game's default settings?"
+msgstr "¿Restaurar los ajustes del juego?"
+
+msgid "Restores the crisp alpha edge on foliage, fences and hair when the picture is drawn above the PS2's size."
+msgstr "Recupera contornos nítidos en vegetación, vallas y pelo por encima de la resolución PS2."
+
+msgid "Resume"
+msgstr "Continuar"
+
+msgid "Return to Title"
+msgstr "Volver al título"
+
+msgid "Return to the title screen?"
+msgstr "¿Volver a la pantalla de título?"
+
+msgid "Return to the title?"
+msgstr "¿Volver al título?"
+
+msgid "Right"
+msgstr "Derecha"
+
+msgid "Right aims"
+msgstr "Apuntar con derecho"
+
+msgid "Right stick"
+msgstr "Stick derecho"
+
+msgid "Roll"
+msgstr "Balanceo"
+
+msgid "SELECT"
+msgstr "SELECCIONAR"
+
+msgid "START"
+msgstr "START"
+
+msgid "Saturation"
+msgstr "Saturación"
+
+msgid "Save"
+msgstr "Partida"
+
+msgid "Save Game"
+msgstr "Guardar partida"
+
+msgid "Save Point"
+msgstr "Punto de guardado"
+
+msgid "Save here?"
+msgstr "¿Guardar aquí?"
+
+msgid "Save over this game?"
+msgstr "¿Sobrescribir esta partida?"
+
+msgid "Save the game?"
+msgstr "¿Guardar la partida?"
+
+msgid "Save to memory card"
+msgstr "Guardar en tarjeta de memoria"
+
+msgid "Section"
+msgstr "Sección"
+
+msgid "Select"
+msgstr "SELECCIONAR"
+
+msgid "Setup"
+msgstr "Configuración"
+
+msgid "Shadows"
+msgstr "Sombras"
+
+msgid "Sharp"
+msgstr "Nítido"
+
+msgid "Silence the game while the window is minimised or another window has the focus."
+msgstr "Silencia el juego cuando la ventana está minimizada o inactiva."
+
+msgid "Slot %d"
+msgstr "Ranura %d"
+
+msgid "Smooth"
+msgstr "Suave"
+
+msgid "Smooth sprites"
+msgstr "Suavizar sprites"
+
+msgid "Soft"
+msgstr "Suaves"
+
+msgid "Sound"
+msgstr "Sonido"
+
+msgid "Special"
+msgstr "Especial"
+
+msgid "Spirit List"
+msgstr "Lista de espíritus"
+
+msgid "Spread between the darkest and lightest tones."
+msgstr "Diferencia entre los tonos más oscuros y los más claros."
+
+msgid "Square"
+msgstr "Cuadrado"
+
+msgid "Start"
+msgstr "Start"
+
+msgid "Stereo"
+msgstr "Estéreo"
+
+msgid "Stereo, or both speakers carrying the same mix."
+msgstr "Estéreo o la misma mezcla en ambos altavoces."
+
+msgid "Stick steering"
+msgstr "Movimiento con stick"
+
+msgid "Stop"
+msgstr "Detener"
+
+msgid "Story"
+msgstr "Historia"
+
+msgid "Strength of colour; 0 is black and white."
+msgstr "Intensidad del color; 0 es blanco y negro."
+
+msgid "Stretches the brightest tones into the HDR headroom. 0 invents nothing -- the faithful setting."
+msgstr "Expande los tonos más brillantes al rango HDR. 0 mantiene la imagen fiel."
+
+msgid "Subtitles"
+msgstr "Subtítulos"
+
+msgid "Surround"
+msgstr "Periferia"
+
+msgid "Swap left and right."
+msgstr "Intercambia izquierda y derecha."
+
+msgid "Swap up and down."
+msgstr "Intercambia arriba y abajo."
+
+msgid "TIM2"
+msgstr "TIM2"
+
+msgid "Tank"
+msgstr "Clásico"
+
+msgid "Texture filtering"
+msgstr "Filtrado de texturas"
+
+msgid "The brightest the picture may go: what the display reports, or a level of your own."
+msgstr "Brillo máximo: valor de la pantalla o nivel personalizado."
+
+msgid "The cursor is captured while the Camera Obscura is raised and the mouse turns it."
+msgstr "El cursor se captura al levantar la Cámara oscura y el ratón controla la mira."
+
+msgid "The display reports SDR white at %.0f nits and a %.0f nit peak."
+msgstr "La pantalla indica un blanco SDR de %.0f nits y un máximo de %.0f nits."
+
+msgid "The game's brightness filter. Raise it until the darkest corners of a room just show."
+msgstr "Filtro de brillo del juego. Auméntalo hasta distinguir las esquinas más oscuras."
+
+msgid "The game's own level for music, voices and effects."
+msgstr "Volumen del juego para música, voces y efectos."
+
+msgid "The game's three DUALSHOCK 2 button arrangements."
+msgstr "Las tres distribuciones DUALSHOCK 2 del juego."
+
+msgid "The grain over the picture: off, the PS2's sheet at its own size, or one grain per screen pixel."
+msgstr "Grano: desactivado, textura PS2 a tamaño original o adaptado a los píxeles de pantalla."
+
+msgid "The multiplier for the mode above. The game is drawn at %dx%d now."
+msgstr "Multiplicador del modo anterior. Resolución actual: %dx%d."
+
+msgid "The stick that aims the Camera Obscura; the other one sidesteps."
+msgstr "Stick para apuntar con la Cámara oscura; el otro desplaza lateralmente."
+
+msgid "This controller has no gyro."
+msgstr "Este mando no tiene giroscopio."
+
+msgid "Title"
+msgstr "Título"
+
+msgid "Treat the world beyond the PS2's 640x448 while the Camera Obscura is raised -- a port addition."
+msgstr "Aplica un efecto fuera del encuadre PS2 de 640×448 al levantar la Cámara oscura."
+
+msgid "Triangle"
+msgstr "Triángulo"
+
+msgid "Turn Page"
+msgstr "Pasar página"
+
+msgid "Turn with"
+msgstr "Girar con"
+
+msgid "Type"
+msgstr "Tipo"
+
+msgid "Type A"
+msgstr "Tipo A"
+
+msgid "Type B"
+msgstr "Tipo B"
+
+msgid "Type C"
+msgstr "Tipo C"
+
+msgid "Type-"
+msgstr "Tipo-"
+
+msgid "Upscaling"
+msgstr "Escalado"
+
+msgid "Use HD Fonts when available"
+msgstr "Usar fuentes HD si están disponibles"
+
+msgid "Use matching HD font textures when installed; otherwise use the original fonts."
+msgstr "Usar las texturas de fuentes HD correspondientes si están instaladas; de lo contrario, usar las fuentes originales."
+
+msgid "Vertex (PS2)"
+msgstr "Vertex (PS2)"
+
+msgid "Vertex lights every vertex on the CPU, as the PS2 did. The per-pixel modes light spotlights, or everything, per pixel."
+msgstr "Vértices calcula la iluminación en CPU como PS2. Los modos por píxel calculan los focos o todas las luces."
+
+msgid "Vertical sync"
+msgstr "Sincronización vertical"
+
+msgid "Vibration"
+msgstr "Vibración"
+
+msgid "View"
+msgstr "Ver"
+
+msgid "Viewfinder aim"
+msgstr "Apuntado del visor"
+
+msgid "Viewfinder sticks"
+msgstr "Sticks del visor"
+
+msgid "Viewfinder surround"
+msgstr "Periferia del visor"
+
+msgid "Viewfinder vertical"
+msgstr "Apuntado vertical"
+
+msgid "Volume"
+msgstr "Volumen"
+
+msgid "Where in the range the stretch begins."
+msgstr "Punto donde empieza la expansión."
+
+msgid "Which way up and down turn the Camera Obscura."
+msgstr "Dirección del apuntado vertical de la Cámara oscura."
+
+msgid "Width over height, for Custom."
+msgstr "Ancho entre alto, para Personalizado."
+
+msgid "Window"
+msgstr "Ventana"
+
+msgid "Window scale"
+msgstr "Escala de ventana"
+
+msgid "Windowed"
+msgstr "Ventana"
+
+msgid "Without display-rate smoothing: frames shown between the game's own, at up to 60 a second."
+msgstr "Sin fluidez según pantalla: imágenes intermedias hasta 60 fotogramas por segundo."
+
+msgid "Working..."
+msgstr "Procesando..."
+
+msgid "Write these settings to the system file, so the game starts with them."
+msgstr "Guarda estos ajustes en el archivo de sistema para los próximos inicios."
+
+msgid "Xbox Director's Cut"
+msgstr "Xbox Director's Cut"
+
+msgid "Yaw"
+msgstr "Guiñada"
+
+msgid "Yaw: point the controller left and right. Roll: tip it sideways like a wheel."
+msgstr "Guiñada: orienta el mando a izquierda/derecha. Balanceo: inclínalo como un volante."
+
+msgid "Yes"
+msgstr "Sí"
+
+msgid "can't use"
+msgstr "no se puede usar"
+
+msgid "does not walk"
+msgstr "sin movimiento"
+
+msgid "enhancing"
+msgstr "mejorando"
+
+msgid "it is protected"
+msgstr "está protegida"
+
+msgid "left aims"
+msgstr "apuntar con izquierdo"
+
+msgid "load this?"
+msgstr "¿cargar?"
+
+msgid "right aims"
+msgstr "apuntar con derecho"
+
+msgid "scRGB"
+msgstr "scRGB"
+
+msgid "selected"
+msgstr "seleccionado"
+
+msgid "times"
+msgstr "veces"
+
+msgid "use this?"
+msgstr "¿usar?"
+
+msgid "Press %s"
+msgstr "Pulsa %s"

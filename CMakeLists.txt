@@ -139,7 +139,8 @@ add_custom_command(TARGET MioPan POST_BUILD
 # executable on every build -- the resources copy above only runs when the
 # executable relinks -- so a menu can be restyled without touching code.
 file(GLOB_RECURSE MIOPAN_RML_FILES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/resources/rml/*")
+    "${CMAKE_SOURCE_DIR}/resources/rml/*"
+    "${CMAKE_SOURCE_DIR}/resources/lang/*.po")
 set(MIOPAN_RML_DEPLOYED)
 foreach(rml_file ${MIOPAN_RML_FILES})
     file(RELATIVE_PATH rml_relative "${CMAKE_SOURCE_DIR}" "${rml_file}")
