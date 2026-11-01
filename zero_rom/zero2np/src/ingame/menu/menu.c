@@ -15,8 +15,7 @@
 //
 // The backdrop is six layers, drawn back to front by MenuDispMain():
 //
-//   MenuCaptureDataDisp   the frame the game was on, blitted back out of the
-//                         scratch VRAM page -- drawn only while the shoji are
+//   MenuCaptureDataDisp   the GPU snapshot -- drawn only while the shoji are
 //                         still moving, so the room shows through the gap
 //   Left/RightShojiDisp   the two paper screens, sliding in from +-320
 //   TourouDisp            the lantern: two pattern sheets scrolling at
@@ -76,26 +75,17 @@
 #include "../../system/eeiop/snd3d.h"           /* SND_3D_SET             */
 #include "../../system/eeiop/stream_auto.h"     /* StreamAuto*            */
 
+#include "../../miopan/rendering/miopan_renderer.h"
+
 #include <string.h>                             /* memset                 */
 
 /* --------------------------------------------------------------------------
  *  Constants
  * ------------------------------------------------------------------------ */
 
-/* Where the frame behind the menu is parked.  MenuInDispCapture() reads the
- * back buffer (LocalCopyLtoB) into a heap block once, and SetMenuCaptureData()
- * pushes it back into this VRAM page (LocalCopyBtoL) every frame the picture
- * is still wanted -- which is why the still survives the menu drawing over it.
- * Same page movie.c decodes into, and the same 0x1180 page stride the pause
- * screens use. */
-#define MENU_FRAME_BUF_ADRS     0x1180
-#define MENU_CAPTURE_ADRS       0x2bc0
+/* Keep the displayed frame on the GPU at its rendered resolution. */
+#define MENU_CAPTURE_ADRS 0x2bc0
 
-/* The still is a full 640x448 PSMCT32 page at TBP0 = MENU_CAPTURE_ADRS, point
- * sampled.  Neither register is in SPRT_DAT, so both are written by hand after
- * CopySprDToSpr(); movie.c writes the identical pair for the same page. */
-#define MENU_CAPTURE_TEX0       0x200578026802abc0ULL
-#define MENU_CAPTURE_TEX1       0x161
 
 /* Frames the shoji take to slide in, and to slide back out of a fully open
  * menu.  A menu closed mid-slide gets 4 instead (see bganim_in_to_out). */
@@ -135,7 +125,6 @@ static void MenuTexBackGroundLoad(void);
 static void MenuInDispCapture(void);
 static void MenuDispCtrlInit(void);
 static void MenuBg_AnimCtrl(void);
-static void SetMenuCaptureData(void);
 static void MenuCaptureDataDisp(void);
 static void MenuBg_LeftShojiDisp(int off_x, int off_y, u_char alpha);
 static void MenuBg_RightShojiDisp(int off_x, int off_y, u_char alpha);
@@ -171,7 +160,6 @@ static MENU_CTRL menu_ctrl[MENU_STEP_NUM] =                 /* data 321618 */
 
 /* Heap block holding the frame the menu opened over.  Claimed once and kept
  * for the whole visit; MenuRelease() gives it back. */
-static void *menu_caption_adrs;                             /* sdata 3f2ae0 */
 
 MENU_WRK menu_wrk;                                          /* data  321660 */
 char     map_view_flg;                                      /* sdata 3f2b00 */
@@ -338,10 +326,7 @@ void MenuRelease(void)                                                  /* 416 *
     MenuMemoTexLoadCancel();                                            /* 422 */
     MenuSoulTexLoadCancel();                                            /* 427 */
 
-    if (menu_caption_adrs != nullptr) {                                 /* 430 */
-        mem_utilFreeMem(menu_caption_adrs);                             /* 432 */
-        menu_caption_adrs = nullptr;                                    /* 433 */
-    }
+
 
     /* Normally MenuMain() has already faded this out and parked -1; the test
      * covers a release from somewhere that never ran the out animation. */
@@ -385,17 +370,9 @@ void MenuDispInit(void)                                                 /* 477 *
  *
  * The assert names MenuInDispCaption(), not MenuInDispCapture(); the ROM's own
  * typo, and only the message carries it -- __FUNCTION__ is spelt right. */
-static void MenuInDispCapture(void)                                     /* 494 */
+static void MenuInDispCapture(void)
 {
-    if (menu_caption_adrs == nullptr) {                                 /* 497 */
-        menu_caption_adrs = mem_utilGetMem(LocalCopyLtoBGetSize(0));    /* 498 */
-    }
-    else {
-        PRINT_ASSERT("MenuInDispCaption() adrs Is not NULL");           /* 500 */
-    }
-
-    LocalCopyLtoBAdrs(0, (uintptr_t)menu_caption_adrs,
-                      (int)(((sys_wrk.count + 1) & 1) * MENU_FRAME_BUF_ADRS)); /* 502 */
+    MioPan_RendererCaptureScreen(MENU_CAPTURE_ADRS);
 }
 
 static void MenuDispCtrlInit(void)                                      /* 511 */
@@ -425,8 +402,6 @@ void MenuDispMain(void)                                                 /* 536 *
         menu_disp.bg_anim_timer = 0;                                    /* 541 */
         menu_disp.menu_bg_anim = MENU_BG_ANIM_IN;                       /* 543 */
     }
-
-    SetMenuCaptureData();                                               /* 550 */
 
     /* The still is only wanted while the shoji have not met -- once they are
      * closed there is nothing of the room left to see through them. */
@@ -530,25 +505,9 @@ static void MenuBg_AnimCtrl(void)                                       /* 603 *
 /* Push the still back into the scratch VRAM page, which the GS then samples
  * from.  Run every frame the menu is up, because whatever the game drew last
  * frame is still sitting in that page otherwise. */
-static void SetMenuCaptureData(void)                                    /* 676 */
+static void MenuCaptureDataDisp(void)
 {
-    LocalCopyBtoLAdrs(0, (uintptr_t)menu_caption_adrs,
-                      MENU_CAPTURE_ADRS);                               /* 682 */
-}
-
-static void MenuCaptureDataDisp(void)                                   /* 692 */
-{
-    SPRT_DAT  sd = { 0, 0, 0, 640, 448, 0, 0, 0xe0, 0x80, 0, 1 };       /* 694 */
-    DISP_SPRT ds;
-
-    memset(&ds, 0, sizeof(ds));                                         /* 698 */
-
-    CopySprDToSpr(&ds, &sd);                                            /* 701 */
-
-    ds.tex0 = MENU_CAPTURE_TEX0;                                        /* 702 */
-    ds.tex1 = MENU_CAPTURE_TEX1;                                        /* 704 */
-
-    DispSprD(&ds);                                                      /* 705 */
+    MioPan_RendererDrawCapturedScreen(MENU_CAPTURE_ADRS, 0x80, 0x80, 0x80, 0x80);
 }
 
 /* ==========================================================================
