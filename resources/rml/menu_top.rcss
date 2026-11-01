@@ -34,6 +34,7 @@
 
 .page-label
 {
+    white-space: nowrap;
     top: 0;
     font-size: 2.1em;
     line-height: 1.55em;

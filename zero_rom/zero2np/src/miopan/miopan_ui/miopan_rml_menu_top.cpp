@@ -46,8 +46,7 @@ constexpr int kRowX = 32;
 constexpr int kRowY = 68;
 constexpr int kRowPitch = 35;
 constexpr int kRowW = 164;
-constexpr int kLabelX = 47;
-constexpr int kLabelW = 119;
+constexpr int kLabelInset = 8;
 constexpr int kStatusX = 206;
 constexpr int kStatusY = 74;
 constexpr int kCaptionX = 24;
@@ -156,7 +155,8 @@ std::string Row(int page, int shown_row)
     rml += ArtIn(scale, MENU_BG_TEX_ADRS, menu_cmn_dat[kRowLit[1]], kRowW / 2, 0,
                  kRowW / 2, half.h);
     rml += "</div>";
-    rml += Number(scale, kPageLabels[page], kLabelX - kRowX, 0, kLabelW, "page-label");
+    rml += Number(scale, kPageLabels[page], kLabelInset, 0,
+                  kRowW - 2 * kLabelInset, "page-label");
     return rml + "</div>";
 }
 
