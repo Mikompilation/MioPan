@@ -164,6 +164,9 @@ void ConfirmDialog::Open(const std::string &text, const std::string &note,
     {
         return;
     }
+    // These labels were first parsed before the startup language choice.
+    yes_->SetInnerRML("Yes");
+    no_->SetInnerRML("No");
     if (text_ != nullptr)
     {
         text_->SetInnerRML(Escape(text));

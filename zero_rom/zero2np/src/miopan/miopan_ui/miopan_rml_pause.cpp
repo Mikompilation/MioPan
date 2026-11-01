@@ -279,6 +279,16 @@ int MioPan_RmlPauseOpen(void)
     {
         return 0;
     }
+    // Documents load before language selection; refresh static labels when opened.
+    if (Rml::Element *title = g_pause.document->QuerySelector("h1.title"))
+    {
+        title->SetInnerRML("Pause");
+    }
+    const char *labels[ITEM_COUNT] = {"Continue", "Options", "Return to Title"};
+    for (int i = 0; i < ITEM_COUNT; ++i)
+    {
+        if (g_pause.items[i] != nullptr) g_pause.items[i]->SetInnerRML(labels[i]);
+    }
     g_pause.open = true;
     g_pause.hidden = false;
     g_pause.in_options = false;
