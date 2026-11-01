@@ -100,8 +100,8 @@ folder (`%APPDATA%\Mikompilation\MioPan` on Windows).
 
 # PS2 save transfer
 
-Open **Settings → PS2 save transfer…** in the F1 overlay to import or export EU
-(SLES-52384) saves. Import from an 8 MB memory card, PSU/MAX/XPS/SPS/CBS archive or extracted
+Open **Settings → PS2 save transfer…** in the F1 overlay to import or export
+European (SLES-52384), US (SLUS-20766) and Japanese (SLPS-25303) saves. Import from an 8 MB memory card, PSU/MAX/XPS/SPS/CBS archive or extracted
 save folder. Select one or more saves and assign their destination slots; room
 previews and play times help identify each slot.
 
@@ -110,6 +110,19 @@ the target PS2 game version on the save-selection page. Retail's separate music
 and effects volumes become one shared volume in MioPan; new PC save folders use
 the music level. Existing destination settings are retained when importing.
 Exports to retail use the shared level for both volumes.
+
+Choose the output region when exporting; the prototype/release choice applies
+to Europe. US/Japanese saves have an extra Twin's Doll photo entry. Import merges
+it into EU's Twin Doll entry, keeping the highest score and obtained/read status.
+On export, choose whether to leave the extra entry unobtained or copy the shared
+entry's status and score. Copying reconstructs progress, not its original history.
+
+Mission times are converted for the selected timing. Stock EU PS2 saves use
+50 Hz PAL; US/Japanese saves and MioPan use 60 Hz. Use the source-timing override
+for EU saves made with different timing, including older port exports. Red warning
+icons mark unsupported slots: hover or click for details. Other compatible slots
+remain selectable. Some active scenes and locations cannot be converted safely;
+save again after the scene or in another location.
 
 Export offers these formats:
 

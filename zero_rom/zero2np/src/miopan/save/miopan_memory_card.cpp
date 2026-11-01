@@ -284,10 +284,10 @@ class Card
                         std::min(size_t(1024), bytes.size() - i), bytes.data() + i);
         return bytes;
     }
-    SaveFiles GameFiles(bool &found)
+    SaveFiles GameFiles(bool &found, const char *folder)
     {
         SaveFiles files;
-        auto *dir = Find(root, FolderName);
+        auto *dir = Find(root, folder);
         found = dir != nullptr;
         if (!dir)
             return files;
@@ -356,11 +356,11 @@ class Card
         parent.children.push_back(std::move(child));
         return parent.children.back();
     }
-    void ReplaceGame(const SaveFiles &files)
+    void ReplaceGame(const SaveFiles &files, const char *folder)
     {
-        Node *directory = Find(root, FolderName);
+        Node *directory = Find(root, folder);
         if (!directory)
-            directory = &Append(root, FolderName, true);
+            directory = &Append(root, folder, true);
         for (const auto &old : directory->children)
             Require(files.count(old.name) != 0, "Unexpected file in existing game save.");
         for (const auto &[name, bytes] : files)
@@ -445,12 +445,12 @@ Bytes Blank()
     return data;
 }
 } // namespace
-bool ReadMemoryCard(const Bytes &image, SaveFiles &files, bool &found, std::string &error)
+bool ReadMemoryCard(const Bytes &image, SaveFiles &files, bool &found, std::string &error, const char *folder)
 {
     try
     {
         Card card(image);
-        auto result = card.GameFiles(found);
+        auto result = card.GameFiles(found, folder);
         files = std::move(result);
         error.clear();
         return true;
@@ -461,16 +461,16 @@ bool ReadMemoryCard(const Bytes &image, SaveFiles &files, bool &found, std::stri
         return false;
     }
 }
-bool WriteMemoryCard(const Bytes &base, const SaveFiles &files, Bytes &output, std::string &error, bool ecc)
+bool WriteMemoryCard(const Bytes &base, const SaveFiles &files, Bytes &output, std::string &error, bool ecc, const char *folder)
 {
     try
     {
         Card card(base.empty() ? Blank() : base);
-        card.ReplaceGame(files);
+        card.ReplaceGame(files, folder);
         auto result = card.Encode(ecc);
         Card checked(result);
         bool found = false;
-        Require(checked.GameFiles(found) == files && found, "Exported card verification failed.");
+        Require(checked.GameFiles(found, folder) == files && found, "Exported card verification failed.");
         output = std::move(result);
         error.clear();
         return true;

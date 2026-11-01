@@ -1,7 +1,7 @@
 #ifndef MIOPAN_SAVE_TRANSFER_H
 #define MIOPAN_SAVE_TRANSFER_H
 #include "miopan_save_archive.h"
-#include "miopan_save_codec.h"
+#include "miopan_save_region.h"
 #include <array>
 #include <filesystem>
 #include <map>
@@ -11,7 +11,8 @@ namespace MioPanSave
 struct SlotInfo
 {
     bool occupied = false;
-    std::string description;
+    std::string description, issue, notice;
+    unsigned hz = 25;
     std::string player;
     unsigned chapter = 0, hours = 0, minutes = 0, seconds = 0;
     int area = 0, place = 0;
@@ -19,9 +20,11 @@ struct SlotInfo
 };
 struct Folder
 {
+    std::string issue;
     std::map<std::string, Bytes> files;
     std::array<SlotInfo, 5> slots;
     SaveVersion version = SaveVersion::Prototype;
+    SaveRegion region = SaveRegion::EU;
 };
 enum class StorageKind
 {
@@ -48,13 +51,15 @@ bool ReadStorage(const std::filesystem::path &path, StorageKind kind, bool nativ
                  Storage &storage, std::string &error);
 bool BuildBatch(const Folder &source, const Folder *destination,
                 const std::vector<SlotMapping> &slots, bool export_ps2, Folder &result,
-                std::string &error, SaveVersion version = SaveVersion::Retail);
+                std::string &error, SaveVersion version = SaveVersion::Retail,
+                const RegionOptions &options = {});
 // Uses the captured snapshots; card output must be a new filename. No persistent backups.
 bool TransferBatch(const Storage &source, const Storage &destination,
                    const std::vector<SlotMapping> &slots, bool export_ps2,
                    const std::filesystem::path &card_output, std::string &error, bool ecc = true,
                    SaveArchiveFormat archive = SaveArchiveFormat::None,
-                   SaveVersion version = SaveVersion::Retail);
+                   SaveVersion version = SaveVersion::Retail,
+                const RegionOptions &options = {});
 bool Inspect(const std::filesystem::path &path, bool native_allowed, Folder &folder,
              std::string &error);
 } // namespace MioPanSave

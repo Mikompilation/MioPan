@@ -106,15 +106,16 @@ Bytes ConvertSystem(Bytes data, SaveVersion version)
         Seal(data);
     return data;
 }
-Folder Fresh(const Folder &source, bool ps2)
+Folder Fresh(const Folder &source, bool ps2, SaveRegion region)
 {
     Folder out;
     for (auto name : {"Zero2System", "icon.sys", Icon})
         out.files[name] = source.files.at(name);
-    out.files[FolderName] = Bytes(HeadSize, 0);
-    Seal(out.files[FolderName]);
+    out.region = region;
+    out.files[RegionFolder(region)] = Bytes(HeadSize, 0);
+    Seal(out.files[RegionFolder(region)]);
     for (int i = 0; i < 5; ++i)
-        out.files[Name(i)] = EmptySlot(ps2 ? Ps2Size : NativeSize());
+        out.files[Name(i)] = EmptySlot(ps2 ? RegionalSize(region) : NativeSize());
     return out;
 }
 void WriteFolder(const fs::path &path, const Folder &folder)
@@ -135,17 +136,15 @@ bool Inspect(const fs::path &path, bool native_allowed, Folder &folder, std::str
     try
     {
         if (fs::is_symlink(path) || !fs::is_directory(path))
-            throw std::runtime_error("Choose the extracted EU save folder containing its files.");
+            throw std::runtime_error("Choose the extracted FF2 save folder containing its files.");
         Folder result;
-        std::set<std::string> names = {FolderName, "Zero2System", "icon.sys", Icon};
+        std::set<std::string> names = {"Zero2System", "icon.sys", Icon};
+        for (auto region : {SaveRegion::EU, SaveRegion::US, SaveRegion::JP})
+            if (fs::exists(path / RegionFolder(region))) names.insert(RegionFolder(region));
         for (int i = 0; i < 5; ++i)
             names.insert(Name(i));
-        for (const auto &e : fs::directory_iterator(path))
-            if (!names.count(PathUtf8(e.path().filename())))
-                throw std::runtime_error("Unexpected file in the save folder: " +
-                                         PathUtf8(e.path().filename()));
         for (const auto &name : names)
-            result.files[name] = Read(path / name);
+            if (fs::exists(path / name)) result.files[name] = Read(path / name);
         return InspectFiles(result.files, native_allowed, folder, error);
     }
     catch (const std::exception &e)
@@ -158,33 +157,34 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
 {
     try
     {
-        if (files.size() != 9)
-            throw std::runtime_error("An EU save folder must contain its nine game files.");
-        for (auto name : {FolderName, "Zero2System", "icon.sys", Icon})
+        SaveRegion region = SaveRegion::EU;
+        unsigned regions = 0;
+        for (auto candidate : {SaveRegion::EU, SaveRegion::US, SaveRegion::JP})
+            if (files.count(RegionFolder(candidate))) { region = candidate; ++regions; }
+        if (regions != 1) throw std::runtime_error("Choose a save with one supported FF2 region.");
+        for (auto name : {RegionFolder(region), "Zero2System", "icon.sys", Icon})
             if (!files.count(name))
                 throw std::runtime_error(std::string("Missing game file: ") + name);
-        for (int i = 0; i < 5; ++i)
-            if (!files.count(Name(i)))
-                throw std::runtime_error("Missing game file: " + Name(i));
         Folder result;
         result.files = files;
-        const auto &head = result.files.at(FolderName);
+        result.region = region;
+        const auto &head = result.files.at(RegionFolder(region));
         const auto &sys = result.files.at("Zero2System");
         const auto &icon = result.files.at("icon.sys");
         if (head.size() != HeadSize || !Checksum(head))
-            throw std::runtime_error("Invalid EU save header or checksum.");
-        if (sys.size() != 44 && sys.size() != 48)
-            throw std::runtime_error("Unknown FF2 system-save version; EU retail or February 2004 "
+            throw std::runtime_error("Invalid FF2 save header or checksum.");
+        if ((sys.size() != 44 && sys.size() != 48) || (region != SaveRegion::EU && sys.size() != 44))
+            throw std::runtime_error("Unknown FF2 system-save version; retail or February 2004 "
                                      "prototype saves are required.");
         if (!Checksum(sys) && !Empty(sys))
             throw std::runtime_error("Invalid system-save checksum.");
-        result.version = sys.size() == 48 ? SaveVersion::Retail : SaveVersion::Prototype;
+        result.version = region != SaveRegion::EU || sys.size() == 48 ? SaveVersion::Retail : SaveVersion::Prototype;
         // Older MioPan exports paired prototype options with retail gameplay pointers.
-        if (sys.size() == 44)
+        if (region == SaveRegion::EU && sys.size() == 44)
         {
             std::string detail;
             for (int i = 0; i < 5; ++i)
-                if (head[125 + i] == 1 &&
+                if (files.count(Name(i)) && head[125 + i] == 1 &&
                     !Validate(files.at(Name(i)), detail, SaveVersion::Prototype) &&
                     Validate(files.at(Name(i)), detail, SaveVersion::Retail))
                     result.version = SaveVersion::Retail;
@@ -194,39 +194,45 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
             throw std::runtime_error("Missing or invalid PS2 save icons.");
         for (int i = 0; i < 5; ++i)
         {
-            const auto &d = result.files.at(Name(i));
             auto &slot = result.slots[i];
-            if (d.size() != Ps2Size && (!native_allowed || d.size() != NativeSize()))
-                throw std::runtime_error(
-                    "Unsupported slot size/version; EU PS2 saves are required.");
+            const auto found = result.files.find(Name(i));
+            if (found == result.files.end())
+            {
+                slot.occupied = head[125 + i] != 0;
+                slot.issue = "Missing game file: " + Name(i);
+                slot.description = "Unavailable save";
+                continue;
+            }
+            const auto &d = found->second;
             if (head[125 + i] > 1 || head[120 + i] > 1)
-                throw std::runtime_error("Invalid slot availability flag.");
+                slot.issue = "Invalid slot availability flag.";
             slot.occupied = head[125 + i] == 1;
+            const bool native = d.size() == NativeSize();
+            if (d.size() != RegionalSize(region) && !(native_allowed && native && region == SaveRegion::EU))
+                slot.issue = "Unsupported slot size for the declared region.";
             if (!slot.occupied)
             {
-                if (!Empty(d))
-                    throw std::runtime_error("Empty slot metadata does not match the slot file.");
+                if (!Empty(d)) slot.issue = "Empty slot metadata does not match the slot file.";
                 slot.description = "Empty";
                 continue;
             }
-            if (!Validate(d, error, result.version))
-                return false;
-            const auto *g = d.data();
-            if (U32(head.data() + i * 4) != g[0] || U32(head.data() + 20 + i * 4) != g[2] ||
-                head[120 + i] != g[3])
-                throw std::runtime_error("Slot metadata does not match gameplay data.");
             slot.player = "Mio";
-            slot.chapter = g[0];
+            slot.chapter = U32(head.data() + i * 4);
             slot.area = int(U32(head.data() + 40 + i * 4));
             slot.finder = head[120 + i] != 0;
             const auto *time = head.data() + 60 + i * 12;
-            slot.hours = U32(time);
-            slot.minutes = U32(time + 4);
-            slot.seconds = U32(time + 8);
+            slot.hours = U32(time); slot.minutes = U32(time + 4); slot.seconds = U32(time + 8);
             if (slot.minutes >= 60 || slot.seconds >= 60 || slot.area < 0 || slot.area > 264)
-                throw std::runtime_error("Invalid saved play time or room.");
-            slot.description = "Mio | chapter " + std::to_string(slot.chapter) + " | room " +
-                               std::to_string(slot.area);
+                slot.issue = "Invalid saved play time or room.";
+            if (slot.issue.empty() && (slot.chapter != d[0] || U32(head.data() + 20 + i * 4) != d[2] || head[120 + i] != d[3]))
+                slot.issue = "Slot metadata does not match gameplay data.";
+            Bytes decoded;
+            if (slot.issue.empty() && !ImportRegion(d, region, result.version, decoded, slot.issue, slot.hz))
+            {
+                if (region == SaveRegion::EU && ImportRegion(d, region, result.version, decoded, slot.issue, 30)) slot.hz = 30;
+            }
+            slot.notice = RegionNotice(region, SaveRegion::EU);
+            slot.description = "Mio | chapter " + std::to_string(slot.chapter) + " | room " + std::to_string(slot.area);
         }
         folder = std::move(result);
         error.clear();
@@ -234,6 +240,27 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
     }
     catch (const std::exception &e)
     {
+        // Keep identifiable damaged saves visible, but never transfer them.
+        Folder damaged;
+        unsigned regions = 0;
+        for (auto region : {SaveRegion::EU, SaveRegion::US, SaveRegion::JP})
+            if (files.count(RegionFolder(region))) { damaged.region = region; ++regions; }
+        if (regions == 1)
+        {
+            damaged.files = files;
+            damaged.issue = e.what();
+            for (int i = 0; i < 5; ++i)
+            {
+                auto &slot = damaged.slots[i];
+                const auto found = files.find(Name(i));
+                slot.occupied = found != files.end() && !Empty(found->second);
+                slot.description = "Unavailable save";
+                slot.issue = damaged.issue;
+            }
+            folder = std::move(damaged);
+            error.clear();
+            return true;
+        }
         error = e.what();
         return false;
     }
@@ -265,16 +292,25 @@ bool ReadStorage(const fs::path &path, StorageKind kind, bool native_allowed, St
                 SaveFiles files;
                 if (result.card.size() == 8388608 || result.card.size() == 8650752)
                 {
-                    if (!ReadMemoryCard(result.card, files, result.has_save, error))
-                        return false;
+                    for (auto region : {SaveRegion::EU, SaveRegion::US, SaveRegion::JP})
+                    {
+                        SaveFiles candidate;
+                        bool found = false;
+                        if (!ReadMemoryCard(result.card, candidate, found, error, RegionFolder(region))) return false;
+                        if (found)
+                        {
+                            if (result.has_save) throw std::runtime_error("This card has FF2 saves for multiple regions. Import an extracted regional folder/archive.");
+                            result.has_save = true;
+                            files = std::move(candidate);
+                        }
+                    }
                 }
                 else
                 {
                     std::string directory;
                     if (!ReadSaveArchive(result.card, directory, files, error))
                         return false;
-                    if (directory != FolderName)
-                        throw std::runtime_error("This archive is not an EU Project Zero II save.");
+                    // Archive display names can differ; the internal files identify the game/region.
                     result.has_save = true;
                 }
                 if (result.has_save && !InspectFiles(files, false, result.save, error))
@@ -301,18 +337,22 @@ bool ReadStorage(const fs::path &path, StorageKind kind, bool native_allowed, St
 }
 bool BuildBatch(const Folder &source, const Folder *destination,
                 const std::vector<SlotMapping> &slots, bool export_ps2, Folder &result,
-                std::string &error, SaveVersion version)
+                std::string &error, SaveVersion version, const RegionOptions &options)
 {
     try
     {
         if (slots.empty() || slots.size() > 5)
             throw std::runtime_error("Select between one and five saves.");
-        Folder checked;
-        if (!InspectFiles(source.files, export_ps2, checked, error))
+        Folder checked_source, checked_destination;
+        if (!InspectFiles(source.files, export_ps2, checked_source, error))
             return false;
-        if (destination && !InspectFiles(destination->files, !export_ps2, checked, error))
+        if (destination && !InspectFiles(destination->files, !export_ps2, checked_destination, error))
             return false;
-        Folder next = destination ? *destination : Fresh(source, export_ps2);
+        if (!checked_source.issue.empty()) throw std::runtime_error(checked_source.issue);
+        if (destination && !checked_destination.issue.empty()) throw std::runtime_error(checked_destination.issue);
+        const auto region = export_ps2 ? options.region : SaveRegion::EU;
+        if (destination && destination->region != region) throw std::runtime_error("Destination region differs from the selected output region.");
+        Folder next = destination ? *destination : Fresh(source, export_ps2, region);
         std::set<int> sources, targets;
         for (const auto &slot : slots)
         {
@@ -321,25 +361,37 @@ bool BuildBatch(const Folder &source, const Folder *destination,
                 throw std::runtime_error("Assign a destination slot to each selected save.");
             if (!sources.insert(slot.source).second || !targets.insert(slot.destination).second)
                 throw std::runtime_error("Each source and destination slot can be used only once.");
-            if (!source.slots[slot.source].occupied)
+            if (!checked_source.slots[slot.source].occupied)
                 throw std::runtime_error("Cannot transfer an empty slot.");
+            if (!checked_source.slots[slot.source].issue.empty())
+                throw std::runtime_error(checked_source.slots[slot.source].issue);
             auto payload = source.files.at(Name(slot.source));
-            if (!ToNative(payload, payload, error, source.version))
-                return false;
-            if (export_ps2 && !ToPs2(payload, payload, error, version))
-                return false;
+            if (!ImportRegion(payload, source.region, source.version, payload, error,
+                              options.source_hz ? options.source_hz : source.slots[slot.source].hz)) return false;
+            if (export_ps2 && !ExportRegion(payload, region, version, options.copy_extra, payload, error, options.target_hz)) return false;
             next.files[Name(slot.destination)] = std::move(payload);
-            auto *out = next.files[FolderName].data();
-            const auto *in = source.files.at(FolderName).data();
+            auto *out = next.files[RegionFolder(region)].data();
+            const auto *in = source.files.at(RegionFolder(source.region)).data();
             for (const auto &field :
                  {std::pair<size_t, size_t>{0, 4}, {20, 4}, {40, 4}, {60, 12}, {120, 1}, {125, 1}})
                 std::memcpy(out + field.first + slot.destination * field.second,
                             in + field.first + slot.source * field.second, field.second);
         }
-        Seal(next.files[FolderName]);
+        Seal(next.files[RegionFolder(region)]);
         next.files["Zero2System"] = ConvertSystem(next.files.at("Zero2System"),
-                                                  export_ps2 ? version : SaveVersion::Prototype);
-        return InspectFiles(next.files, !export_ps2, result, error);
+                                                  export_ps2 && region == SaveRegion::EU ? version : SaveVersion::Prototype);
+        if (!destination && source.region != region && !Empty(next.files["Zero2System"]))
+        {
+            auto &settings = next.files["Zero2System"];
+            settings[settings.size() == 48 ? 37 : 33] = 0;
+            Seal(settings);
+        }
+        if (!InspectFiles(next.files, !export_ps2, result, error)) return false;
+        if (!result.issue.empty()) throw std::runtime_error(result.issue);
+        for (const auto &slot : slots)
+            if (!result.slots[slot.destination].issue.empty())
+                throw std::runtime_error(result.slots[slot.destination].issue);
+        return true;
     }
     catch (const std::exception &e)
     {
@@ -369,6 +421,8 @@ void CommitFolder(const Storage &expected, const Folder &folder, bool native, st
     {
         if (!fs::create_directory(stage))
             throw std::runtime_error("Cannot create staging directory.");
+        if (expected.exists)
+            fs::copy(dest, stage, fs::copy_options::recursive | fs::copy_options::copy_symlinks);
         WriteFolder(stage, folder);
         Folder verified;
         if (!Inspect(stage, native, verified, error) || verified.files != folder.files)
@@ -442,12 +496,12 @@ void CommitCard(const fs::path &path, const Bytes &bytes)
 bool TransferBatch(const Storage &source, const Storage &destination,
                    const std::vector<SlotMapping> &slots, bool export_ps2,
                    const fs::path &card_output, std::string &error, bool ecc,
-                   SaveArchiveFormat archive, SaveVersion version)
+                   SaveArchiveFormat archive, SaveVersion version, const RegionOptions &options)
 {
     try
     {
         if (source.kind == StorageKind::BlankCard || !source.has_save)
-            throw std::runtime_error("Source contains no EU MioPan saves.");
+            throw std::runtime_error("Source contains no FF2 saves.");
         if ((!export_ps2 && destination.kind != StorageKind::Folder) ||
             (export_ps2 && source.kind != StorageKind::Folder))
             throw std::runtime_error("Choose PC saves on the PC side of the transfer.");
@@ -460,7 +514,7 @@ bool TransferBatch(const Storage &source, const Storage &destination,
                 "Source or destination changed; refresh and review the slots again. " + error);
         Folder next;
         if (!BuildBatch(source.save, destination.has_save ? &destination.save : nullptr, slots,
-                        export_ps2, next, error, version))
+                        export_ps2, next, error, version, options))
             return false;
         error.clear();
         if (destination.kind == StorageKind::Folder)
@@ -470,10 +524,10 @@ bool TransferBatch(const Storage &source, const Storage &destination,
             Bytes output;
             if (archive == SaveArchiveFormat::None)
             {
-                if (!WriteMemoryCard(destination.card, next.files, output, error, ecc))
+                if (!WriteMemoryCard(destination.card, next.files, output, error, ecc, RegionFolder(next.region)))
                     return false;
             }
-            else if (!WriteSaveArchive(FolderName, next.files, archive, output, error))
+            else if (!WriteSaveArchive(RegionFolder(next.region), next.files, archive, output, error))
                 return false;
             if (!SameStorage(source, export_ps2, error) || !SameStorage(destination, false, error))
                 throw std::runtime_error(
