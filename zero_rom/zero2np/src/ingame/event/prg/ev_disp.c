@@ -215,7 +215,6 @@ static void EvDisp2DExe(void)
     }
 
     CopySprDToSpr(&ds, &ev_disp2d_ctrl.sprt);                           /* 319 */
-    ds.tex0  = EV_DISP_TEX0;                                            /* 320 */
     ds.alpha = alpha;                                                   /* 322 */
     DispSprD(&ds);                                                      /* 323 */
 }
@@ -233,6 +232,19 @@ static void EvDisp2DDataMakePkt(void)
 
     ph = Tim2GetPictureHeader(ev_disp2d_addr, 0);                       /* 344 */
     ph->GsTex0 = EV_DISP_TEX0;                                          /* 347 */
+
+    // Clamp sampling to the image, not neighbouring VRAM in the oversized event page.
+    sceGsTex0 *tex0 = (sceGsTex0 *)&ph->GsTex0;
+    if (ph->ImageWidth > 0 && ph->ImageWidth <= 1024 &&
+        ph->ImageHeight > 0 && ph->ImageHeight <= 512)
+    {
+        unsigned tw = 0, th = 0;
+        while ((1u << tw) < ph->ImageWidth) ++tw;
+        while ((1u << th) < ph->ImageHeight) ++th;
+        tex0->TW = tw;
+        tex0->TH = th;
+    }
+    ev_disp2d_ctrl.sprt.tex0 = ph->GsTex0;
 
     MakeTim2Direct((u_int *)ev_disp2d_addr, EV_DISP_TBP, 0);            /* 352 */
     MakeClutDirect((u_int *)ev_disp2d_addr, EV_DISP_CBP, 0);            /* 354 */
