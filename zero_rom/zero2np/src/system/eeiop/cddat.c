@@ -1,3 +1,4 @@
+#include "miopan/rendering/miopan_font_textures.h"
 // FILE: /home/akira_koide/zero2np/src/system/eeiop/cddat.c
 //
 // On-disc file table.  cddatInit() hands the IOP the name of the file-table
@@ -68,6 +69,7 @@ void cddatInit(char *cd_dat_name, char *pc_path, FNAME_DAT *p_file_name,
 
     ee_iopMain();
     ee_iopMain();
+    MioPanFonts::Prepare();
 }
 
 // ──────────────────────────────────────────────────────────────────────

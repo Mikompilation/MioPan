@@ -32,6 +32,7 @@ typedef struct MioPan_ConfigRenderer
     int   render_mode;       /* MIOPAN_RENDER_RES_*    */
     float render_scale;
     int   upscale_filter;    /* MIOPAN_RENDER_FILTER_* */
+    int   hd_fonts;          /* optional PNG font replacements */
     int   smooth_2d;         /* bilinear text and sprite textures */
     int   msaa_samples;      /* 1 (off), 2, 4 or 8     */
     int   anisotropy;        /* 1 (off), 2, 4, 8 or 16 */
@@ -254,9 +255,9 @@ typedef struct MioPan_Config
     MioPan_ConfigPaths     paths;
     MioPan_ConfigDeveloper developer;
     MioPan_ConfigTitle     title;
-} MioPan_Config;
     int profiler_summary;
     int profiler_fps_only;
+} MioPan_Config;
 
 extern MioPan_Config miopan_config;
 

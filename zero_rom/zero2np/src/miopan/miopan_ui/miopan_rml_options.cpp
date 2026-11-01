@@ -3,6 +3,7 @@
 #include "miopan_rmlui.h"
 #include "miopan_ui.h"
 #include "../io/miopan_input.h"
+#include "../miopan_config.h"
 #include "../io/miopan_xbox_assets.h"
 #include "../rendering/miopan_renderer.h"
 #include "iop_voice.h"
@@ -309,6 +310,14 @@ Page GamePage()
     Page page{"game", "Game", {}};
     std::vector<Row> &rows = page.rows;
 
+    rows.push_back(Toggle(
+        "Use HD Fonts when available",
+        Fixed("Use matching HD font textures when installed; otherwise use the original fonts."),
+        [] { return miopan_config.renderer.hd_fonts != 0; },
+        [](bool on) {
+            miopan_config.renderer.hd_fonts = on ? 1 : 0;
+            MioPan_ConfigSave();
+        }));
     rows.push_back(Toggle(
         "Vibration", Fixed("Let the controller shake when the game calls for it."),
         [] { return opt_wrk.pad_vib != 0; }, SetGameVibration));

@@ -40,6 +40,9 @@ typedef struct
 // extracted file, the named (.cmp/raw) file, then the IMG_BD.BIN archive span;
 // on total failure zero-fills the target and emits a capped diagnostic.
 // Returns the number of bytes to report as read (to store in the RPC reply).
+// Read into a caller-sized host buffer; returns success, with optional byte count.
+int MioPan_FileLoadReadData(const MioPan_FileLoadReq *req, void *target, int *read_size);
+
 int MioPan_FileLoadServe(const MioPan_FileLoadReq *req);
 
 #ifdef __cplusplus

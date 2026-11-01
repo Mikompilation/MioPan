@@ -1,4 +1,5 @@
 #include "miopan_renderer.h"
+#include "miopan_font_textures.h"
 
 #include "../gs/miopan_gs.h"
 #include "../io/miopan_file.h"
@@ -1453,6 +1454,9 @@ unsigned int g_mesh_arena_evictions_this_frame;
 MeshArena g_mesh_vertex_arena;
 MeshArena g_mesh_index_arena;
 std::vector<InFlightMeshSubmission> g_inflight_mesh_submissions;
+// Optional PNGs are read once per bank; restarting picks up replacement files.
+TextureEntry g_hd_font_textures[30]{};
+bool g_hd_font_attempted[30]{};
 FontTextureEntry g_font_textures[kFontTextureBankCount];
 TextureEntry *g_current_font_texture;
 int g_current_font_bank = -1;
@@ -5898,6 +5902,27 @@ SDL_GPUTexture *CreateTexture(int width, int height, const unsigned char *rgba)
 
     return texture;
 }
+
+TextureEntry *GetHdFontTexture(int bank, int width, int height)
+{
+    if (!miopan_config.renderer.hd_fonts || bank < 0 || bank >= 6) return nullptr;
+    const int set = MioPanFonts::CurrentSet();
+    if (set < 0) return nullptr;
+    const int key = set * 6 + bank;
+    auto &entry = g_hd_font_textures[key];
+    if (!g_hd_font_attempted[key])
+    {
+        g_hd_font_attempted[key] = true;
+        MioPanFonts::Image image;
+        if (MioPanFonts::LoadOverride(bank, width, height, image))
+        {
+            entry.texture = CreateTexture(image.width, image.height, image.rgba.data());
+            entry.width = image.width; entry.height = image.height;
+        }
+    }
+    return entry.texture ? &entry : nullptr;
+}
+
 
 /*
  * Build the grain sheet the ROM's MakeRDither3() would have built, at
@@ -15027,8 +15052,10 @@ void MioPan_RendererDrawFontQuad(const float *xy,
                       Ps2AlphaToFloat(a));
     /* SetFontEnv uses TEX1 MMAG=0, MMIN=5: nearest when enlarged, linear
      * within a minified mip level.  The host texture has only level zero. */
-    QueueQuad(entry->texture, entry->width, entry->height, vertices,
-              true, false, true, false);
+    TextureEntry *hd = GetHdFontTexture(g_current_font_bank, entry->width, entry->height);
+    TextureEntry *draw = hd ? hd : entry;
+    QueueQuad(draw->texture, draw->width, draw->height, vertices,
+              true, false, true, hd != nullptr);
 }
 
 /*

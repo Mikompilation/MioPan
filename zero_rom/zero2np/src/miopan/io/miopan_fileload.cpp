@@ -204,52 +204,11 @@ static int DecodeArchive(int start_sector, void *target,
 // The load-serve orchestration (formerly HostFileLoadReqSub, minus the RPC
 // completion bookkeeping which stays on the reconstructed loader side).
 
-extern "C" int MioPan_FileLoadServe(const MioPan_FileLoadReq *req)
+extern "C" int MioPan_FileLoadReadData(const MioPan_FileLoadReq *req, void *target, int *bytes_read)
 {
-    void            *target;
-    unsigned int     request_size;
-    int              loaded;
-    int              read_size = 0;
-    static int       missing_warn_count;
-
-    if (req == (const MioPan_FileLoadReq *)0)
-    {
-        return 0;
-    }
-
-    request_size = (req->request_size < 0) ? 0u : (unsigned int)req->request_size;
-
-    // Load destinations arrive in two flavours and MioPan_TryGetHostPointer
-    // tells them apart by range:
-    //   * a raw memory-map constant (EVENT_DATA_ADDR, MSG_DATA_ADDR, ...) is a
-    //     PS2 address and must be translated -- the game reads those regions
-    //     back through MioPan_GetHostPointer / Tim2GetHostAddress;
-    //   * a heap buffer (mem_util / ol_load) is already a host pointer, because
-    //     heapCtrlReset -> my_mallocInit translated the heap base once at init.
-    // This only works because the emulated RAM block is allocated OUTSIDE
-    // 0x00400000..0x05000000 (see MioPan_InitPs2Memory), so a translated
-    // pointer can never be mistaken for a PS2 address and translated twice.
-    if (req->is_spu != 0)
-    {
-        // An SPU address is an offset into the SPU's own 2 MB, not anything the
-        // host can dereference; libsd owns that memory.  A bank body that does
-        // not fit is dropped rather than written somewhere arbitrary.
-        unsigned int spu_size = (req->raw_size != 0) ? req->raw_size : request_size;
-
-        target = MioPan_SpuRamPointer((u_int)req->ee_adrs, spu_size);
-        if (target == (void *)0)
-        {
-            printf("MioPan file load: SPU address %x + %x is outside SPU RAM [%s]\n",
-                   (unsigned int)req->ee_adrs, spu_size,
-                   req->cmp_file_name != (const char *)0 ? req->cmp_file_name : "");
-            return 0;
-        }
-    }
-    else if (MioPan_TryGetHostPointer(req->ee_adrs, &target) == 0)
-    {
-        target = (void *)req->ee_adrs;
-    }
-
+    if (!req || !target) return 0;
+    const unsigned int request_size = req->request_size < 0 ? 0u : (unsigned int)req->request_size;
+    int loaded = 0, read_size = 0;
     loaded = 0;
     if (target != (void *)0 && req->is_cmp != 0)
     {
@@ -298,6 +257,58 @@ extern "C" int MioPan_FileLoadServe(const MioPan_FileLoadReq *req)
             read_size = (int)request_size;
         }
     }
+
+    if (bytes_read) *bytes_read = read_size;
+    return loaded;
+}
+
+extern "C" int MioPan_FileLoadServe(const MioPan_FileLoadReq *req)
+{
+    void            *target;
+    unsigned int     request_size;
+    int              loaded;
+    int              read_size = 0;
+    static int       missing_warn_count;
+
+    if (req == (const MioPan_FileLoadReq *)0)
+    {
+        return 0;
+    }
+
+    request_size = (req->request_size < 0) ? 0u : (unsigned int)req->request_size;
+
+    // Load destinations arrive in two flavours and MioPan_TryGetHostPointer
+    // tells them apart by range:
+    //   * a raw memory-map constant (EVENT_DATA_ADDR, MSG_DATA_ADDR, ...) is a
+    //     PS2 address and must be translated -- the game reads those regions
+    //     back through MioPan_GetHostPointer / Tim2GetHostAddress;
+    //   * a heap buffer (mem_util / ol_load) is already a host pointer, because
+    //     heapCtrlReset -> my_mallocInit translated the heap base once at init.
+    // This only works because the emulated RAM block is allocated OUTSIDE
+    // 0x00400000..0x05000000 (see MioPan_InitPs2Memory), so a translated
+    // pointer can never be mistaken for a PS2 address and translated twice.
+    if (req->is_spu != 0)
+    {
+        // An SPU address is an offset into the SPU's own 2 MB, not anything the
+        // host can dereference; libsd owns that memory.  A bank body that does
+        // not fit is dropped rather than written somewhere arbitrary.
+        unsigned int spu_size = (req->raw_size != 0) ? req->raw_size : request_size;
+
+        target = MioPan_SpuRamPointer((u_int)req->ee_adrs, spu_size);
+        if (target == (void *)0)
+        {
+            printf("MioPan file load: SPU address %x + %x is outside SPU RAM [%s]\n",
+                   (unsigned int)req->ee_adrs, spu_size,
+                   req->cmp_file_name != (const char *)0 ? req->cmp_file_name : "");
+            return 0;
+        }
+    }
+    else if (MioPan_TryGetHostPointer(req->ee_adrs, &target) == 0)
+    {
+        target = (void *)req->ee_adrs;
+    }
+
+    loaded = MioPan_FileLoadReadData(req, target, &read_size);
 
     if (loaded == 0)
     {

@@ -145,6 +145,22 @@ Close the game's save/load screen before transferring. Saves made during a
 scripted Mayu action must be saved again after that action finishes before
 conversion.
 
+## Font texture replacements
+
+Export the original atlases with Python 3:
+
+```sh
+python3 tools/export_fonts.py --iso path/to/game.iso --out font-originals
+```
+
+Use `--language N` (`0`–`4`) for English, French, German, Spanish or Italian respectively.
+
+Redraw or upscale the PNGs uniformly up to 4×, preserving glyph layout, colours
+and transparency. Copy the hash-named directory into `resources/fonts/` beside
+the executable and restart. Enable **HD fonts (if available)** in Renderer or
+**Use HD Fonts when available** in Game options. Missing or unmatched files
+fall back to the original fonts.
+
 # License
 MioPan is licensed under the [GNU AGPL v3](LICENSE). Fatal Frame II is the property
 of its respective owners. This project is not affiliated with or endorsed by them.

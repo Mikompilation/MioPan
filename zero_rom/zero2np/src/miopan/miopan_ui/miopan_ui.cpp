@@ -1321,7 +1321,7 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 40 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 41 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
@@ -2666,6 +2666,13 @@ void DrawGraphicsSettingsMenu()
     }
     ImGui::Separator();
 
+    bool hd_fonts = miopan_config.renderer.hd_fonts != 0;
+    if (ImGui::Checkbox("HD fonts (if available)", &hd_fonts))
+    {
+        miopan_config.renderer.hd_fonts = hd_fonts;
+        MioPan_ConfigSave();
+    }
+
     bool smooth_2d = MioPan_RendererGetSmooth2d() != 0;
     if (ImGui::Checkbox("Smooth sprite textures", &smooth_2d))
     {
@@ -2818,6 +2825,9 @@ void DrawSettingsMenu()
     }
     ImGui::Separator();
 
+    MioPanUiSaves::MenuItem();
+    ImGui::Separator();
+
     ImGui::MenuItem("Game data folder...", nullptr, &g_show_data_folder);
     if (ImGui::MenuItem("Open user data folder"))
     {
@@ -2825,9 +2835,6 @@ void DrawSettingsMenu()
     }
     if (ImGui::MenuItem("Open game data folder"))
     {
-    MioPanUiSaves::MenuItem();
-    ImGui::Separator();
-
         OpenFolderInShell(MioPan_PathDataDir());
     }
     ImGui::EndMenu();
@@ -2952,6 +2959,8 @@ void DrawDebugMenu()
         return;
     }
 
+    const bool summary_before = g_show_performance_summary;
+    const bool fps_only_before = g_summary_fps_only;
     ImGui::TextDisabled("Profiler");
     {
         const bool visible =
@@ -2959,8 +2968,6 @@ void DrawDebugMenu()
         if (ImGui::MenuItem("Show profiler", nullptr, visible))
         {
             const bool show = !visible;
-    const bool summary_before = g_show_performance_summary;
-    const bool fps_only_before = g_summary_fps_only;
             g_show_performance_summary = show;
             g_show_performance_graphs = show;
         }
@@ -2968,6 +2975,12 @@ void DrawDebugMenu()
     ImGui::MenuItem("Summary", nullptr, &g_show_performance_summary);
     ImGui::MenuItem("   FPS only", nullptr, &g_summary_fps_only,
                     g_show_performance_summary);
+    if (summary_before != g_show_performance_summary || fps_only_before != g_summary_fps_only)
+    {
+        miopan_config.profiler_summary = g_show_performance_summary;
+        miopan_config.profiler_fps_only = g_summary_fps_only;
+        MioPan_ConfigSave();
+    }
     ImGui::MenuItem("Graphs", nullptr, &g_show_performance_graphs);
     /* The graph window carries these three as well; they are here for when
      * it is closed, a level down so they do not crowd the toggles above. */
@@ -2975,12 +2988,6 @@ void DrawDebugMenu()
     {
         if (ImGui::MenuItem("Pause", nullptr, &g_pause_performance_history) &&
             g_pause_performance_history)
-    if (summary_before != g_show_performance_summary || fps_only_before != g_summary_fps_only)
-    {
-        miopan_config.profiler_summary = g_show_performance_summary;
-        miopan_config.profiler_fps_only = g_summary_fps_only;
-        MioPan_ConfigSave();
-    }
         {
             g_follow_performance_history = false;
         }
@@ -3647,6 +3654,9 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device,
     g_window = window;
 
     IMGUI_CHECKVERSION();
+    MioPan_ConfigLoad();
+    g_show_performance_summary = miopan_config.profiler_summary != 0;
+    g_summary_fps_only = miopan_config.profiler_fps_only != 0;
     g_context = ImGui::CreateContext();
     if (g_context == nullptr)
     {
@@ -3654,9 +3664,6 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device,
         return false;
     }
 
-    MioPan_ConfigLoad();
-    g_show_performance_summary = miopan_config.profiler_summary != 0;
-    g_summary_fps_only = miopan_config.profiler_fps_only != 0;
     ImGui::SetCurrentContext(g_context);
     g_plot_context = ImPlot::CreateContext();
     if (g_plot_context == nullptr)

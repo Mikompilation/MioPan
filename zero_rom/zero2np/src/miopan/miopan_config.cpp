@@ -40,6 +40,7 @@ MioPan_Config miopan_config = {
         /* .render_mode       = */ MIOPAN_RENDER_RES_MATCH_WINDOW,
         /* .render_scale      = */ 1.0f,
         /* .upscale_filter    = */ MIOPAN_RENDER_FILTER_LINEAR,
+        /* .hd_fonts          = */ 1,
         /* .smooth_2d         = */ 1,
         /* Both off by default, and for the same reason HDR is: they are
          * additions rather than reconstructions, and each has a cost the port
@@ -273,9 +274,9 @@ MioPan_Config miopan_config = {
                          -547.0f,  -950.0f,  3367.0f,   -706.0f,  -496.0f,  1268.0f,  41.3f),
         },
     },
-};
     /* .profiler_summary = */ 0,
     /* .profiler_fps_only = */ 0,
+};
 
 #undef TITLE_SCENE
 
@@ -1629,6 +1630,7 @@ static void ConfigLoadOnce(void)
     ReadEnum("render", "mode", kRenderModes, &r->render_mode);
     ReadFloat("render", "scale", &r->render_scale);
     ReadEnum("render", "upscale_filter", kFilters, &r->upscale_filter);
+    ReadInt("render", "hd_fonts", &r->hd_fonts);
     ReadInt("render", "smooth_2d", &r->smooth_2d);
     ReadInt("render", "msaa", &r->msaa_samples);
     ReadInt("render", "anisotropy", &r->anisotropy);
@@ -1680,10 +1682,10 @@ static void ConfigLoadOnce(void)
         r->window_height = 240;
     }
 
-    LoadInputBindings();
-
     ReadInt("profiler", "summary", &miopan_config.profiler_summary);
     ReadInt("profiler", "fps_only", &miopan_config.profiler_fps_only);
+
+    LoadInputBindings();
 
     g_entries.clear();
     SDL_Log("MioPan: loaded settings from %s", path);
@@ -1812,6 +1814,8 @@ int MioPan_ConfigSave(void)
         "upscale_filter = %s\n"
         "; Bilinear text and sprites; 0 preserves the game's texture filtering.\n"
         "smooth_2d = %d\n"
+        "; Optional replacement font PNGs: 0 = original, 1 = HD when available\n"
+        "hd_fonts = %d\n"
         "; Multisample anti-aliasing on the finished frame: 1 (off), 2, 4, 8.\n"
         ";   Only the image the game is rasterised into is multisampled; it is\n"
         ";   resolved before anything reads it back, so the effects, the\n"
@@ -1981,11 +1985,11 @@ int MioPan_ConfigSave(void)
         ";   either way.\n"
         "debug_menu = %d\n"
         "\n"
+        "[profiler]\nsummary = %d\nfps_only = %d\n\n"
         "%s%s",
         miopan_config.paths.data_folder,
         EnumToName(kWindowModes, r->window_mode),
         r->window_width,
-        "[profiler]\nsummary = %d\nfps_only = %d\n\n"
         r->window_height,
         EnumToName(kVsyncModes, r->vsync),
         r->pause_in_background,
@@ -1996,6 +2000,7 @@ int MioPan_ConfigSave(void)
         (double)r->render_scale,
         EnumToName(kFilters, r->upscale_filter),
         r->smooth_2d,
+        r->hd_fonts,
         r->msaa_samples,
         r->anisotropy,
         EnumToName(kAspectModes, r->aspect_mode),
@@ -2028,13 +2033,13 @@ int MioPan_ConfigSave(void)
         (double)r->finder_mask_tint,
         (double)r->finder_mask_scale,
         miopan_config.developer.debug_menu,
+        miopan_config.profiler_summary,
+        miopan_config.profiler_fps_only,
         title_section.c_str(),
         input_section.c_str());
     };
 
     std::vector<char> text(4096);
-        miopan_config.profiler_summary,
-        miopan_config.profiler_fps_only,
     int length = format(text.data(), text.size());
     if (length > 0 && length >= (int)text.size())
     {
