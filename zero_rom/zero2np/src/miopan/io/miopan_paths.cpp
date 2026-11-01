@@ -27,6 +27,7 @@
 
 #include "miopan_paths.h"
 
+#include "miopan_undub.h"
 #include "../miopan_config.h"
 
 #include <SDL3/SDL_filesystem.h>
@@ -617,6 +618,10 @@ int MioPan_PathResolveData(const char *ps2_name, char *out, size_t out_size)
      * port wrote itself, so they live in the user directory -- the data folder
      * may well be read-only -- and are found there before anything placed in
      * the data folder's own xbox/ by hand.  See miopan_xbox_assets.h.
+     *
+     * The Japanese voices are imported there too, but under the ROM's own
+     * names, so they stand in for those files only while they are switched on.
+     * See miopan_undub.h.
      */
     {
         const std::string bare =
@@ -629,6 +634,12 @@ int MioPan_PathResolveData(const char *ps2_name, char *out, size_t out_size)
             {
                 return Emit(imported, out, out_size);
             }
+        }
+
+        char undub[1024];
+        if (MioPan_UndubResolve(bare.c_str(), undub, sizeof(undub)) != 0)
+        {
+            return Emit(undub, out, out_size);
         }
     }
 

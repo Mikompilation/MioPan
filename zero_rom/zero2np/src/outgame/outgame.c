@@ -44,6 +44,7 @@
 #include "../graphics/movie/movie.h"        // InitMovieWithTitle / PlayMovieWithTitle / EndMovieWithTitle
 #include "../ingame/loading/loading.h"      // GetLoadingTexMem / LoadingTexLoadReq / ReleaseLoadingTexMem
 #include "../ingame/menu/menu_cam_main.h"   // MenuCamMainBackGroundLoadReq / MenuCamMainMemFree
+#include "../ingame/photo/finder_dpad.h"    // FinderDpadLoadOnce (port)
 #include "../ingame/photo/m_plyr_camera.h"  // CNPlyrCamera / m_plyr_camera
 #include "../save_load/prg/game_data_save.h"    // GameDataSaveBackGroundLoadReq / GameDataSaveTexMemFree
 #include "../album/prg/album.h"     // AlbumBackGroundLoadReq / AlbumEnd
@@ -254,5 +255,6 @@ static void IngameLoadOnce(void)
     LoadReq(GetLanguage() + MENU_PLAYDATA_PK2, 0x1973cc0);
     LoadReq(GetLanguage() + MENU_STATUS_PK2, 0x19981c0);
     m_plyr_camera.SetUp();
+    FinderDpadLoadOnce();           // PORT: the finder d-pad's item pictures
     LoadReq(VCITEST_PK2, CAMERA_VCI_ADDR);
 }

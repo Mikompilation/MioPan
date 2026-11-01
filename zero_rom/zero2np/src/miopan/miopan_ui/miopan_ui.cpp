@@ -1323,15 +1323,18 @@ void PersistSettingsIfChanged()
      * breaks that rather than letting the compare read indeterminate bytes. */
     static_assert(sizeof(MioPan_ConfigRenderer) == 41 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
-    static_assert(sizeof(MioPan_ConfigAudio) == 2 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigAudio) == 3 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigUi) == 1 * sizeof(int),
                   "MioPan_ConfigUi gained padding; compare by field");
+    static_assert(sizeof(MioPan_ConfigGame) == 3 * sizeof(int),
+                  "MioPan_ConfigGame gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigTitleScene) ==
-                      MIOPAN_TITLE_NAME_MAX + 21 * sizeof(int),
+                      MIOPAN_TITLE_NAME_MAX + 22 * sizeof(int) +
+                      MIOPAN_TITLE_VIA_MAX * 7 * sizeof(float),
                   "MioPan_ConfigTitleScene gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigTitle) ==
-                      8 * sizeof(int) +
+                      9 * sizeof(int) +
                       MIOPAN_TITLE_SCENE_MAX * sizeof(MioPan_ConfigTitleScene),
                   "MioPan_ConfigTitle gained padding; compare by field");
 
@@ -1344,13 +1347,19 @@ void PersistSettingsIfChanged()
         std::memcmp(&title_seen, &miopan_config.title, sizeof(title_seen)) != 0;
     title_seen = miopan_config.title;
 
+    /* Nor do the game settings: Options > Special writes them in place. */
+    static MioPan_ConfigGame game_seen = miopan_config.game;
+    const bool game_changed =
+        std::memcmp(&game_seen, &miopan_config.game, sizeof(game_seen)) != 0;
+    game_seen = miopan_config.game;
+
     const MioPan_ConfigRenderer before = miopan_config.renderer;
     const MioPan_ConfigAudio audio_before = miopan_config.audio;
     const MioPan_ConfigUi ui_before = miopan_config.ui;
     MioPan_ConfigCapture();
 
     const Uint64 now = SDL_GetTicks();
-    if (title_changed ||
+    if (title_changed || game_changed ||
         std::memcmp(&before, &miopan_config.renderer, sizeof(before)) != 0 ||
         std::memcmp(&audio_before, &miopan_config.audio,
                     sizeof(audio_before)) != 0 ||

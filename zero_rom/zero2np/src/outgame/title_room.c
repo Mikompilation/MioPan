@@ -20,10 +20,11 @@
 //              end_Story_Main() does with MapDrawDeleteRoomAll (719..727).
 //
 // THE SCENES are miopan_config.title.scenes[]: a room, two camera points and
-// a path each.  A visit opens on one at random among the enabled, and after
-// `passes` runs of its path (or on the next visit) the veil closes, another is
-// picked -- never the same one twice running while there is a choice -- and it
-// comes up out of black.  A scene in another room releases and requests the
+// a path each -- straight from A to B, or a smooth curve through waypoints
+// between them (TitleRoomPathPoint).  A visit opens on one at random among
+// the enabled, and after `passes` runs of its path (or on the next visit) the
+// veil closes, another is picked -- never the same one twice running while
+// there is a choice -- and it comes up out of black.  A scene in another room releases and requests the
 // new one in the same frame, so the title's own picture never shows between.
 // The pick has its own generator: MioPan_Rand() is the ROM's rand() stream.
 //
@@ -538,6 +539,7 @@ static void TitleRoomFrame(MioPan_ConfigTitleScene *t, const MLOAD_HEAD *hp)
     t->a_target[1] = t->b_target[1] = eye_y + fminf(height * 0.08f, 150.0f);
     t->a_target[2] = t->b_target[2] = cz;
     t->a_fov = t->b_fov = 50.0f;
+    t->via_count = 0;
     t->camera_set = 1;
 
     SDL_Log("[port] title room: framed %d, box (%.0f %.0f %.0f)..(%.0f %.0f %.0f)",
@@ -688,6 +690,100 @@ static float TitleRoomLerp(float a, float b, float e)
     return a + (b - a) * e;
 }
 
+/* One coordinate of the Catmull-Rom segment from p1 to p2. */
+static float TitleRoomSpline(float p0, float p1, float p2, float p3, float u)
+{
+    const float u2 = u * u;
+    const float u3 = u2 * u;
+
+    return 0.5f * (2.0f * p1 + (p2 - p0) * u + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * u2 +
+                   (3.0f * p1 - p0 - 3.0f * p2 + p3) * u3);
+}
+
+/* Point `i` of the path -- A, the waypoints in order, B -- held at the ends. */
+static void TitleRoomPathNode(const MioPan_ConfigTitleScene *t, int i, const float **eye,
+                              const float **target, float *fov)
+{
+    const int last = t->via_count + 1;
+
+    if (i <= 0)
+    {
+        *eye = t->a_eye;
+        *target = t->a_target;
+        *fov = t->a_fov;
+    }
+    else if (i >= last)
+    {
+        *eye = t->b_eye;
+        *target = t->b_target;
+        *fov = t->b_fov;
+    }
+    else
+    {
+        *eye = t->via_eye[i - 1];
+        *target = t->via_target[i - 1];
+        *fov = t->via_fov[i - 1];
+    }
+}
+
+/* The camera at `e` along the path, 0 at A and 1 at B.  With no waypoints a
+ * straight line, as it always was.  Through waypoints a Catmull-Rom curve,
+ * eye, target and field of view alike, with `e` spread over the length of
+ * the eye's path so it keeps an even speed however the points are spaced. */
+static void TitleRoomPathPoint(const MioPan_ConfigTitleScene *t, float e, float *eye,
+                               float *target, float *fov)
+{
+    if (t->via_count <= 0)
+    {
+        for (int k = 0; k < 3; k++)
+        {
+            eye[k] = TitleRoomLerp(t->a_eye[k], t->b_eye[k], e);
+            target[k] = TitleRoomLerp(t->a_target[k], t->b_target[k], e);
+        }
+        *fov = TitleRoomLerp(t->a_fov, t->b_fov, e);
+        return;
+    }
+
+    const int nodes = t->via_count + 2;
+    float seg[MIOPAN_TITLE_VIA_MAX + 1];
+    float total = 0.0f;
+
+    for (int i = 0; i < nodes - 1; i++)
+    {
+        const float *a, *b, *ta, *tb;
+        float fa, fb;
+
+        TitleRoomPathNode(t, i, &a, &ta, &fa);
+        TitleRoomPathNode(t, i + 1, &b, &tb, &fb);
+        seg[i] = sqrtf((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]) +
+                       (b[2] - a[2]) * (b[2] - a[2]));
+        total += seg[i];
+    }
+
+    float d = (e < 0.0f ? 0.0f : (e > 1.0f ? 1.0f : e)) * total;
+    int i = 0;
+    while (i < nodes - 2 && d > seg[i])
+    {
+        d -= seg[i];
+        i++;
+    }
+    const float u = seg[i] > 0.0f ? d / seg[i] : 0.0f;
+
+    const float *pe[4];
+    const float *pt[4];
+    float pf[4];
+    for (int j = 0; j < 4; j++)
+    {
+        TitleRoomPathNode(t, i - 1 + j, &pe[j], &pt[j], &pf[j]);
+    }
+    for (int k = 0; k < 3; k++)
+    {
+        eye[k] = TitleRoomSpline(pe[0][k], pe[1][k], pe[2][k], pe[3][k], u);
+        target[k] = TitleRoomSpline(pt[0][k], pt[1][k], pt[2][k], pt[3][k], u);
+    }
+    *fov = TitleRoomSpline(pf[0], pf[1], pf[2], pf[3], u);
+}
+
 static void TitleRoomCameraMain(void)
 {
     const MioPan_ConfigTitleScene *t = TitleRoomScene();
@@ -724,15 +820,10 @@ static void TitleRoomCameraMain(void)
 
     float eye[4];
     float target[4];
-    for (int k = 0; k < 3; k++)
-    {
-        eye[k] = TitleRoomLerp(t->a_eye[k], t->b_eye[k], e);
-        target[k] = TitleRoomLerp(t->a_target[k], t->b_target[k], e);
-    }
+    float fov;
+    TitleRoomPathPoint(t, e, eye, target, &fov);
     eye[3] = 1.0f;
     target[3] = 1.0f;
-
-    const float fov = TitleRoomLerp(t->a_fov, t->b_fov, e);
 
     gra3dcamSetFov(fov * TITLE_ROOM_PI / 180.0f);
     gra3dcamSetRoll(0.0f);
@@ -1102,6 +1193,7 @@ int TitleRoomCaptureView(int scene, int point)
             /* A path cannot run between two rooms, so the other point takes
              * this view as well and gets moved from there. */
             t->room = room;
+            t->via_count = 0;
             room_change = 1;
         }
     }

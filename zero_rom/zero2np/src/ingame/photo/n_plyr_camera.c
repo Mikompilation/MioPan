@@ -44,6 +44,7 @@
 #include "../../system/pad/pad.h"               /* paddat                      */
 #include "../plyr/player.h"                     /* PlayerModeIsFinder          */
 #include "finder.h"                             /* FinderBankPlay              */
+#include "finder_dpad.h"                        /* PORT: FinderDpadDraw        */
 #include "freq_camera.h"                        /* GetFreqCamera               */
 #include "n_finder_dat.h"                       /* n_finder_dat                */
 
@@ -704,6 +705,10 @@ void CNPlyrCamera::Draw(void)
         film_no.Draw(GetPlyrItemHaveNum(camera_film.mFilmType),
                      aFilmTypeNo[camera_film.mFilmType],
                      fndr_mx, fndr_my, mMasterAlpha.Get());
+
+        /* PORT: the healing item the d-pad uses, under the film readout,
+         * when Options > Special has given the d-pad them (finder_dpad.h). */
+        FinderDpadDraw(fndr_mx, fndr_my, mMasterAlpha.Get());
 
         /* Bit 0 of the fitted-parts set is the enemy-life readout, bit 0 of
          * the addition set the shutter-chance lamp.  The ROM does not pass

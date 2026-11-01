@@ -234,21 +234,21 @@ void DrawSceneList()
 
     const int missing = MioPan_ConfigTitleBuiltinMissing();
     ImGui::BeginDisabled(full || missing == 0);
-    if (ImGui::Button("Add built-in##scene_builtin"))
+    if (ImGui::Button("Restore built-in##scene_builtin"))
     {
         const int before = t.scene_count;
         const int added = MioPan_ConfigTitleAddBuiltin();
         char note[96];
 
-        std::snprintf(note, sizeof(note), "Added %d built-in scene%s.", added,
+        std::snprintf(note, sizeof(note), "Restored %d built-in scene%s.", added,
                       added == 1 ? "" : "s");
         ClipNote(note);
         Select(before < t.scene_count ? before : t.scene_count - 1);
     }
-    Tooltip(missing == 0 ? "Every scene the game ships with is already in the list."
+    Tooltip(missing == 0 ? "Every scene the game ships with is in the list."
             : full       ? "The list is full.  Delete a scene to make room."
-                         : "The scenes the game ships with that this list does not\n"
-                           "have yet, added after these.");
+                         : "Put back the scenes the game ships with that have been\n"
+                           "deleted from this list, after these.");
     ImGui::EndDisabled();
     ImGui::SameLine();
 
@@ -432,6 +432,7 @@ void DrawRoom(MioPan_ConfigTitleScene &s)
                 {
                     s.room = room;
                     s.camera_set = 0;
+                    s.via_count = 0;
                     g_capture_moved_room = -1;
                 }
             }
@@ -591,6 +592,22 @@ void DrawCamera(MioPan_ConfigTitleScene &s)
 
     DrawPoint(0, s.a_eye, s.a_target, &s.a_fov);
     DrawPoint(1, s.b_eye, s.b_target, &s.b_fov);
+
+    if (s.via_count > 0)
+    {
+        ImGui::SeparatorText("Waypoints");
+        ImGui::TextDisabled("The path curves through %d more point%s between A and B.",
+                            s.via_count, s.via_count == 1 ? "" : "s");
+        Tooltip("Waypoints live in miopan.ini as via1_eye, via1_target and\n"
+                "via1_fov, via2_..., in path order between A and B; copy the\n"
+                "scene out to edit them and paste it back.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Straight path##via_clear"))
+        {
+            s.via_count = 0;
+        }
+        Tooltip("Drop the waypoints: the camera goes straight from A to B.");
+    }
 
     if (g_capture_moved_room >= 0)
     {

@@ -115,6 +115,9 @@ typedef struct MioPan_ConfigAudio
 {
     float volume;                /* master, 0..1 slider position; gain is its square */
     int   mute_in_background;    /* 0 off, 1 on                              */
+    /* The cast's language, once Options > Special has imported the Japanese
+     * voices (io/miopan_undub.h).  Nothing changes until they are there. */
+    int   japanese_voices;       /* 0 English, 1 Japanese                    */
 } MioPan_ConfigAudio;
 
 /* The F1 overlay. */
@@ -154,6 +157,26 @@ typedef struct MioPan_ConfigDeveloper
 } MioPan_ConfigDeveloper;
 
 /*
+ * What the port adds to how the game plays.  ingame/camera/first_person_camera.h
+ * and ingame/photo/finder_dpad.h are what read it, and their banners say how
+ * each hangs off the ROM; Options > Special is what writes it.
+ *
+ * Every field is 4 bytes, so the overlay's settle-and-save compare can memcmp
+ * it the way it does the structs above.
+ */
+#define MIOPAN_FIRST_PERSON_FOV_MIN     45.0f
+#define MIOPAN_FIRST_PERSON_FOV_MAX     90.0f
+#define MIOPAN_FIRST_PERSON_FOV_DEFAULT 60.0f
+
+typedef struct MioPan_ConfigGame
+{
+    int   first_person;       /* 0 the game's own cameras, 1 Mio's eyes      */
+    float first_person_fov;   /* vertical, degrees; the finder's is 44.4     */
+    int   finder_dpad;        /* 0 the d-pad aims the finder, 1 it changes
+                               * film and uses healing items (finder_dpad.h) */
+} MioPan_ConfigGame;
+
+/*
  * The title screen's backdrop and music.  outgame/title_room.h is what reads
  * it, and its banner says how it hangs off the ROM's title; the overlay's
  * Settings > Title screen window is what writes it.
@@ -185,6 +208,7 @@ typedef struct MioPan_ConfigDeveloper
 
 #define MIOPAN_TITLE_SCENE_MAX        32
 #define MIOPAN_TITLE_NAME_MAX         32
+#define MIOPAN_TITLE_VIA_MAX          12    /* waypoints between A and B       */
 
 typedef struct MioPan_ConfigTitleScene
 {
@@ -202,6 +226,13 @@ typedef struct MioPan_ConfigTitleScene
     float hold_seconds;      /* at each end                                 */
     int   motion;            /* MIOPAN_TITLE_MOTION_*                       */
     int   easing;            /* MIOPAN_TITLE_EASING_*                       */
+    /* Points the path passes through on its way from A to B, in order.  With
+     * none it is the straight line it always was; with some it is a smooth
+     * curve through all of them, travelled at an even speed. */
+    int   via_count;         /* 0..MIOPAN_TITLE_VIA_MAX                     */
+    float via_eye[MIOPAN_TITLE_VIA_MAX][3];
+    float via_target[MIOPAN_TITLE_VIA_MAX][3];
+    float via_fov[MIOPAN_TITLE_VIA_MAX];
 } MioPan_ConfigTitleScene;
 
 typedef struct MioPan_ConfigTitle
@@ -213,6 +244,10 @@ typedef struct MioPan_ConfigTitle
     int   music;             /* 0 the game's own; else a stream file, looped */
     float music_volume;      /* 0..1; 1 is the level the game plays music at */
     int   attract_movie;     /* room backdrop: let the idle movie start     */
+    /* Which set of built-in scenes this list has been given.  A list from a
+     * miopan.ini that predates the current set gets the ones it lacks added
+     * once, at load; one deleted after that stays deleted. */
+    int   builtins;
     int   scene_count;       /* 1..MIOPAN_TITLE_SCENE_MAX                   */
     MioPan_ConfigTitleScene scenes[MIOPAN_TITLE_SCENE_MAX];
 } MioPan_ConfigTitle;
@@ -220,10 +255,10 @@ typedef struct MioPan_ConfigTitle
 /* A scene as a fresh one starts: room 40, framed by itself on load. */
 void MioPan_ConfigTitleSceneDefault(MioPan_ConfigTitleScene *scene);
 
-/* The built-in scenes -- the list a miopan.ini without scenes of its own
- * gets -- for a list that has its own.  Missing counts the ones it does not
- * have (a scene in the same room under the same name counts as had); Add
- * appends them, up to MIOPAN_TITLE_SCENE_MAX, and returns how many went in. */
+/* The built-in scenes, for putting back the ones a list has had deleted.
+ * Missing counts the ones it does not have (a scene in the same room under
+ * the same name counts as had); Add appends them, up to
+ * MIOPAN_TITLE_SCENE_MAX, and returns how many went in. */
 int MioPan_ConfigTitleBuiltinMissing(void);
 int MioPan_ConfigTitleAddBuiltin(void);
 
@@ -254,6 +289,7 @@ typedef struct MioPan_Config
     MioPan_ConfigUi        ui;
     MioPan_ConfigPaths     paths;
     MioPan_ConfigDeveloper developer;
+    MioPan_ConfigGame      game;
     MioPan_ConfigTitle     title;
     int profiler_summary;
     int profiler_fps_only;

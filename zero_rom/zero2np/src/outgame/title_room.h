@@ -6,8 +6,9 @@
  *  The original title draws a scrolling 2D background behind a framed picture
  *  of the twins with the logo printed on it, and the menu over that.  This
  *  puts one of the game's own rooms there instead, loaded and lit by the same
- *  code the game plays it with, while the camera travels between two points
- *  -- the way the Xbox release's title screen does.  The picture goes, and
+ *  code the game plays it with, while the camera travels between two points,
+ *  or along a curve through waypoints between them -- the way the Xbox
+ *  release's title screen does.  The picture goes, and
  *  PRESS START, the menu and every screen behind it are the ROM's own,
  *  untouched: title.c is still the whole title, and this file only sits
  *  around it.
@@ -103,8 +104,8 @@ void TitleRoomFrameAutomatically(int scene);
 
 /* Copy the live camera into a scene's point 0 (A) or 1 (B).  In a game, the
  * room Mio is in becomes that scene's room as well -- and if that differs
- * from the one the other point was taken in, both points take this view.
- * Returns 1 when a room change came with it. */
+ * from the one the other point was taken in, both points take this view and
+ * the waypoints go.  Returns 1 when a room change came with it. */
 int  TitleRoomCaptureView(int scene, int point);
 
 /* The current scene's camera path.  Progress is 0..1 over one whole cycle

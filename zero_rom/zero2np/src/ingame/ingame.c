@@ -22,6 +22,7 @@
 #include "gra3d.h"
 #include "ingame.h"
 #include "camera/map_camera.h"
+#include "camera/first_person_camera.h"          /* PORT: FirstPersonCameraYield */
 #include "map/map_rectangle.h"
 #include "loading.h"
 #include "logo.h"
@@ -619,8 +620,12 @@ void IngameCameraMain(void)
      *
      * The pad is only handed over when the debug menu is closed: DrawDbgMenu()
      * uses L2/R1/R2 as its own edit modifiers, which are the free camera's
-     * speed and lift keys. */
-    DebugCameraMenuMain(phase_change_reqs.dbg_menu == 0);
+     * speed and lift keys.  When it does take the camera, the first-person
+     * view lets go of it, so Mio is drawn for it to look at. */
+    if (DebugCameraMenuMain(phase_change_reqs.dbg_menu == 0) != 0)
+    {
+        FirstPersonCameraYield();
+    }
 
     SetIngameListnerInfo();                                             /* 784 */
 }

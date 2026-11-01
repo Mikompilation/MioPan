@@ -3,8 +3,9 @@
 #include "miopan_rmlui.h"
 #include "miopan_ui.h"
 #include "../io/miopan_input.h"
-#include "../miopan_config.h"
+#include "../io/miopan_undub.h"
 #include "../io/miopan_xbox_assets.h"
+#include "../miopan_config.h"
 #include "../rendering/miopan_renderer.h"
 #include "iop_voice.h"
 
@@ -1006,8 +1007,8 @@ Page ControlsPage()
     rows.push_back(Heading("Mouse"));
     rows.push_back(InputToggle(
         "Mouse aiming",
-        Fixed("The cursor is captured while the Camera Obscura is raised and "
-              "the mouse turns it."),
+        Fixed("The cursor is captured while the Camera Obscura is raised, or "
+              "while walking in the first-person view, and the mouse turns it."),
         [] { return MioPan_InputGetMouseLook() != 0; },
         [](bool on) { MioPan_InputSetMouseLook(on ? 1 : 0); }));
     const auto mouse_on = [] { return MioPan_InputGetMouseLook() != 0; };
@@ -1092,64 +1093,148 @@ Page ControlsPage()
 /* ---------------------------------------------------------------------------
  *  Special -- what the port adds to the game itself.
  *
- *  The Director's Cut's extra costumes and accessories come out of the
- *  player's own Xbox copy (miopan_xbox_assets.h): a folder dialog, then a
- *  worker converts them while the screen reports how far it has got.  They
- *  are in the setup menu the moment it finishes.
+ *  The first-person view and the finder's d-pad, settings like any other
+ *  (first_person_camera.h, finder_dpad.h).
+ *
+ *  Both imports read the player's own copy of another release of the game: a
+ *  folder or file dialog, then a worker does the work while the screen reports
+ *  how far it has got.
+ *
+ *    * The Director's Cut's extra costumes and accessories, from an Xbox copy
+ *      (miopan_xbox_assets.h).  They are in the setup menu the moment it
+ *      finishes.
+ *    * The Japanese voices, from a Japanese copy (miopan_undub.h): its disc
+ *      image, or the disc extracted into a folder.  The game speaks Japanese
+ *      from the next line on, and a choice switches back.
  * ------------------------------------------------------------------------ */
 
-/* SDL hands the chosen folder back on a thread of its own. */
-std::mutex g_xbox_pick_mutex;
-std::string g_xbox_pick;
-std::atomic<bool> g_xbox_pick_ready{false};
-std::atomic<bool> g_xbox_dialog_open{false};
-std::string g_xbox_last_folder;
-
-void SDLCALL XboxFolderPicked(void *userdata, const char *const *filelist, int filter)
+/* A folder or file dialog in flight.  SDL hands the choice back on a thread of
+ * its own, so it waits here for the game thread to take it. */
+struct FolderPick
 {
-    (void)userdata;
+    const char *tag;            /* for the log */
+    std::mutex mutex;
+    std::string folder;         /* guarded by mutex: the folder or file chosen */
+    std::atomic<bool> ready{false};
+    std::atomic<bool> open{false};
+    std::string last;           /* game thread: where the next dialog opens */
+};
+
+FolderPick g_xbox_pick{"xbox"};
+FolderPick g_undub_pick{"undub"};
+FolderPick g_undub_image_pick{"undub"};
+
+void SDLCALL FolderPicked(void *userdata, const char *const *filelist, int filter)
+{
+    FolderPick &pick = *static_cast<FolderPick *>(userdata);
     (void)filter;
     /* A null list is an error and an empty one is a cancel. */
     if (filelist == nullptr)
     {
-        SDL_Log("[port] xbox: folder dialog failed: %s", SDL_GetError());
+        SDL_Log("[port] %s: file dialog failed: %s", pick.tag, SDL_GetError());
     }
     else if (filelist[0] != nullptr)
     {
-        std::lock_guard<std::mutex> lock(g_xbox_pick_mutex);
-        g_xbox_pick = filelist[0];
-        g_xbox_pick_ready = true;
+        std::lock_guard<std::mutex> lock(pick.mutex);
+        pick.folder = filelist[0];
+        pick.ready = true;
     }
-    g_xbox_dialog_open = false;
+    pick.open = false;
+}
+
+void ChooseFolder(FolderPick &pick)
+{
+    if (pick.open.load())
+    {
+        return;
+    }
+    pick.open = true;
+    SDL_ShowOpenFolderDialog(FolderPicked, &pick, MioPanRml::GetWindow(),
+                             pick.last.empty() ? nullptr : pick.last.c_str(), false);
+}
+
+/* A disc image.  "All files" too: dumps are not always named .iso. */
+void ChooseImage(FolderPick &pick)
+{
+    static const SDL_DialogFileFilter kFilters[] = {
+        {"Disc images (*.iso)", "iso"},
+        {"All files", "*"},
+    };
+    if (pick.open.load())
+    {
+        return;
+    }
+    pick.open = true;
+    SDL_ShowOpenFileDialog(FolderPicked, &pick, MioPanRml::GetWindow(), kFilters,
+                           (int)SDL_arraysize(kFilters),
+                           pick.last.empty() ? nullptr : pick.last.c_str(), false);
+}
+
+/* Game thread: the folder the dialog handed back, once. */
+bool TakeFolder(FolderPick &pick, std::string &folder)
+{
+    if (!pick.ready.exchange(false))
+    {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(pick.mutex);
+        folder = pick.folder;
+    }
+    pick.last = folder;
+    return true;
 }
 
 void ChooseXboxFolder()
 {
-    if (MioPanXbox::ImportRunning() || g_xbox_dialog_open.load())
+    if (!MioPanXbox::ImportRunning())
     {
-        return;
+        ChooseFolder(g_xbox_pick);
     }
-    g_xbox_dialog_open = true;
-    SDL_ShowOpenFolderDialog(XboxFolderPicked, nullptr, MioPanRml::GetWindow(),
-                             g_xbox_last_folder.empty() ? nullptr
-                                                        : g_xbox_last_folder.c_str(),
-                             false);
 }
 
-/* Game thread: start on a folder the dialog has handed back. */
-void TakeXboxFolderPick()
+void ChooseUndubFolder()
 {
-    if (!g_xbox_pick_ready.exchange(false))
+    if (!MioPanUndub::ImportRunning())
     {
-        return;
+        ChooseFolder(g_undub_pick);
     }
+}
+
+void ChooseUndubImage()
+{
+    if (!MioPanUndub::ImportRunning())
+    {
+        ChooseImage(g_undub_image_pick);
+    }
+}
+
+/* Game thread: start on a folder or file a dialog has handed back. */
+void TakeFolderPicks()
+{
     std::string folder;
+    if (TakeFolder(g_xbox_pick, folder))
     {
-        std::lock_guard<std::mutex> lock(g_xbox_pick_mutex);
-        folder = g_xbox_pick;
+        MioPanXbox::StartImport(folder);
     }
-    g_xbox_last_folder = folder;
-    MioPanXbox::StartImport(folder);
+    if (TakeFolder(g_undub_pick, folder) || TakeFolder(g_undub_image_pick, folder))
+    {
+        MioPanUndub::StartImport(folder);
+    }
+}
+
+/* The undub rows' button while an import or one of their dialogs is going. */
+std::string UndubButton(const FolderPick &pick, const char *idle)
+{
+    if (MioPanUndub::ImportRunning())
+    {
+        return "Working...";
+    }
+    if (pick.open.load())
+    {
+        return "Choosing...";
+    }
+    return idle;
 }
 
 std::string XboxInstalled()
@@ -1170,6 +1255,42 @@ Page SpecialPage()
 {
     Page page{"special", "Special", {}};
     std::vector<Row> &rows = page.rows;
+
+    /* ingame/camera/first_person_camera.h.  Written in place; the overlay's
+     * settle-and-save notices and writes [game]. */
+    rows.push_back(Heading("Camera"));
+    rows.push_back(Toggle(
+        "First-person view",
+        Fixed("See through Mio's eyes as she walks, as the Director's Cut "
+              "could. The left stick moves and sidesteps, the right stick or "
+              "the mouse looks around, and the Camera Obscura comes up where "
+              "she is looking. Events and cutscenes keep their own cameras."),
+        [] { return miopan_config.game.first_person != 0; },
+        [](bool on) { miopan_config.game.first_person = on ? 1 : 0; }));
+    rows.push_back(When(
+        Slider("Field of view",
+               Fixed("How much the first-person view takes in, top to bottom. "
+                     "A wide window shows more at the sides."),
+               MIOPAN_FIRST_PERSON_FOV_MIN, MIOPAN_FIRST_PERSON_FOV_MAX, 5.0f,
+               [] { return miopan_config.game.first_person_fov; },
+               [](float value) {
+                   miopan_config.game.first_person_fov =
+                       std::clamp(value, MIOPAN_FIRST_PERSON_FOV_MIN,
+                                  MIOPAN_FIRST_PERSON_FOV_MAX);
+               },
+               Format("%.0f\xC2\xB0")),
+        [] { return miopan_config.game.first_person != 0; }));
+
+    /* ingame/photo/finder_dpad.h, written the same way. */
+    rows.push_back(Heading("Camera Obscura"));
+    rows.push_back(Toggle(
+        "Film and items on the d-pad",
+        Fixed("With the camera raised, up and down change the film, left picks "
+              "a healing item and right uses it, without opening the menu. The "
+              "item is shown in the viewfinder. The d-pad no longer aims; the "
+              "sticks and the mouse still do."),
+        [] { return miopan_config.game.finder_dpad != 0; },
+        [](bool on) { miopan_config.game.finder_dpad = on ? 1 : 0; }));
 
     rows.push_back(Heading("Xbox Director's Cut"));
     Row import = Action(
@@ -1194,7 +1315,7 @@ Page SpecialPage()
         {
             return std::string("Working...");
         }
-        if (g_xbox_dialog_open.load())
+        if (g_xbox_pick.open.load())
         {
             return std::string("Choosing...");
         }
@@ -1203,6 +1324,66 @@ Page SpecialPage()
                                : "Import");
     };
     rows.push_back(std::move(import));
+
+    rows.push_back(Heading("Japanese voices"));
+    Row undub = Action(
+        "Import Japanese voices",
+        [] {
+            if (MioPanUndub::ImportRunning())
+            {
+                return MioPanUndub::ImportStatus();
+            }
+            std::string text =
+                "Hear the original Japanese cast -- every spoken line and the "
+                "cutscenes' soundtracks -- from your own copy of the Japanese "
+                "release, Zero ~Akai Chou~: choose its disc image (.iso). The "
+                "subtitles stay in your language, retimed to the Japanese "
+                "lines. ";
+            const std::string last = MioPanUndub::ImportStatus();
+            if (!last.empty())
+            {
+                text += last;
+            }
+            else if (MioPan_UndubAvailable() != 0)
+            {
+                char installed[128];
+                SDL_snprintf(installed, sizeof(installed),
+                             "Installed: %d voice lines, %d sets of calls and "
+                             "cries and %d cutscenes.",
+                             MioPan_UndubVoiceCount(), MioPan_UndubBankCount(),
+                             MioPan_UndubMovieCount());
+                text += installed;
+            }
+            else
+            {
+                text += "None are installed yet.";
+            }
+            return text;
+        },
+        "Import", ChooseUndubImage);
+    undub.action_text = [] {
+        return UndubButton(g_undub_image_pick,
+                           MioPan_UndubAvailable() != 0 ? "Re-import" : "Import");
+    };
+    rows.push_back(std::move(undub));
+    Row undub_folder = Action(
+        "From an extracted disc",
+        Fixed("Or, with the Japanese disc already copied out into a folder: "
+              "choose its bin folder, the one with adpcm, data and movie in it, "
+              "or a folder above that."),
+        "Choose folder", ChooseUndubFolder);
+    undub_folder.action_text = [] { return UndubButton(g_undub_pick, "Choose folder"); };
+    rows.push_back(std::move(undub_folder));
+    rows.push_back(When(
+        Toggle("Voices",
+               Fixed("Which cast speaks. Switching takes effect from the next "
+                     "line; one already playing finishes as it started. Mio's "
+                     "and Mayu's calls and the ghosts' cries follow the next "
+                     "time they are loaded."),
+               [] { return MioPan_UndubGetEnabled() != 0; },
+               [](bool on) { MioPan_UndubSetEnabled(on ? 1 : 0); }, "English",
+               "Japanese"),
+        [] { return MioPan_UndubAvailable() != 0 && !MioPanUndub::ImportRunning(); }));
     return page;
 }
 
@@ -1863,8 +2044,9 @@ void Frame()
 {
     /* Ahead of the early out: an import keeps going after the screen closes,
      * and its files should reach the menus whether or not this is open. */
-    TakeXboxFolderPick();
+    TakeFolderPicks();
     MioPanXbox::Poll();
+    MioPanUndub::Poll();
 
     if (!g_opt.open)
     {

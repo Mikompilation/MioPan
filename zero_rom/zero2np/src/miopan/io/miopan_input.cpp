@@ -139,6 +139,10 @@ static int s_finder_aim_stick = MIOPAN_FINDER_AIM_GAME;
 // and the game asking again, nor outlives the finder by more than an update.
 static int s_look_request;
 static int s_look_request_prev;
+// The first-person view's requests, kept apart because they are not aiming:
+// only the finder's turn the gyro on.
+static int s_walk_request;
+static int s_walk_request_prev;
 static int s_captured;
 static int s_capture_failure_logged;
 
@@ -898,6 +902,8 @@ static void AdvanceMouse(void)
 
     s_look_request_prev = s_look_request;
     s_look_request = 0;
+    s_walk_request_prev = s_walk_request;
+    s_walk_request = 0;
 
     s_button_held = s_button_down | s_button_latch;
     s_button_latch = 0;
@@ -1659,7 +1665,7 @@ void MioPan_InputUpdateMouse(SDL_Window *window)
     // anywhere, and its virtual position wandering under the menu bar must not
     // let go of it.
     want = s_mouse_look != 0 &&
-           (s_look_request != 0 || s_look_request_prev != 0) &&
+           MioPan_InputMouseLookRequested() != 0 &&
            s_ui_wants_mouse == 0 &&
            (s_captured != 0 || s_pointer_over_ui == 0) &&
            s_suppressed == 0;
@@ -1712,7 +1718,10 @@ int MioPan_InputMouseCaptured(void)
 
 int MioPan_InputMouseLookRequested(void)
 {
-    return (s_look_request != 0 || s_look_request_prev != 0) ? 1 : 0;
+    return (s_look_request != 0 || s_look_request_prev != 0 ||
+            s_walk_request != 0 || s_walk_request_prev != 0)
+               ? 1
+               : 0;
 }
 
 int MioPan_InputCursorIdle(void)
@@ -1733,6 +1742,11 @@ int MioPan_InputCursorIdle(void)
 void MioPan_InputRequestMouseLook(void)
 {
     s_look_request = 1;
+}
+
+void MioPan_InputRequestWalkLook(void)
+{
+    s_walk_request = 1;
 }
 
 int MioPan_InputMouseLook(float *yaw, float *pitch)

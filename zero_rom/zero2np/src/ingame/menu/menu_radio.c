@@ -142,6 +142,7 @@
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat               */
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
+#include "../../miopan/io/miopan_undub.h"       // the Japanese voices (port)
 #include "../../miopan/miopan_ui/miopan_rml_menu_radio.h" // the RmlUi page (port)
 
 #include <stdio.h>                              /* printf                     */
@@ -348,6 +349,17 @@ static int  MenuRadioRmlDisp(u_char alpha);
  * instead of drawing it. */
 static MIOPAN_RML_MENU_RADIO *menu_radio_rml_capture;
 static int menu_radio_rml_stones;
+
+/* PORT: where the playing recording is in its caption table.  The table is
+ * timed against the English recording and walked by title_timer alone; with
+ * the Japanese voices imported (miopan/io/miopan_undub.h) the same words run
+ * 0.64 to 1.36 times as long, so the count is scaled to the recording that is
+ * actually playing.  The bare title_timer while the English one plays. */
+static int MenuRadioTitleFrame(int crystal_id)
+{
+    return MioPan_UndubCaptionFrame(GetCrystalStreamID(crystal_id),
+                                    menu_radio_disp.title_timer);
+}
 
 /* --------------------------------------------------------------------------
  *  Entry / exit
@@ -881,7 +893,9 @@ static void MenuRadioCrystalPlayDisp(int off_x, int off_y, u_char alpha) /* 761 
     data = GetCrystalTitleDat(
         disp_crystal_data[menu_radio_ctrl.ref_ctrl.data_pos].crystal_id); /* 768 */
 
-    tbl_pos = GetMovieTitleDatTblPos(data, menu_radio_disp.title_timer); /* 772 */
+    /* PORT: MenuRadioTitleFrame() rather than title_timer -- see there. */
+    tbl_pos = GetMovieTitleDatTblPos(data, MenuRadioTitleFrame(
+        disp_crystal_data[menu_radio_ctrl.ref_ctrl.data_pos].crystal_id)); /* 772 */
 
     MenuRadioCrystalNameFrameDisp(off_x, off_y, alpha);                 /* 776 */
 
@@ -1764,7 +1778,7 @@ static int MenuRadioRmlDisp(u_char alpha)
 
         if (menu_radio_ctrl.sub_step == MENU_RADIO_SUB_PLAY) {
             data    = GetCrystalTitleDat(page.selected);
-            tbl_pos = GetMovieTitleDatTblPos(data, menu_radio_disp.title_timer);
+            tbl_pos = GetMovieTitleDatTblPos(data, MenuRadioTitleFrame(page.selected));
             if ((tbl_pos != -1) && (MovieTitleCheckDisp(data[tbl_pos].msg_id) != 0)) {
                 page.subtitle = data[tbl_pos].msg_id;
             }

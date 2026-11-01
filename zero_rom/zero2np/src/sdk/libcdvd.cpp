@@ -11,6 +11,8 @@
 #include "../miopan/os/miopan_time.h" // MioPan_GetLocalTime (RTC)
 #include "../miopan/io/miopan_file.h" // host file I/O
 #include "../miopan/io/miopan_paths.h" // the data folder
+#include "../miopan/io/miopan_undub.h" // the imported Japanese voices
+#include "../miopan/io/miopan_cdtable.h" // sectors of an extracted tree
 
 #define MIOPAN_CD_FILE_LSN_BASE 0x71000000u
 #define MIOPAN_CD_MAX_FILES     64
@@ -182,6 +184,23 @@ static int CdReadSectors(u_int lsn, u_int sectors, void *buf)
         return 0;
     }
 
+    /* The Japanese voices Options > Special imports are not in IMG_BD.BIN:
+     * their CD table rows name sectors past its end, and miopan_undub reads
+     * those from the copies.  A voice stream is read by sector alone, so this
+     * is the only place it can be redirected. */
+    {
+        const int undub = MioPan_UndubRead(lsn, buf, (size_t)sectors * 0x800u);
+        if (undub >= 0)
+        {
+            if (undub == 0)
+            {
+                ReportCdFailure("imported Japanese voice unreadable", lsn, sectors, buf);
+            }
+            cd_last_error = undub != 0 ? 0 : 1;
+            return undub;
+        }
+    }
+
     file = FindFileByLsn(lsn);
     if (file != 0)
     {
@@ -196,7 +215,17 @@ static int CdReadSectors(u_int lsn, u_int sectors, void *buf)
 
     if (ResolveDataFile("\\IMG_BD.BIN;1", path, sizeof(path)) == 0)
     {
-        ReportCdFailure("IMG_BD.BIN not found", lsn, sectors, buf);
+        /* An extracted tree: the sector is in one of its files
+         * (miopan_cdtable.h). */
+        const int tree = MioPan_CdTableReadTree(lsn, buf, (size_t)sectors * 0x800u);
+        if (tree > 0)
+        {
+            cd_last_error = 0;
+            return 1;
+        }
+        ReportCdFailure(tree == 0 ? "extracted file unreadable"
+                                  : "no IMG_BD.BIN, and no file at that sector",
+                        lsn, sectors, buf);
         cd_last_error = 1;
         return 0;
     }

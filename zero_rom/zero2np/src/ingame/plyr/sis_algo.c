@@ -224,7 +224,7 @@ void SaLoopSet(SISALG_WRK *alg)                                         /* 201 *
     }
     else
     {
-        alg->loop[0] = (float)frm / 1.2000000476837158f;
+        alg->loop[0] = (float)frm / 1.1999999f;
     }
 
     alg->pos_no    = 0;
@@ -365,9 +365,9 @@ void SaRotEneDir(SISALG_WRK *alg)                                       /* 333 *
             return;
         }
 
-        float rotf = ((float)deg * 3.1415927410125732f) / 180.0f;
-        float rw   = GetPALMode() == 0 ? 0.1396263986825943f     /*  8 deg */
-                                       : 0.1675516068935394f;    /* 9.6 deg */
+        float rotf = ((float)deg * 3.1415925f) / 180.0f;
+        float rw   = GetPALMode() == 0 ? 0.13962632f            /*  8 deg */
+                                       : 0.16755158f;           /* 9.6 deg */
 
         sis_wrk.spd[2] = 0.0f;
 
@@ -523,7 +523,7 @@ void SaWait(SISALG_WRK *alg)                                            /* 465 *
          * SisAlgCtrl().  (The ROM's 2^31 bias subtraction around this cast is
          * GCC's float-to-unsigned helper, not source: `time` is a u_char, so
          * the biased path is unreachable.) */
-        float f = (float)time / 1.2000000476837158f;
+        float f = (float)time / 1.1999999f;
         alg->wait_time = ((int)f & 0xff) != 0 ? (u_char)(int)f : 1;
         alg->pos_no++;
         return;
@@ -615,7 +615,7 @@ void SaSetDirection(SISALG_WRK *alg)                                    /* 526 *
     vw[1] -= sis_wrk.cmn_wrk.mbox.rot[1];
     RotLimitChk(&vw[1]);
 
-    const float lim = 0.0698131993412971f;      /* 4 degrees */
+    const float lim = 0.06981316f;              /* 4 degrees (the ROM's lit4) */
     float adjr = vw[1];
     if (vw[1] > 0.0f)
     {
@@ -697,8 +697,8 @@ void SaSetMvsta(SISALG_WRK *alg)                                        /* 613 *
     }
     else
     {
-        /* The clear is masked to 32 bits in the ROM, so the high half of the
-         * 64-bit mvsta survives regardless of what the script asked for. */
+        /* The ROM zero-extends ~attr to 64 bits (dsll32/dsrl32), so a clear
+         * also wipes the high half of mvsta, whatever the script asked for. */
         sis_wrk.cmn_wrk.st.mvsta &= ~(u_long)attr & 0xffffffffULL;
     }                                                                   /* 623 */
 }
