@@ -8,7 +8,7 @@
 
 #include "msg_col_tbl.h"
 
-MSG_COLOR msg_col[45] =
+MSG_COLOR msg_col[46] =
 {
     {230, 230, 230},
     {148, 144, 110},
@@ -55,4 +55,5 @@ MSG_COLOR msg_col[45] =
     {255, 180, 127},
     {255, 120, 117},
     {143, 148, 215},
+    {59, 43, 24}, // HD Play Data readouts: match the original softened ink.
 };

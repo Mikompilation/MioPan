@@ -16,6 +16,7 @@
 
 #include "message.h"                /* MSG_COLOR */
 
-extern MSG_COLOR msg_col[45];       /* rdata 3c1ac0 */
+enum { MIOPAN_PLAYDATA_HD_COLOUR = 45 };
+extern MSG_COLOR msg_col[46];       /* rdata 3c1ac0 */
 
 #endif /* _GRAPHICS_GRAPH2D_MSG_COL_TBL_H */

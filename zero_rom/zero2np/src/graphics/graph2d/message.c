@@ -3322,7 +3322,7 @@ void PrintNumber(int data, int x, int y, u_char col_label, u_char alpha, int pri
     {
         PRINT_ASSERT("Error! PrintNumber data %d", data);
     }
-    if (0x2c < col_label)
+    if (MIOPAN_PLAYDATA_HD_COLOUR < col_label)
     {
         PRINT_ASSERT("Error! PrintNumber col_label %d", col_label);
     }
@@ -3384,7 +3384,7 @@ void PrintNumber_N(int data, int num, int x, int y, u_char col_label, u_char alp
         PRINT_ASSERT("Error! PrintNumber_N num %d", num);
     }
 
-    if (0x2c < col_label)
+    if (MIOPAN_PLAYDATA_HD_COLOUR < col_label)
     {
         PRINT_ASSERT("Error! PrintNumber_N col_label %d", col_label);
     }

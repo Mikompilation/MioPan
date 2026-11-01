@@ -15017,6 +15017,11 @@ void MioPan_RendererDrawCapturedScreen(unsigned int addr,
     g_gs_depth_write = saved_depth_write;
 }
 
+int MioPan_RendererHasHdMainFont(void)
+{
+    return GetHdFontTexture(1, 512, 256) != nullptr;
+}
+
 void MioPan_RendererDrawFontQuad(const float *xy,
                                  const float *uv,
                                  unsigned char r,

@@ -71,6 +71,8 @@
 #include "../../system/eeiop/fileload.h"        /* FileLoadReqEE          */
 #include "../../system/os/system.h"             /* SystemBankPlay / GetLanguage */
 #include "../../system/pad/pad.h"               /* pad / paddat           */
+#include "../../graphics/graph2d/msg_col_tbl.h"
+#include "../../miopan/rendering/miopan_renderer.h"
 #include "../../miopan/io/miopan_menu_mouse.h"  // the mouse in menus (port)
 #include "../../miopan/miopan_ui/miopan_rml_menu_top.h" // the RmlUi hub (port)
 
@@ -863,48 +865,54 @@ static void MenuTopPlayDataDisp(int off_x, int off_y, u_char alpha)      /* 981 
  * seconds are zero-padded and the hours are not. */
 static void MenuTopPlayTimeDisp(int off_x, int off_y, u_char alpha)      /* 1022 */
 {
+    const u_char colour = MioPan_RendererHasHdMainFont() ? MIOPAN_PLAYDATA_HD_COLOUR : 2;
     TIME_INFO play_time;
 
     play_time = GetPlayTime();                                           /* 1027 */
 
     PrintNumber_N(play_time.hour, 3, off_x + 396, off_y + 170,
-                  2, alpha, 0, 1, 0);                                    /* 1032 */
-    PrintMsg(8, 0, off_x + 439, off_y + 170, 2, alpha, 0);               /* 1035 */
+                  colour, alpha, 0, 1, 0);                                    /* 1032 */
+    PrintMsg(8, 0, off_x + 439, off_y + 170, colour, alpha, 0);               /* 1035 */
     PrintNumber_N(play_time.min, 2, off_x + 449, off_y + 170,
-                  2, alpha, 0, 1, 1);                                    /* 1038 */
-    PrintMsg(8, 0, off_x + 478, off_y + 170, 2, alpha, 0);               /* 1041 */
+                  colour, alpha, 0, 1, 1);                                    /* 1038 */
+    PrintMsg(8, 0, off_x + 478, off_y + 170, colour, alpha, 0);               /* 1041 */
     PrintNumber_N(play_time.sec, 2, off_x + 488, off_y + 170,
-                  2, alpha, 0, 1, 1);                                    /* 1044 */
+                  colour, alpha, 0, 1, 1);                                    /* 1044 */
 }
 
 static void MenuTopScoreDisp(int off_x, int off_y, u_char alpha)         /* 1056 */
 {
+    const u_char colour = MioPan_RendererHasHdMainFont() ? MIOPAN_PLAYDATA_HD_COLOUR : 2;
     PrintNumber_N(GetPlayData_TotalScore(), 6,                           /* 1060 */
-                  off_x + 432, off_y + 194, 2, alpha, 0, 1, 0);          /* 1066 */
+                  off_x + 432, off_y + 194, colour, alpha, 0, 1, 0);          /* 1066 */
 }
 
 static void MenuTopPhotoNumDisp(int off_x, int off_y, u_char alpha)      /* 1076 */
 {
+    const u_char colour = MioPan_RendererHasHdMainFont() ? MIOPAN_PLAYDATA_HD_COLOUR : 2;
     PrintNumber_N(GetPhotoNum(), 5,                                      /* 1080 */
-                  off_x + 446, off_y + 218, 2, alpha, 0, 1, 0);          /* 1085 */
+                  off_x + 446, off_y + 218, colour, alpha, 0, 1, 0);          /* 1085 */
 }
 
 static void MenuTopBusterNumDisp(int off_x, int off_y, u_char alpha)     /* 1096 */
 {
+    const u_char colour = MioPan_RendererHasHdMainFont() ? MIOPAN_PLAYDATA_HD_COLOUR : 2;
     PrintNumber_N(GetBusterGhostNum(), 4,                                /* 1100 */
-                  off_x + 460, off_y + 242, 2, alpha, 0, 1, 0);          /* 1105 */
+                  off_x + 460, off_y + 242, colour, alpha, 0, 1, 0);          /* 1105 */
 }
 
 static void MenuTopMaxScoreDisp(int off_x, int off_y, u_char alpha)      /* 1116 */
 {
+    const u_char colour = MioPan_RendererHasHdMainFont() ? MIOPAN_PLAYDATA_HD_COLOUR : 2;
     PrintNumber_N(GetMaxScore(), 5,                                      /* 1120 */
-                  off_x + 446, off_y + 266, 2, alpha, 0, 1, 0);          /* 1125 */
+                  off_x + 446, off_y + 266, colour, alpha, 0, 1, 0);          /* 1125 */
 }
 
 /* The console clock, re-read every half second -- 25 frames on PAL, 30 on
  * NTSC.  Printed day / month / year, then h:mm:ss. */
 static void MenuTopNowDateDisp(int off_x, int off_y, u_char alpha)       /* 1136 */
 {
+    const u_char colour = MioPan_RendererHasHdMainFont() ? MIOPAN_PLAYDATA_HD_COLOUR : 2;
     if (menu_top_disp.now_time_cnt == 0) {                               /* 1139 */
         GetSystemTime(&menu_top_disp.now_time);                          /* 1141 */
     }
@@ -923,20 +931,20 @@ static void MenuTopNowDateDisp(int off_x, int off_y, u_char alpha)       /* 1136
     }
 
     PrintNumber_N(menu_top_disp.now_time.day.day, 2, off_x + 299,
-                  off_y + 310, 2, alpha, 0, 1, 1);                       /* 1161 */
+                  off_y + 310, colour, alpha, 0, 1, 1);                       /* 1161 */
     PrintNumber_N(menu_top_disp.now_time.day.month, 2, off_x + 338,
-                  off_y + 310, 2, alpha, 0, 1, 1);                       /* 1164 */
+                  off_y + 310, colour, alpha, 0, 1, 1);                       /* 1164 */
     PrintNumber_N(menu_top_disp.now_time.day.year, 2, off_x + 377,
-                  off_y + 310, 2, alpha, 0, 1, 1);                       /* 1167 */
+                  off_y + 310, colour, alpha, 0, 1, 1);                       /* 1167 */
 
     PrintNumber_N(menu_top_disp.now_time.time.hour, 2, off_x + 421,
-                  off_y + 310, 2, alpha, 0, 1, 1);                       /* 1171 */
-    PrintMsg(8, 0, off_x + 449, off_y + 310, 2, alpha, 0);               /* 1174 */
+                  off_y + 310, colour, alpha, 0, 1, 1);                       /* 1171 */
+    PrintMsg(8, 0, off_x + 449, off_y + 310, colour, alpha, 0);               /* 1174 */
     PrintNumber_N(menu_top_disp.now_time.time.min, 2, off_x + 460,
-                  off_y + 310, 2, alpha, 0, 1, 1);                       /* 1177 */
-    PrintMsg(8, 0, off_x + 488, off_y + 310, 2, alpha, 0);               /* 1180 */
+                  off_y + 310, colour, alpha, 0, 1, 1);                       /* 1177 */
+    PrintMsg(8, 0, off_x + 488, off_y + 310, colour, alpha, 0);               /* 1180 */
     PrintNumber_N(menu_top_disp.now_time.time.sec, 2, off_x + 499,
-                  off_y + 310, 2, alpha, 0, 1, 1);                       /* 1183 */
+                  off_y + 310, colour, alpha, 0, 1, 1);                       /* 1183 */
 }
 
 /* Both of these ignore their offsets and place at fixed coordinates. */

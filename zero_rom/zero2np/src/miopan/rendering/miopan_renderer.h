@@ -804,6 +804,7 @@ void MioPan_RendererDrawSkyQuad(const sceGsTex0 *tex0,
                                 unsigned char g,
                                 unsigned char b,
                                 unsigned char a);
+int MioPan_RendererHasHdMainFont(void);
 void MioPan_RendererSetFontTexture(int bank, const sceGsTex0 *tex0);
 void MioPan_RendererDrawFontQuad(const float *xy,
                                  const float *uv,
