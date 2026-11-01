@@ -273,8 +273,9 @@ static void SavePoint_BgFleaDisp(int off_x, int off_y, u_char alpha)    /* 259 *
         flea_ds.x = flea_ds.x + (float)off_x;                           /* 267 */
         flea_ds.y = flea_ds.y + (float)off_y;                           /* 267 */
 
-        flea_ds.scw = 2.3999998f;               /* lit4 3ee824, i.e. 2.4f */ /* 268 */
-        flea_ds.sch = 2.3999998f;                                       /* 268 */
+        /* Cover the native 149-pixel tile spacing without subpixel gaps when enlarged. */
+        flea_ds.scw = 149.0f / (float)flea_ds.w;
+        flea_ds.sch = 149.0f / (float)flea_ds.h;
         flea_ds.csx = flea_ds.x;                                        /* 268 */
         flea_ds.csy = flea_ds.y;                                        /* 268 */
 

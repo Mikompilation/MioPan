@@ -1075,8 +1075,9 @@ static void MenuBg_TourouDisp(int off_x, int off_y, u_char alpha)        /* 904 
 
         bg_ds.csx = bg_ds.x;                                            /* 1112 */
         bg_ds.csy = bg_ds.y;
-        bg_ds.scw = 2.39999986f;    /* lit4 3ee510, i.e. 2.4f */
-        bg_ds.sch = 2.39999986f;
+        /* Cover the native 149-pixel tile spacing without subpixel gaps when enlarged. */
+        bg_ds.scw = 149.0f / (float)bg_ds.w;
+        bg_ds.sch = 149.0f / (float)bg_ds.h;
 
         bg_ds.alphar = MENU_ALPHA_ADD;                                  /* 1113 */
 
