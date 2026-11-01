@@ -23,6 +23,7 @@ enum class Step
     Operation,
     Location,
     Slots,
+    Region,
     Format
 };
 Step step = Step::Operation;
@@ -32,6 +33,16 @@ Storage source, target;
 bool source_ok = false, target_ok = false;
 bool output_ecc = true;
 int output_version = int(SaveVersion::Retail);
+int output_region = 0, output_clock = 0, source_clock = 0, extra_policy = 0;
+RegionOptions Options()
+{
+    RegionOptions options;
+    options.region = static_cast<SaveRegion>(output_region);
+    options.copy_extra = extra_policy == 1;
+    options.source_hz = source_clock == 0 ? 0 : source_clock == 1 ? 25 : 30;
+    options.target_hz = output_clock == 0 ? 25 : 30;
+    return options;
+}
 SaveArchiveFormat output_archive = SaveArchiveFormat::None;
 const char *OutputSuffix()
 {
@@ -69,9 +80,13 @@ fs::path ExternalFolder()
 {
     fs::path p = fs::u8path(external);
     std::error_code ec;
-    if (p.filename() == FolderName || fs::is_regular_file(p / FolderName, ec))
-        return p;
-    return p / FolderName;
+    for (auto region : {SaveRegion::EU, SaveRegion::US, SaveRegion::JP})
+    {
+        const char *name = RegionFolder(region);
+        if (p.filename() == name || fs::is_regular_file(p / name, ec)) return p;
+        if (!exporting && fs::is_regular_file(p / name / name, ec)) return p / name;
+    }
+    return p / RegionFolder(exporting ? Options().region : SaveRegion::EU);
 }
 void ClearSelection()
 {
@@ -124,7 +139,31 @@ void Refresh()
         target_ok = ReadStorage(PcFolder(), StorageKind::Folder, true, target, target_error);
     }
     if (source_ok && !source.has_save)
-        source_error = "No EU MioPan saves found at this source.";
+        source_error = "No FF2 saves found at this source.";
+    if (!source_error.empty())
+        source_error = std::string(exporting ? "PC source: " : "PS2 source: ") + source_error;
+    if (!target_error.empty())
+        target_error = std::string(exporting ? "PS2 destination: " : "PC destination: ") + target_error;
+    if (source_ok)
+        for (int i = 0; i < 5; ++i)
+        {
+            auto &slot = source.save.slots[i];
+            if (!slot.occupied) continue;
+            if (slot.issue.empty())
+            {
+                Bytes native, encoded;
+                const auto &data = source.save.files.at("Zero2Play" + std::to_string(i));
+                const auto options = Options();
+                if (ImportRegion(data, source.save.region, source.save.version, native, slot.issue,
+                                 options.source_hz ? options.source_hz : slot.hz) && exporting)
+                {
+                    ExportRegion(native, options.region, static_cast<SaveVersion>(output_version),
+                                 options.copy_extra, encoded, slot.issue, options.target_hz);
+                    slot.notice = RegionNotice(source.save.region, options.region);
+                }
+            }
+            if (!slot.issue.empty()) { selected[i] = false; destination[i] = -1; }
+        }
     initialized = true;
 }
 void AssignEmptySlots()
@@ -195,9 +234,15 @@ std::string Unavailable(bool require_selection = true, bool require_output = tru
         return target_error;
     if (!require_selection)
         return {};
+    if (!target.save.issue.empty())
+        return "Destination saves are damaged: " + target.save.issue;
     const auto slots = Mappings();
     if (slots.empty())
-        return "Select one or more source saves.";
+    {
+        const bool any = std::any_of(source.save.slots.begin(), source.save.slots.end(),
+                                    [](const SlotInfo &slot) { return slot.occupied && slot.issue.empty(); });
+        return any ? "Select one or more source saves." : "No compatible saves. Open a warning icon for details.";
+    }
     std::set<int> used;
     for (const auto &s : slots)
     {
@@ -286,7 +331,7 @@ void AdoptPicker()
         }
         else if (picked_kind == Dialog::OutputFolder)
         {
-            const auto path = fs::u8path(picked) / FolderName;
+            const auto path = fs::u8path(picked) / RegionFolder(Options().region);
             Storage folder;
             std::string error;
             if (!ReadStorage(path, StorageKind::Folder, false, folder, error))
@@ -316,8 +361,11 @@ void AdoptPicker()
             }
             Refresh();
             message.clear();
-            if (Unavailable(false, false, false).empty())
+            const auto reason = Unavailable(false, false, false);
+            if (reason.empty())
                 step = Step::Slots;
+            else
+                message = reason;
         }
     }
     if (!pick_error.empty())
@@ -338,7 +386,7 @@ void Commit()
     const auto slots = Mappings();
     std::string error;
     if (TransferBatch(source, target, slots, exporting, fs::u8path(output), error, output_ecc,
-                      output_archive, static_cast<SaveVersion>(output_version)))
+                      output_archive, static_cast<SaveVersion>(output_version), Options()))
     {
         message =
             (exporting ? "Exported " : "Imported ") + std::to_string(slots.size()) + " save(s).";
@@ -404,7 +452,7 @@ void Rows(bool is_source)
         ImGui::BeginGroup();
         if (is_source)
         {
-            ImGui::BeginDisabled(!slot.occupied || !source_ok);
+            ImGui::BeginDisabled(!slot.occupied || !slot.issue.empty() || !source_ok);
             if (ImGui::Checkbox("##select", &selected[i]))
             {
                 if (!selected[i])
@@ -420,13 +468,45 @@ void Rows(bool is_source)
             ImGui::SameLine();
         }
         ImGui::Text("%d", i + 1);
+        ImGui::SameLine();
+        if (!slot.issue.empty() || !slot.notice.empty())
+        {
+            const auto &detail = slot.issue.empty() ? slot.notice : slot.issue;
+            const float side = ImGui::GetFrameHeight();
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            const bool clicked = ImGui::InvisibleButton("warning", ImVec2(side, side));
+            auto *draw = ImGui::GetWindowDrawList();
+            draw->AddTriangleFilled(ImVec2(at.x + side / 2, at.y), ImVec2(at.x + side, at.y + side),
+                                    ImVec2(at.x, at.y + side), slot.issue.empty() ? IM_COL32(220, 170, 35, 255) : IM_COL32(220, 55, 45, 255));
+            const ImVec2 text = ImGui::CalcTextSize("!");
+            draw->AddText(ImVec2(at.x + (side - text.x) / 2, at.y + side - text.y), IM_COL32(255, 255, 255, 255), "!");
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
+                ImGui::TextUnformatted(detail.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+            if (clicked) ImGui::OpenPopup("Save details");
+            if (ImGui::BeginPopup("Save details"))
+            {
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
+                ImGui::TextUnformatted(detail.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::EndPopup();
+            }
+        }
+        else ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
         ImGui::EndGroup();
         ImGui::SameLine();
         const auto &preview = incoming >= 0 ? source.save.slots[incoming] : slot;
         MioPanUiSavePreview::Draw(preview, ImVec2(116, 58));
         ImGui::SameLine();
         ImGui::BeginGroup();
-        if (preview.occupied)
+        if (!(is_source ? source : target).save.issue.empty())
+            ImGui::TextDisabled("Unavailable save");
+        else if (preview.occupied)
         {
             ImGui::TextUnformatted(preview.player.c_str());
             ImGui::Text("Chapter %u / Room %d", preview.chapter, preview.area);
@@ -447,7 +527,7 @@ void Rows(bool is_source)
                                "%s <- source %d", slot.occupied ? "Replace" : "Add", incoming + 1);
         else
             ImGui::TextDisabled("%s", slot.occupied ? "Keep existing save" : "Empty slot");
-        if (is_source && slot.occupied && source_ok && ImGui::IsWindowHovered() &&
+        if (is_source && slot.occupied && slot.issue.empty() && source_ok && ImGui::IsWindowHovered() &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered() &&
             !ImGui::IsAnyItemActive())
         {
@@ -505,6 +585,8 @@ bool ChoiceCard(const char *label, float width, float height = 110.f)
 void ChooseDirection(bool to_ps2)
 {
     exporting = to_ps2;
+    output_region = int(SaveRegion::EU);
+    output_version = int(SaveVersion::Retail);
     output_archive = SaveArchiveFormat::None;
     ps2_kind = exporting ? StorageKind::BlankCard : StorageKind::Card;
     external[0] = output[0] = 0;
@@ -550,13 +632,12 @@ void Draw(SDL_Window *window)
         return;
     }
     const char *titles[] = {"Choose direction", "Choose PS2 storage", "Select saves and slots",
-                            "Choose output format"};
+                            "Choose PS2 region", "Choose output format"};
     const int page = step == Step::Operation ? 1 : exporting ? int(step) : int(step) + 1;
-    ImGui::Text("Step %d of %d: %s", page, 3, titles[int(step)]);
+    ImGui::Text("Step %d of %d: %s", page, exporting ? 4 : 3, titles[int(step)]);
     ImGui::Separator();
     ImGui::BeginDisabled(picking.load());
-    const float footer_height =
-        ImGui::GetFrameHeightWithSpacing() + ImGui::GetTextLineHeightWithSpacing() * 4;
+    const float footer_height = ImGui::GetFrameHeightWithSpacing();
     ImGui::BeginChild("wizard-page", ImVec2(0, -footer_height), 0, ImGuiWindowFlags_NoBackground);
     const bool centered = step != Step::Slots;
     if (centered)
@@ -573,7 +654,7 @@ void Draw(SDL_Window *window)
     if (step == Step::Operation)
     {
         ImGui::TextUnformatted("Where would you like to send your saves?");
-        ImGui::TextDisabled("Project Zero II - EU / SLES_523.84");
+        ImGui::TextDisabled("Project Zero II / Fatal Frame II");
         ImGui::Spacing();
         const float available = ImGui::GetContentRegionAvail().x;
         const bool side_by_side = available >= 650.f;
@@ -601,26 +682,28 @@ void Draw(SDL_Window *window)
     else if (step == Step::Slots)
     {
         ImGui::TextUnformatted("Select source saves, then choose a destination slot for each.");
-        if (exporting)
+        bool changed = false;
+        if (!exporting)
         {
-            ImGui::SetNextItemWidth(280.f);
-            ImGui::Combo("Target PS2 game", &output_version,
-                         "Prototype (2004-02-06)\0Retail release (EU)\0");
+            ImGui::Text("Source: %s / %s", RegionLabel(source.save.region),
+                        source.save.version == SaveVersion::Retail ? "Retail" : "February 2004 prototype");
+            if (source.save.region == SaveRegion::EU)
+            {
+                ImGui::SetNextItemWidth(260.f);
+                changed |= ImGui::Combo("Source timing", &source_clock, "Automatic (stock PAL)\0 50 Hz PAL\0 60 Hz / older port exports\0");
+            }
         }
-        else
-            ImGui::Text("Source version: %s", source.save.version == SaveVersion::Retail
-                                                  ? "EU retail release"
-                                                  : "February 2004 prototype");
+        if (changed) Refresh();
         const int count = int(std::count(selected.begin(), selected.end(), true));
         const int available =
             int(std::count_if(source.save.slots.begin(), source.save.slots.end(),
-                              [](const SlotInfo &slot) { return slot.occupied; }));
-        ImGui::Text("%d of %d saves selected", count, available);
+                              [](const SlotInfo &slot) { return slot.occupied && slot.issue.empty(); }));
+        ImGui::Text("%d of %d compatible saves selected", count, available);
         ImGui::SameLine();
         if (ImGui::SmallButton("Select all"))
         {
             for (int i = 0; i < 5; ++i)
-                selected[i] = source_ok && source.save.slots[i].occupied;
+                selected[i] = source_ok && source.save.slots[i].occupied && source.save.slots[i].issue.empty();
             AssignEmptySlots();
         }
         ImGui::SameLine();
@@ -646,8 +729,59 @@ void Draw(SDL_Window *window)
             ImGui::EndTable();
         }
     }
+    else if (step == Step::Region)
+    {
+        ImGui::TextUnformatted("Choose the original game's region");
+        ImGui::TextWrapped("The output will use that release's save data and filenames.");
+        ImGui::Spacing();
+        const float width = ImGui::GetContentRegionAvail().x;
+        for (auto region : {SaveRegion::JP, SaveRegion::US, SaveRegion::EU})
+        {
+            const std::string label = std::string(RegionLabel(region)) + "\n\n" +
+                (region == SaveRegion::EU ? "PAL release (50 or 60 Hz)" :
+                 region == SaveRegion::JP ? "Japanese release; conservative compatibility checks" : "US release");
+            if (ChoiceCard(label.c_str(), width, 90.f))
+            {
+                const auto before = Mappings().size();
+                output_region = int(region);
+                if (region != SaveRegion::EU) output_version = int(SaveVersion::Retail);
+                Refresh();
+                Folder checked;
+                if (Mappings().size() != before)
+                {
+                    step = Step::Slots;
+                    message = "Some selected saves cannot be exported to this region. Review their warning icons and select compatible saves.";
+                }
+                else if (BuildBatch(source.save, nullptr, Mappings(), true, checked, message,
+                                    static_cast<SaveVersion>(output_version), Options()))
+                {
+                    step = Step::Format;
+                    message.clear();
+                }
+            }
+        }
+    }
     else if (step == Step::Format)
     {
+        ImGui::Text("Region: %s", RegionLabel(Options().region));
+        bool changed = false;
+        if (output_region == int(SaveRegion::EU))
+        {
+            ImGui::SetNextItemWidth(230.f);
+            changed |= ImGui::Combo("Version", &output_version, "Prototype (2004-02-06)\0Retail release\0");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(150.f);
+            changed |= ImGui::Combo("Target timing", &output_clock, "50 Hz PAL\0 60 Hz\0");
+        }
+        else
+        {
+            ImGui::SetNextItemWidth(420.f);
+            changed |= ImGui::Combo("Extra Twin's Doll entry", &extra_policy,
+                "Leave unobtained\0Copy Twin Doll's status and score\0");
+        }
+        if (changed) Refresh();
+        const auto notes = RegionNotice(SaveRegion::EU, Options().region);
+        if (!notes.empty()) ImGui::TextWrapped("%s", notes.c_str());
         ImGui::TextUnformatted("Choose the output format");
         ImGui::TextWrapped("Choose a format, then confirm the destination in the file picker to "
                            "export immediately.");
@@ -716,19 +850,8 @@ void Draw(SDL_Window *window)
     std::string reason;
     if (step == Step::Location)
         reason = Unavailable(false, false, false);
-    else if (step == Step::Slots || step == Step::Format)
+    else if (step == Step::Slots || step == Step::Region || step == Step::Format)
         reason = Unavailable(true, false, final_step || step == Step::Format);
-    ImGui::BeginChild("transfer-status", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 3));
-    if (!reason.empty())
-        ImGui::TextWrapped("Cannot %s: %s",
-                           final_step ? (exporting ? "export" : "import") : "continue",
-                           reason.c_str());
-    else if (!final_step && MemoryCardIsInUse())
-        ImGui::TextWrapped("You can continue setup. Transfer must wait until the game's save/load "
-                           "screen and card access finish.");
-    if (!message.empty())
-        ImGui::TextWrapped("%s", message.c_str());
-    ImGui::EndChild();
     ImGui::BeginDisabled(step == Step::Operation);
     if (ImGui::Button("Back", ImVec2(120, 0)))
     {
@@ -754,11 +877,28 @@ void Draw(SDL_Window *window)
                     pending = true;
             }
             else
-                step = Step::Format;
+                step = Step::Region;
         }
         ImGui::EndDisabled();
+        if (!reason.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", reason.c_str());
     }
     ImGui::EndDisabled();
+    if (!message.empty() && !ImGui::IsPopupOpen("Save transfer message"))
+        ImGui::OpenPopup("Save transfer message");
+    ImGui::SetNextWindowSize(ImVec2(std::min(480.f, viewport->WorkSize.x * .9f), 0),
+                             ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Save transfer message", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("%s", message.c_str());
+        if (ImGui::Button("OK", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        {
+            message.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemDefaultFocus();
+        ImGui::EndPopup();
+    }
     ImGui::End();
 }
 } // namespace MioPanUiSaves

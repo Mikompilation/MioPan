@@ -2801,7 +2801,6 @@ void DrawSettingsMenu()
     }
     DrawControlsSettingsMenu();
     MioPanUi::DrawTitleMenuItem();
-    MioPanUiSaves::MenuItem();
     ImGui::Separator();
 
     DrawInterfaceScaleMenu();
@@ -2826,6 +2825,9 @@ void DrawSettingsMenu()
     }
     if (ImGui::MenuItem("Open game data folder"))
     {
+    MioPanUiSaves::MenuItem();
+    ImGui::Separator();
+
         OpenFolderInShell(MioPan_PathDataDir());
     }
     ImGui::EndMenu();
