@@ -24,6 +24,8 @@
 // disassemble_function.
 
 #include "outgame.h"
+#include "lang_sel.h"
+#include "../system/os/system.h"
 
 #include "option.h"                         // InitOptionSetup / OptSoundSetupRef
 #include "../common/utility2.h"             // PRINT_ASSERT
@@ -271,7 +273,11 @@ static void AutoLoadMcLoadWait(void)
         }
         else
         {
+            const u_char chosen_language = GetLanguage();
             DevelopMemoryCardLoadData((char *)auto_load_data_buff, 0, 0);
+            // Keep every loaded setting except the language selected before auto-load.
+            Set_McSaveLanguage(chosen_language);
+            SetLanguage(chosen_language);
             OptSoundSetupRef(&opt_wrk);
 
             auto_load_ctrl.step = AL_LOAD_CONF;

@@ -19,7 +19,7 @@ static void PadCheckMainPad(void)
     if (**paddat == 1)
     {
         SystemBankPlay(3, 1, 0, 0, (SND_3D_SET *)0, 0x3200, 0x1000);
-        SetNextGPhase(GID_LANGDATA_CHECK);
+        SetNextGPhase(GID_LANGSEL_MAIN);
     }
 }
 
@@ -35,7 +35,7 @@ static void PadCheckMain(void)
         {
             if (GetPadDUALSHOCK2(0) != 0)
             {
-                SetNextGPhase(GID_LANGDATA_CHECK);
+                SetNextGPhase(GID_LANGSEL_MAIN);
                 printf("pass1\n");
                 return;
             }
