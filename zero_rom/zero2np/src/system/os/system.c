@@ -9427,6 +9427,15 @@ static void _InitException(void)
     iopexceptionInitialize(&iopeCD);
 }
 
+// PORT: the game-files screen, checking a file the player chose.  It runs ahead
+// of InitSystemON(), so the rows above are still the prototype's, as the check
+// needs them to be.
+int MioPan_RomArchiveRelease(const char *host_path)
+{
+    return MioPan_CdTableIdentify(host_path, cd_dat_tbl, filename_dat,
+                                  MIOPAN_ROM_FILE_NUM);
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // One-time engine boot.  Carves up EE main memory into the system / mem_util /
 // model / debug heaps, then brings every subsystem online in dependency order.

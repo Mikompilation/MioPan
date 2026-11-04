@@ -155,6 +155,11 @@ const char *MioPan_InputGetPreferredGamepad(void);
 // than waiting for the next poll to notice.
 void MioPan_InputRefreshDevices(void);
 
+// Choose and open the pad now.  MioPan_InputUpdate() does this on the game's
+// polling; this is for what runs before there is any, which still wants the
+// pad's events.  1 when one is open.
+int  MioPan_InputOpenGamepad(void);
+
 // ---------------------------------------------------------------------------
 //  Binding access.  All of these copy, so a caller may hold the struct while it
 //  edits it and commit once.  Button/stick indices out of range are rejected

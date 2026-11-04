@@ -2423,9 +2423,10 @@ void DrawDataFolderWindow()
     if (ImGui::Begin("MioPan Game Data", &g_show_data_folder))
     {
         ImGui::TextWrapped(
-            "Where MioPan reads the game's files from: IMG_BD.BIN, or an "
-            "extracted bin/data tree. It can be any folder on this device -- "
-            "nothing requires it to be next to MioPan.");
+            "Where MioPan reads the game's files from: IMG_BD.BIN, an extracted "
+            "bin/data tree, or a disc image (.iso). It can be anywhere on this "
+            "device -- nothing requires it to be next to MioPan. The game must be "
+            "the European release (SLES-52384).");
 
         ImGui::Separator();
 
@@ -2442,7 +2443,7 @@ void DrawDataFolderWindow()
         }
 
         ImGui::Separator();
-        ImGui::TextDisabled("Folder");
+        ImGui::TextDisabled("Folder or disc image");
 
         const float browse_width = Px(100.0f);
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - browse_width -
@@ -2485,8 +2486,8 @@ void DrawDataFolderWindow()
         else
         {
             ImGui::TextColored(ImVec4(0.94f, 0.58f, 0.36f, 1.0f),
-                               "No IMG_BD.BIN and no bin/data there. MioPan "
-                               "will fall back to looking for itself.");
+                               "No disc image, IMG_BD.BIN or bin/data there. "
+                               "MioPan will fall back to looking for itself.");
         }
 
         ImGui::Separator();

@@ -208,6 +208,19 @@ def vignette(size=256):
     return size, size, pixels
 
 
+def bloom(size=256):
+    """A soft crimson glow, for a screen with nothing of the game's behind it
+    (the game-files screen) to rise out of."""
+    pixels = []
+    for y in range(size):
+        for x in range(size):
+            dx = (x + 0.5) / size * 2.0 - 1.0
+            dy = (y + 0.5) / size * 2.0 - 1.0
+            t = clamp(1.0 - math.sqrt(dx * dx + dy * dy))
+            pixels.append((163, 20, 40, int(t * t * (3.0 - 2.0 * t) * 120)))
+    return size, size, pixels
+
+
 def grain(size=128, seed=1997):
     """Film grain to tile behind a menu: a faint speckle, mostly dark.  Kept
     well under the game's own grain, which is already on the picture behind
@@ -290,6 +303,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     for name, image in (("butterfly.png", butterfly()),
                         ("vignette.png", vignette()),
+                        ("bloom.png", bloom()),
                         ("grain.png", grain()),
                         ("cursor_glow.png", cursor_glow()),
                         ("cursor_bar.png", cursor_bar()),

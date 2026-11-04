@@ -31,6 +31,15 @@ int MioPan_FileReadAt(const char *host_path, uint64_t offset, void *buf,
 // Byte size of a host file, or -1 on failure.
 int64_t MioPan_FileSize(const char *host_path);
 
+// A stretch of a larger file, opened by a name of its own: every call in this
+// file then takes `name` in place of a host path and reads `size` bytes of
+// `host_path` from `offset`, with the ends where that stretch's ends are.  This
+// is how IMG_BD.BIN is read out of a disc image (miopan_paths.h), so the readers
+// of the archive need no notion of one.  Read-only, and one at a time: set it
+// before anything reads through the name, not while something does.
+void MioPan_FileMapRegion(const char *name, const char *host_path, uint64_t offset,
+                          uint64_t size);
+
 // ---- handle-based stream API (backs fileio.cpp + libcdvd streaming) --------
 
 typedef struct MioPan_File MioPan_File;

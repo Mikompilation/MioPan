@@ -16,6 +16,12 @@ backend -- SDL_GPU rendering through `rmlui.vert`/`rmlui.frag`, input (keys,
 mouse, and the pad as keys), and the one `Rml::Context`. Each screen is a file
 of its own that loads its document and handles its events:
 
+- `miopan_rml_gamefiles.cpp` -- what a player without the game's files sees
+  ahead of everything else: choose a disc image or `IMG_BD.BIN` of the
+  European release, have it checked, and it is saved in
+  `[paths] data_folder`. It runs before the
+  game does, so it is loaded when needed and closed for good, and unlike the
+  rest it cannot use anything of the game's.
 - `miopan_rml_options.cpp` -- the options screen, the game's own options and
   the port's settings; replaces the title's Options and opens from the pause
   screen.

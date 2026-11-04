@@ -132,9 +132,10 @@ typedef struct MioPan_ConfigUi
  * This is the one setting that is not a preference: without it the port has
  * nothing to load.  It is here rather than compiled in because on a phone or a
  * console the data cannot be beside the executable and there is no shell to set
- * an environment variable in -- pointing this key at a folder is the whole
- * mechanism.  Empty means "discover it", and what discovery finds is written
- * back, so the file always names the folder actually in use.
+ * an environment variable in -- pointing this key at a folder, or at a disc
+ * image, is the whole mechanism.  Empty means "discover it", and what discovery
+ * finds is written back, so the file always names what is actually in use.  A
+ * player who has neither is asked at the start, and their answer lands here.
  */
 typedef struct MioPan_ConfigPaths
 {
@@ -315,9 +316,10 @@ const char *MioPan_ConfigPath(void);
  * MioPan_ConfigApply() for that. */
 void MioPan_ConfigLoad(void);
 
-/* Record the data folder and persist it.  Called by the paths module with what
- * discovery found, so an unconfigured first run still ends up with the key
- * filled in, and by the settings UI when the player chooses one.  Returns
+/* Record the data folder, or disc image, and persist it.  Called by the paths
+ * module with what discovery found, so an unconfigured first run still ends up
+ * with the key filled in, and with what the player chose on the game-files
+ * screen, and by the settings UI when the player chooses one.  Returns
  * non-zero when the value is stored and on disk -- an unchanged value counts,
  * a refused write does not, which is what lets the UI say which happened. */
 int MioPan_ConfigSetDataFolder(const char *folder);

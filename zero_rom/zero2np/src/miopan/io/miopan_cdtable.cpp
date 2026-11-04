@@ -92,6 +92,51 @@ int HeadersInPlace(MioPan_File *img, const CD_DAT_TBL *rows, const std::vector<i
     return found;
 }
 
+/* 1 the IMG_BD.BIN at `host` is the EU retail release's, 0 the prototype's, -1
+ * neither table fits it.  `why` says how it was told, for the log. */
+int ArchiveRelease(const char *host, const CD_DAT_TBL *proto, const FNAME_DAT *names, int count,
+                   std::string &why)
+{
+    MioPan_File *img = MioPan_FileOpen(host, "rb");
+    if (img == nullptr)
+    {
+        why = "IMG_BD.BIN could not be opened";
+        return -1;
+    }
+    /* Headers spread across the whole archive, not packed and present in both
+     * releases. */
+    std::vector<int> hxd;
+    for (int no = 0; no < count; no++)
+    {
+        if (proto[no].exist_flg != 0 && proto[no].cmp_flg == 0 && names[no].name != nullptr &&
+            EndsWith(names[no].name, ".hxd"))
+        {
+            hxd.push_back(no);
+        }
+    }
+    std::vector<int> files;
+    for (int k = 0; k < kHeaderChecks && !hxd.empty(); k++)
+    {
+        files.push_back(hxd[(size_t)k * hxd.size() / kHeaderChecks]);
+    }
+    const int retail = HeadersInPlace(img, kEuRetail, files);
+    const int prototype = HeadersInPlace(img, proto, files);
+    MioPan_FileCloseHandle(img);
+
+    why = "IMG_BD.BIN has " + std::to_string(retail) + " of " +
+          std::to_string(files.size()) + " sound headers where the retail table puts "
+          "them, " + std::to_string(prototype) + " where the prototype's does";
+    if (retail == (int)files.size() && prototype < retail)
+    {
+        return 1;
+    }
+    if (prototype == (int)files.size() && retail < prototype)
+    {
+        return 0;
+    }
+    return -1;
+}
+
 /* 1 the files are the EU retail release's, 0 the prototype's, -1 neither
  * table fits them.  `why` says how it was told, for the log. */
 int IsRetail(const CD_DAT_TBL *proto, const FNAME_DAT *names, char **paths, int count,
@@ -100,44 +145,7 @@ int IsRetail(const CD_DAT_TBL *proto, const FNAME_DAT *names, char **paths, int 
     char host[1024];
     if (MioPan_PathResolveData("\\IMG_BD.BIN;1", host, sizeof(host)) != 0)
     {
-        MioPan_File *img = MioPan_FileOpen(host, "rb");
-        if (img == nullptr)
-        {
-            why = "IMG_BD.BIN could not be opened";
-            return -1;
-        }
-        /* Headers spread across the whole archive, not packed and present in
-         * both releases. */
-        std::vector<int> hxd;
-        for (int no = 0; no < count; no++)
-        {
-            if (proto[no].exist_flg != 0 && proto[no].cmp_flg == 0 && names[no].name != nullptr &&
-                EndsWith(names[no].name, ".hxd"))
-            {
-                hxd.push_back(no);
-            }
-        }
-        std::vector<int> files;
-        for (int k = 0; k < kHeaderChecks && !hxd.empty(); k++)
-        {
-            files.push_back(hxd[(size_t)k * hxd.size() / kHeaderChecks]);
-        }
-        const int retail = HeadersInPlace(img, kEuRetail, files);
-        const int prototype = HeadersInPlace(img, proto, files);
-        MioPan_FileCloseHandle(img);
-
-        why = "IMG_BD.BIN has " + std::to_string(retail) + " of " +
-              std::to_string(files.size()) + " sound headers where the retail table puts "
-              "them, " + std::to_string(prototype) + " where the prototype's does";
-        if (retail == (int)files.size() && prototype < retail)
-        {
-            return 1;
-        }
-        if (prototype == (int)files.size() && retail < prototype)
-        {
-            return 0;
-        }
-        return -1;
+        return ArchiveRelease(host, proto, names, count, why);
     }
 
     const std::string msg = std::string("host0:") + paths[(unsigned char)names[MSG_OBJ].path_no] +
@@ -276,6 +284,16 @@ extern "C" void MioPan_CdTableSelect(void *tbl, const void *names_, char **paths
     const FNAME_DAT *names = static_cast<const FNAME_DAT *>(names_);
     Choose(rows, names, paths, rom_file_num);
     Index(rows, names, paths, std::min(rom_file_num, (int)MIOPAN_ROM_FILE_NUM));
+}
+
+extern "C" int MioPan_CdTableIdentify(const char *host_path, const void *tbl, const void *names,
+                                      int rom_file_num)
+{
+    std::string why;
+    const int release = ArchiveRelease(host_path, static_cast<const CD_DAT_TBL *>(tbl),
+                                       static_cast<const FNAME_DAT *>(names), rom_file_num, why);
+    SDL_Log("[port] CD table: checking %s: %s", host_path, why.c_str());
+    return release;
 }
 
 extern "C" const char *MioPan_CdTableRelease(void)

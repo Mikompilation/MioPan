@@ -1052,6 +1052,11 @@ void MioPan_InputRefreshDevices(void)
     s_devices_dirty = 1;
 }
 
+int MioPan_InputOpenGamepad(void)
+{
+    return SelectGamepad();
+}
+
 int MioPan_InputButtonHeld(int index)
 {
     int held;

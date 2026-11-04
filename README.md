@@ -88,12 +88,18 @@ docker run --rm -v "$PWD":/src -w /src -u "$(id -u):$(id -g)" \
 `resources/shaders` instead of building SDL_shadercross inside the container.
 
 # Game files
-MioPan does not include any game data. You must provide `IMG_BD.BIN` from your own
-copy of the game. Data from versions other than the one listed above is untested.
+MioPan does not include any game data. You must provide your own copy of the
+game: a disc image (`.iso`), or `IMG_BD.BIN` from the disc. It **must** be the
+European release, Project Zero II: Crimson Butterfly (`SLES-52384`). Other
+releases keep their files elsewhere on the disc, so MioPan cannot read them.
 
-Place `IMG_BD.BIN` next to the `MioPan` executable, in a `data` folder beside it,
-or in any parent folder. To use another location, set the `MIOPAN_DATA_DIR`
-environment variable or `data_folder` under `[paths]` in `miopan.ini`.
+If MioPan cannot find the game when it starts, it asks for it. Choose your `.iso`
+or `IMG_BD.BIN`, and it is saved as `data_folder` under `[paths]` in `miopan.ini`.
+A disc image is played directly; nothing is unpacked.
+
+You can also place `IMG_BD.BIN` next to the `MioPan` executable, in a `data` folder
+beside it, or in any parent folder, set `data_folder` yourself, or set the
+`MIOPAN_DATA_DIR` environment variable to a folder for one run.
 
 Settings, logs and memory card saves are stored in the user's application data
 folder (`%APPDATA%\Mikompilation\MioPan` on Windows).

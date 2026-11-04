@@ -32,6 +32,7 @@
 #include "../graphics/graph3d/gra3d.h"   // gra3dInit
 #include "../ingame/loading/loading.h"    // LoadingInit
 #include "../miopan/io/miopan_log.h"     // MioPan_LogInit
+#include "../miopan/miopan_ui/miopan_rml_gamefiles.h" // MioPan_RmlGameFilesTick
 #include "../miopan/rendering/miopan_renderer.h"
 #include "../outgame/logo.h"        // InitLogo
 #include "../outgame/option.h"      // InitOptionSetup
@@ -115,6 +116,13 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
     (void)appstate;
+
+    /* Nothing of the game has run yet, and nothing does until it has its files:
+     * a player without them is asked first. */
+    if (MioPan_RmlGameFilesTick() != 0)
+    {
+        return SDL_APP_CONTINUE;
+    }
 
     /* The background pause skips ticks rather than holding inside one. */
     if (MioPan_RendererHoldInBackground() == 0)

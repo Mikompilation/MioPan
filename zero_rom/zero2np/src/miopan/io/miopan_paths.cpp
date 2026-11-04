@@ -27,6 +27,9 @@
 
 #include "miopan_paths.h"
 
+#include "miopan_cdtable.h"
+#include "miopan_file.h"
+#include "miopan_iso9660.h"
 #include "miopan_undub.h"
 #include "../miopan_config.h"
 
@@ -76,6 +79,26 @@ bool DirExists(const std::string &path)
 {
     std::error_code ec;
     return std::filesystem::is_directory(path, ec);
+}
+
+/* Through SDL, because this is asked of paths the player chose, and it reads
+ * them as UTF-8 where a narrow std::filesystem path would not. */
+bool IsFile(const std::string &path)
+{
+    SDL_PathInfo info;
+    return SDL_GetPathInfo(path.c_str(), &info) && info.type == SDL_PATHTYPE_FILE;
+}
+
+std::string ForwardSlashes(std::string path)
+{
+    for (char &ch : path)
+    {
+        if (ch == '\\')
+        {
+            ch = '/';
+        }
+    }
+    return path;
 }
 
 /*
@@ -362,6 +385,55 @@ bool LooksLikeDataRoot(const std::string &dir)
            DirExists(root + "bin2/data");
 }
 
+/*
+ * The name IMG_BD.BIN goes by while it is read out of a disc image.  No host
+ * file has it, and it says IMG_BD.BIN because sceCdSearchFile() looks for that.
+ * Everything that reads the archive -- the CD layer, the loader, the movie
+ * stream, the imports -- gets it from MioPan_PathResolveData() and opens it
+ * through miopan_file, where it is a region of the image.
+ */
+constexpr const char *kDiscArchive = "disc:/IMG_BD.BIN";
+
+/* Set with the root, under the same guard, and read after it. */
+bool g_playing_from_disc = false;
+
+/* Where IMG_BD.BIN lies in the disc image at `path`: an image that passes this
+ * can be played from. */
+int FindArchiveInImage(const std::string &path, MioPanIso9660::Entry &archive)
+{
+    MioPanIso9660::Image image;
+    switch (image.Open(path))
+    {
+    case MioPanIso9660::OpenResult::Ok:
+        break;
+    case MioPanIso9660::OpenResult::Unreadable:
+        return MIOPAN_GAMEFILE_UNREADABLE;
+    case MioPanIso9660::OpenResult::NotAnImage:
+        return MIOPAN_GAMEFILE_NOT_AN_IMAGE;
+    }
+    if (!image.Find("IMG_BD.BIN", archive) || archive.directory)
+    {
+        return MIOPAN_GAMEFILE_NOT_THE_GAME;
+    }
+    if (archive.offset > image.Size() || archive.size > image.Size() - archive.offset)
+    {
+        return MIOPAN_GAMEFILE_CUT_SHORT;
+    }
+    return MIOPAN_GAMEFILE_OK;
+}
+
+/* A file is a disc image or nothing here: IMG_BD.BIN itself is named by the
+ * folder it is in. */
+bool HoldsGameFiles(const std::string &where)
+{
+    if (IsFile(where))
+    {
+        MioPanIso9660::Entry archive;
+        return FindArchiveInImage(where, archive) == MIOPAN_GAMEFILE_OK;
+    }
+    return LooksLikeDataRoot(where);
+}
+
 std::string DiscoverDataDir()
 {
     std::vector<std::string> candidates;
@@ -423,7 +495,30 @@ std::string ComputeDataDir()
         return dir;
     }
 
-    const char       *configured = miopan_config.paths.data_folder;
+    const char *configured = miopan_config.paths.data_folder;
+
+    /*
+     * The setting can name a disc image.  The root is then the folder it is in,
+     * which is only what the settings UI shows: every name but the archive's
+     * misses, as it does in a data folder holding IMG_BD.BIN and nothing else.
+     */
+    if (configured[0] != '\0' && IsFile(configured))
+    {
+        const std::string image = ForwardSlashes(configured);
+        MioPanIso9660::Entry archive;
+        if (FindArchiveInImage(image, archive) == MIOPAN_GAMEFILE_OK)
+        {
+            MioPan_FileMapRegion(kDiscArchive, image.c_str(), archive.offset,
+                                 archive.size);
+            g_playing_from_disc = true;
+            dir = WithTrailingSlash(ParentOf(image));
+            g_data_source = "disc image";
+            SDL_Log("MioPan paths: data   = %s  (disc image)", image.c_str());
+            MioPan_ConfigSetDataFolder(image.c_str());
+            return dir;
+        }
+    }
+
     const std::string wanted =
         (configured[0] != '\0') ? WithTrailingSlash(configured) : std::string();
 
@@ -595,7 +690,67 @@ int MioPan_PathLooksLikeDataDir(const char *dir)
     {
         return 0;
     }
-    return LooksLikeDataRoot(dir) ? 1 : 0;
+    return HoldsGameFiles(dir) ? 1 : 0;
+}
+
+int MioPan_PathHasGameFiles(void)
+{
+    MioPan_ConfigLoad();
+
+    const char *env = std::getenv("MIOPAN_DATA_DIR");
+    if (env != nullptr && env[0] != '\0')
+    {
+        return 1;
+    }
+
+    const char *configured = miopan_config.paths.data_folder;
+    if (configured[0] != '\0' && HoldsGameFiles(configured))
+    {
+        return 1;
+    }
+    return DiscoverDataDir().empty() ? 0 : 1;
+}
+
+int MioPan_PathUseGameFile(const char *path)
+{
+    if (path == nullptr || !IsFile(path))
+    {
+        return MIOPAN_GAMEFILE_UNREADABLE;
+    }
+
+    const std::string file = ForwardSlashes(path);
+    const std::string name = file.substr(file.find_last_of('/') + 1);
+
+    std::string archive;
+    std::string setting;
+    if (SDL_strcasecmp(name.c_str(), "IMG_BD.BIN") == 0)
+    {
+        setting = WithTrailingSlash(ParentOf(file));
+        archive = setting + "IMG_BD.BIN";
+    }
+    else
+    {
+        MioPanIso9660::Entry entry;
+        const int found = FindArchiveInImage(file, entry);
+        if (found != MIOPAN_GAMEFILE_OK)
+        {
+            return found;
+        }
+        MioPan_FileMapRegion(kDiscArchive, file.c_str(), entry.offset, entry.size);
+        setting = file;
+        archive = kDiscArchive;
+    }
+
+    if (MioPan_RomArchiveRelease(archive.c_str()) < 0)
+    {
+        return MIOPAN_GAMEFILE_OTHER_RELEASE;
+    }
+
+    /* A write that fails is not the player's problem to solve now: the choice
+     * holds for this run, and the config has logged why it was not kept. */
+    MioPan_ConfigSetDataFolder(setting.c_str());
+    SDL_Log("MioPan paths: the player chose %s", setting.c_str());
+    return MIOPAN_GAMEFILE_OK;
 }
 
 int MioPan_PathResolveData(const char *ps2_name, char *out, size_t out_size)
@@ -641,6 +796,21 @@ int MioPan_PathResolveData(const char *ps2_name, char *out, size_t out_size)
         {
             return Emit(undub, out, out_size);
         }
+    }
+
+    /* Every ROM file is inside the archive, by sector: there is no tree to look
+     * through, and a bin/ that happens to sit beside the image is not one. */
+    if (g_playing_from_disc)
+    {
+        if (relative == "IMG_BD.BIN")
+        {
+            return Emit(kDiscArchive, out, out_size);
+        }
+        if (out != nullptr && out_size != 0)
+        {
+            out[0] = '\0';
+        }
+        return 0;
     }
 
     /*

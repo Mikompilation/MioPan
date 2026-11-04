@@ -1,0 +1,45 @@
+<rml>
+<head>
+    <title>Game Files</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="gamefiles.rcss"/>
+</head>
+<body id="gamefiles">
+    <div id="ground"></div>
+    <div id="bloom"></div>
+    <div id="ghost"></div>
+    <div id="film"></div>
+    <div id="frame">
+        <img id="emblem" src="images/butterfly.png"/>
+        <h1 class="title">Game Files Not Found</h1>
+        <div class="rule"></div>
+        <p id="lead">MioPan does not include the game. Choose your own copy of Fatal Frame II: Crimson Butterfly and MioPan will remember where it is.</p>
+        <div id="release">
+            <p>It must be the European release, Project Zero II (SLES-52384).</p>
+            <p>Other releases will not work.</p>
+        </div>
+        <div id="kinds">
+            <div class="kind">
+                <p class="kind-name">Disc image</p>
+                <p class="kind-file">.iso</p>
+                <p class="kind-note">A copy of your game disc. MioPan plays straight from it.</p>
+            </div>
+            <div class="kind">
+                <p class="kind-name">File from the disc</p>
+                <p class="kind-file">IMG_BD.BIN</p>
+                <p class="kind-note">The game's data, copied from your disc to any folder.</p>
+            </div>
+        </div>
+        <div id="actions">
+            <div id="choose" class="action selected">Choose Game File</div>
+            <div id="quit" class="action">Exit Game</div>
+        </div>
+        <div id="status">
+            <p id="status-text"></p>
+            <p id="status-file"></p>
+        </div>
+    </div>
+    <div id="prompts" class="prompts"></div>
+    <div id="veil"></div>
+</body>
+</rml>

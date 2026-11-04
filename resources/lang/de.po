@@ -24,6 +24,9 @@ msgstr "2 zusätzliche"
 msgid "3 extra"
 msgstr "3 zusätzliche"
 
+msgid "A copy of your game disc. MioPan plays straight from it."
+msgstr "Eine Kopie deiner Spiel-Disc. MioPan spielt direkt davon."
+
 msgid "A window on the desktop, or the whole screen. Alt+Enter switches too."
 msgstr "Fenster oder Vollbild. Auch Alt+Eingabe schaltet um."
 
@@ -35,6 +38,9 @@ msgstr "Mit dem Controller zusätzlich zum Stick die erhobene Kamera Obscura aus
 
 msgid "Album"
 msgstr "Album"
+
+msgid "All files"
+msgstr "Alle Dateien"
 
 msgid "All four back to 1.00, which skips the pass."
 msgstr "Alle vier Werte auf 1,00 setzen und die Korrektur umgehen."
@@ -120,6 +126,9 @@ msgstr "Reiter wechseln"
 msgid "Chapter Select"
 msgstr "Kapitelauswahl"
 
+msgid "Choose Game File"
+msgstr "SPIELDATEI WÄHLEN"
+
 msgid "Choosing..."
 msgstr "Auswahl..."
 
@@ -180,6 +189,9 @@ msgstr "Dieses Foto löschen?"
 msgid "Difficulty"
 msgstr "SCHWIERIGKEIT"
 
+msgid "Disc image"
+msgstr "Disc-Image"
+
 msgid "Discards any texel fainter than this. A blunter tool; 0 is off."
 msgstr "Verwirft Texel unter dieser Deckkraft. Grober Eingriff; 0 deaktiviert ihn."
 
@@ -225,6 +237,9 @@ msgstr "Zusätzliche Bilder"
 msgid "File"
 msgstr "Dokument"
 
+msgid "File from the disc"
+msgstr "Datei von der Disc"
+
 msgid "Film grain"
 msgstr "Filmkörnung"
 
@@ -239,6 +254,9 @@ msgstr "Vom System übernehmen"
 
 msgid "Forget the learned drift; set the controller down and keep it still to learn it again."
 msgstr "Gelernte Drift verwerfen. Den Controller zum Neulernen ruhig ablegen."
+
+msgid "Found it. Starting the game..."
+msgstr "Gefunden. Das Spiel wird gestartet..."
 
 msgid "Frame Rate"
 msgstr "Bildrate"
@@ -255,8 +273,14 @@ msgstr "Galerie"
 msgid "Game"
 msgstr "Spiel"
 
+msgid "Game Files Not Found"
+msgstr "Spieldateien nicht gefunden"
+
 msgid "Game Start"
 msgstr "SPIEL STARTEN"
+
+msgid "Game files"
+msgstr "Spieldateien"
 
 msgid "Game setting ("
 msgstr "Spieleinstellung ("
@@ -366,6 +390,9 @@ msgstr "Maus-Y umkehren"
 msgid "Inverted"
 msgstr "Umgekehrt"
 
+msgid "It must be the European release, Project Zero II (SLES-52384)."
+msgstr "Es muss die europäische Version sein (SLES-52384)."
+
 msgid "Item"
 msgstr "Gegenstand"
 
@@ -452,6 +479,9 @@ msgstr "Menü"
 
 msgid "Mio"
 msgstr "Mio"
+
+msgid "MioPan does not include the game. Choose your own copy of Fatal Frame II: Crimson Butterfly and MioPan will remember where it is."
+msgstr "MioPan enthält das Spiel nicht. Wähle deine eigene Kopie von Project Zero II: Crimson Butterfly aus, und MioPan merkt sich, wo sie liegt."
 
 msgid "Mission"
 msgstr "Mission"
@@ -545,6 +575,9 @@ msgstr "Optionen"
 
 msgid "Original (PS2)"
 msgstr "Original (PS2)"
+
+msgid "Other releases will not work."
+msgstr "Andere Versionen funktionieren nicht."
 
 msgid "Overrides the game's Movement for the d-pad alone. In the game's camera-relative mode the d-pad does not walk."
 msgstr "Überschreibt die Bewegung nur für das Steuerkreuz. Im kamerabezogenen Spielmodus bewegt es die Figur nicht."
@@ -822,6 +855,21 @@ msgstr "Panzersteuerung"
 msgid "Texture filtering"
 msgstr "Texturfilterung"
 
+msgid "That disc image does not hold Fatal Frame II. Choose an image of your own copy of the game."
+msgstr "Dieses Disc-Image enthält nicht Project Zero II. Wähle ein Image deiner eigenen Kopie des Spiels."
+
+msgid "That disc image is cut short: the game's files run past the end of it. Copy or dump the disc again."
+msgstr "Dieses Disc-Image ist unvollständig: Die Spieldateien reichen über sein Ende hinaus. Kopiere die Disc erneut oder lies sie neu aus."
+
+msgid "That file could not be read. Check that it is still there and not in use, then choose it again."
+msgstr "Diese Datei konnte nicht gelesen werden. Prüfe, ob sie noch vorhanden und nicht in Verwendung ist, und wähle sie dann erneut aus."
+
+msgid "That file is not one MioPan can read. Choose an .iso (a .chd or .cso has to be turned back into an .iso first) or IMG_BD.BIN."
+msgstr "MioPan kann diese Datei nicht lesen. Wähle eine .iso (eine .chd oder .cso muss zuerst wieder in eine .iso umgewandelt werden) oder IMG_BD.BIN."
+
+msgid "That is not a copy of Fatal Frame II that MioPan can read. It needs the European release, SLES-52384."
+msgstr "MioPan kann diese Kopie von Project Zero II nicht lesen. Benötigt wird die europäische Version, SLES-52384."
+
 msgid "The brightest the picture may go: what the display reports, or a level of your own."
 msgstr "Maximale Bildhelligkeit: Bildschirmangabe oder eigener Wert."
 
@@ -831,8 +879,17 @@ msgstr "Der Mauszeiger wird bei erhobener Kamera Obscura zum Zielen eingefangen.
 msgid "The display reports SDR white at %.0f nits and a %.0f nit peak."
 msgstr "Der Bildschirm meldet SDR-Weiß mit %.0f Nits und maximal %.0f Nits."
 
+msgid "The file dialog could not be opened. Add the path as data_folder under [paths] in this file, then start MioPan again:"
+msgstr "Der Dateidialog konnte nicht geöffnet werden. Trage den Pfad als data_folder unter [paths] in diese Datei ein und starte MioPan neu:"
+
+msgid "The game is no longer where the settings say it was:"
+msgstr "Das Spiel liegt nicht mehr dort, wo die Einstellungen es angeben:"
+
 msgid "The game's brightness filter. Raise it until the darkest corners of a room just show."
 msgstr "Helligkeitsfilter des Spiels. Erhöhen, bis die dunkelsten Ecken erkennbar sind."
+
+msgid "The game's data, copied from your disc to any folder."
+msgstr "Die Spieldaten, von der Disc in einen beliebigen Ordner kopiert."
 
 msgid "The game's own level for music, voices and effects."
 msgstr "Lautstärke des Spiels für Musik, Stimmen und Effekte."

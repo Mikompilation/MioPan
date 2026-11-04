@@ -1,0 +1,277 @@
+/*
+ * The screen MioPan opens on when it cannot find the game.  Nothing of the
+ * game's is running or even readable here, so there is no room behind it and
+ * no art of the game's to lean on: the butterfly glows out of the dark on its
+ * own, over the same panels, gold and film grain as every other menu.
+ */
+
+#ground
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #060404;
+}
+
+/* An ember behind the emblem, drifting slowly brighter and dimmer. */
+#bloom
+{
+    position: absolute;
+    left: 50%;
+    top: -110dp;
+    width: 620dp;
+    height: 460dp;
+    margin-left: -310dp;
+    decorator: image(images/bloom.png);
+    animation: 7s cubic-in-out infinite alternate ember;
+}
+
+@keyframes ember
+{
+    from { opacity: 0.55; }
+    to   { opacity: 1; }
+}
+
+/* The same butterfly, huge and barely there, across the whole picture. */
+#ghost
+{
+    position: absolute;
+    left: 50%;
+    top: 34dp;
+    width: 520dp;
+    height: 390dp;
+    margin-left: -260dp;
+    decorator: image(images/butterfly.png);
+    opacity: 0.05;
+}
+
+#film
+{
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    decorator: image(images/vignette.png), image(images/grain.png repeat);
+}
+
+#frame
+{
+    position: absolute;
+    left: 50%;
+    top: 18dp;
+    width: 476dp;
+    margin-left: -238dp;
+    text-align: center;
+    animation: 0.5s quadratic-out rise-in;
+}
+
+#emblem
+{
+    display: block;
+    width: 76dp;
+    height: 57dp;
+    margin: 0 auto 2dp auto;
+    animation: 2.8s cubic-in-out infinite alternate flutter;
+}
+
+@keyframes flutter
+{
+    from { opacity: 0.72; transform: scale(0.97); }
+    to   { opacity: 1;    transform: scale(1.02); }
+}
+
+#frame .rule
+{
+    margin-top: 6dp;
+}
+
+#lead
+{
+    margin: 10dp 16dp 0 16dp;
+    font-size: 14.5dp;
+    line-height: 19dp;
+    color: #ded3c4;
+}
+
+/* The one thing to get right before choosing, so not in the small print. */
+#release
+{
+    margin: 6dp 16dp 0 16dp;
+    font-size: 13.5dp;
+    line-height: 17dp;
+    color: #e2bc62;
+}
+
+/* ---- what to look for -------------------------------------------------- */
+
+#kinds
+{
+    display: flex;
+    justify-content: space-between;
+    margin-top: 14dp;
+}
+
+.kind
+{
+    box-sizing: border-box;
+    width: 230dp;
+    padding: 8dp 12dp 9dp 12dp;
+    border: 1dp #6b5528;
+    background-color: #0a0807d8;
+    text-align: left;
+}
+
+.kind-name
+{
+    font-size: 10dp;
+    font-weight: bold;
+    letter-spacing: 2dp;
+    text-transform: uppercase;
+    color: #c4283c;
+}
+
+.kind-file
+{
+    margin-top: 2dp;
+    font-size: 15dp;
+    color: #f4ebde;
+}
+
+.kind-note
+{
+    margin-top: 3dp;
+    font-size: 11.5dp;
+    line-height: 14dp;
+    font-style: italic;
+    color: #a89a8c;
+}
+
+/* ---- the two buttons --------------------------------------------------- */
+
+#actions
+{
+    margin-top: 16dp;
+    transition: opacity 0.25s linear-in-out;
+}
+
+.action
+{
+    display: inline-block;
+    box-sizing: border-box;
+    width: 220dp;
+    height: 28dp;
+    line-height: 26dp;
+    border: 1dp #6b5528;
+    background-color: #1b1213;
+    font-size: 14dp;
+    letter-spacing: 1.5dp;
+    text-transform: uppercase;
+    color: #c9bcaa;
+    cursor: pointer;
+    transition: color border-color 0.12s linear-in-out;
+}
+
+#quit
+{
+    width: 156dp;
+    margin-left: 12dp;
+}
+
+.action.selected
+{
+    border-color: #e2bc62;
+    decorator: image(images/cursor_bar.png);
+    color: #fff6e8;
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+/* The system's file dialog is open: nothing here answers until it closes. */
+#frame.choosing .action
+{
+    color: #6d6158;
+    cursor: default;
+}
+
+#frame.choosing .action.selected
+{
+    border-color: #6b5528;
+    decorator: none;
+    font-effect: none;
+}
+
+/* ---- what came of it --------------------------------------------------- */
+
+/* A fixed height, so a message appearing does not move anything above it. */
+#status
+{
+    height: 62dp;
+    margin-top: 12dp;
+    padding: 0 14dp;
+}
+
+#status-text
+{
+    font-size: 13dp;
+    line-height: 16dp;
+    font-style: italic;
+    color: #a89a8c;
+}
+
+#status-file
+{
+    margin-top: 2dp;
+    font-size: 11dp;
+    line-height: 13dp;
+    color: #8a7d72;
+    word-break: break-all;
+}
+
+#status.problem #status-text
+{
+    color: #d9a441;
+}
+
+#status.found #status-text
+{
+    font-style: normal;
+    color: #e2bc62;
+    font-effect: glow(0dp 3dp 0dp 0dp #e8902e66);
+}
+
+/* Found: the choice is made and the buttons step back. */
+#frame.found #actions
+{
+    opacity: 0.25;
+}
+
+#prompts
+{
+    position: absolute;
+    right: 20dp;
+    bottom: 12dp;
+}
+
+/* Then the whole screen goes to the black the game starts from.  Over the top
+ * of it rather than fading what is there: RmlUi inherits opacity instead of
+ * multiplying it, so everything here with an opacity of its own, the animated
+ * ember and emblem among them, would ignore a parent's fade.  Not displayed
+ * until then, or it would be what the mouse is over. */
+#veil
+{
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #000000;
+}
+
+#veil.closing
+{
+    display: block;
+    animation: 0.4s linear-in-out fade-in;
+}

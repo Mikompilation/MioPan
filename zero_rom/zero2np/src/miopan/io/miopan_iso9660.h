@@ -2,7 +2,8 @@
 #define MIOPAN_ISO9660_H
 
 /*
- * Files out of a disc image, for the imports (miopan_undub.cpp).
+ * Files out of a disc image, for the imports (miopan_undub.cpp) and for playing
+ * from one (miopan_paths.cpp).
  *
  * Just enough ISO 9660 for a PS2 DVD as PCSX2 and the dumping tools write it:
  * 2048-byte sectors, the primary volume descriptor's directory tree, and files

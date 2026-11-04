@@ -40,6 +40,15 @@ extern "C" {
  * them.  Called once at boot, before anything reads the table. */
 void MioPan_CdTableSelect(void *tbl, const void *names, char **paths, int rom_file_num);
 
+/* Which release the IMG_BD.BIN at `host_path` is, before it is the data folder's:
+ * 1 EU retail, 0 the prototype, -1 neither table fits it or it could not be read.
+ * `tbl` has to be the prototype's rows still, so this comes before
+ * MioPan_CdTableSelect().  MioPan_RomArchiveRelease(), in system.c with the
+ * tables, is this with them filled in. */
+int MioPan_CdTableIdentify(const char *host_path, const void *tbl, const void *names,
+                           int rom_file_num);
+int MioPan_RomArchiveRelease(const char *host_path);
+
 /* The release the table is for, once selected: "EU retail" or "prototype". */
 const char *MioPan_CdTableRelease(void);
 
