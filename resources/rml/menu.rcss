@@ -224,3 +224,32 @@
     line-height: 1.35;
     color: #f2ebe0;
 }
+
+/* Reader text wraps within the same scaled inset as its frame art. */
+.document-text { position: absolute; }
+.document-text .file-body,
+.document-text .reader-body
+{
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    white-space: normal;
+}
+body .document-text .file-body,
+body .document-text .reader-body
+{
+    width: 105.263158%; /* Cancel the 95% glyph transform at the frame's right inset. */
+}
+
+/* Scale the answer text separately so its cursor and hit area keep their size. */
+.menu-dialog-answer { display: inline-block; width: 100%; }
+body .window-text,
+body .menu-dialog-answer
+{
+    font-family: "Pan UI";
+    font-style: normal;
+    transform: scale(0.95, 1.25);
+}
+body .window-text { transform-origin: 0% 50%; }
+body .menu-dialog-answer { transform-origin: 50% 50%; }

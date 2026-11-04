@@ -330,8 +330,7 @@ std::string Rows()
             rml += Art(scale, Pak(), menu_item[first + 1]);
         }
         const char *cls = lit ? "item-name lit" : "item-name";
-        rml += Text(scale, MioPanGameText::Message(kMsgName, page.item[i]), kNameX,
-                    kRowTop + i * kRowPitch, 240, cls);
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgName, page.item[i], kNameX, kRowTop + i * kRowPitch, 240, cls);
         std::string count = page.item[i] == kItemUnlimited ? "\xE2\x80\x93 \xE2\x80\x93"
                                                            : std::to_string(page.have[i]);
         rml += Text(scale, count, kCountX, kRowTop + i * kRowPitch, kCountW,
@@ -384,8 +383,7 @@ std::string Explain()
                   text_x * scale.x, (float)left_cap.y * scale.y, text_w * scale.x,
                   130 * scale.y);
     rml += "<p class=\"item-description\" style=\"" + std::string(style) + "\">" +
-           MioPanRmlCommon::Escape(MioPanRmlCommon::NameButtonIcons(
-               MioPanGameText::Message(kMsgDescription, page.selected))) +
+           MioPanRmlCommon::GameMessage(kMsgDescription, page.selected) +
            "</p>";
     return rml;
 }
@@ -413,11 +411,12 @@ std::string Window()
         using namespace MioPanRmlMenuArt;
         return MioPanRmlMenuArt::Window(g_item.scale, kNoticeX, kNoticeY, kNoticeW, kNoticeH,
                                         "item-window") +
-               Text(g_item.scale, MioPanGameText::Message(msg_type, msg_id), kNoticeTextX,
-                    kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
+               MioPanRmlMenuArt::GameText(g_item.scale, msg_type, msg_id, kNoticeTextX, kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
     }
     std::string rml = MioPanRmlMenuArt::Window(g_item.scale, kWindowX, kWindowY, kWindowW,
-                                               kWindowH, "item-window");
+                                               kWindowH, "item-window",
+                                               page.mode == MIOPAN_RML_MENU_ITEM_USE_SEL
+                                                   ? "item-confirm" : nullptr);
     rml += Text(g_item.scale,
                 MioPanRmlCommon::NameButtonIcons(MioPanGameText::Message(msg_type, msg_id)),
                 68, 196, 520, "window-text");
@@ -425,10 +424,10 @@ std::string Window()
     {
         rml += "<span id=\"choice-yes\" class=\"window-choice" +
                std::string(g_item.yes ? " selected" : "") + "\" style=\"" +
-               Place(155, 230, 120, 30) + "\">Yes</span>";
+               Place(155, 230, 120, 30) + "\"><span class=\"menu-dialog-answer\">Yes</span></span>";
         rml += "<span id=\"choice-no\" class=\"window-choice" +
                std::string(g_item.yes ? "" : " selected") + "\" style=\"" +
-               Place(362, 230, 120, 30) + "\">No</span>";
+               Place(362, 230, 120, 30) + "\"><span class=\"menu-dialog-answer\">No</span></span>";
     }
     return rml;
 }

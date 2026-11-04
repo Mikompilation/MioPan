@@ -302,8 +302,7 @@ std::string Rows()
         std::string cls = "soul-name";
         cls += page.enhancing[i] != 0 ? " enhancing" : "";
         cls += lit ? " lit" : "";
-        rml += Text(scale, Game(kMsgSoul, page.label[i] * kMsgPerSoul + kMsgName), kNameX,
-                    (float)(kNameY + i * kRowPitch), 232, cls.c_str());
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgSoul, page.label[i] * kMsgPerSoul + kMsgName, kNameX, (float)(kNameY + i * kRowPitch), 232, cls.c_str());
     }
     const SPRT_DAT &left = menu_glist_tex[kCursor[0]];
     const SPRT_DAT &body = menu_glist_tex[kCursor[1]];
@@ -343,9 +342,8 @@ std::string Info()
     }
     std::string rml = Number(scale, std::to_string(page.score), kScoreRight - 100, kInfoY,
                              100, "soul-info");
-    rml += Text(scale, Game(kMsgCommon, kMsgPoints), kPointsX, kInfoY, 60, "soul-info");
-    rml += Text(scale, Game(kMsgSoul, page.selected * kMsgPerSoul + kMsgPlace), kPlaceX,
-                kPlaceY, 250, "soul-info");
+    rml += MioPanRmlMenuArt::GameText(scale, kMsgCommon, kMsgPoints, kPointsX, kInfoY, 60, "soul-info");
+    rml += MioPanRmlMenuArt::GameText(scale, kMsgSoul, page.selected * kMsgPerSoul + kMsgPlace, kPlaceX, kPlaceY, 250, "soul-info");
     return rml;
 }
 
@@ -372,21 +370,7 @@ std::string Photos()
         {
             continue;
         }
-        const std::string text = MioPanRmlCommon::NameButtonIcons(
-            MioPanGameText::MessagePage(kMsgSoul, page.picture_msg[i], 0, true));
-        std::string lines;
-        for (size_t start = 0; start <= text.size();)
-        {
-            const size_t end = text.find('\n', start);
-            lines += MioPanRmlCommon::Escape(text.substr(
-                         start, end == std::string::npos ? std::string::npos : end - start)) +
-                     "<br/>";
-            if (end == std::string::npos)
-            {
-                break;
-            }
-            start = end + 1;
-        }
+        const std::string lines = MioPanRmlCommon::GameMessage(kMsgSoul, page.picture_msg[i], 0, true);
         char style[48];
         std::snprintf(style, sizeof(style), " opacity: %.3f;", opacity);
         rml += "<p class=\"soul-explain\" style=\"" + Place(kExplainX, kExplainY, 280, 130) +
@@ -413,8 +397,7 @@ std::string Window()
     }
     for (int i = 0; i < 3; i++)
     {
-        rml += Text(scale, Game(kMsgCongrats, kCongratsLines[i]), 45,
-                    (float)(kCongratsLineY[i] - 3), 550, "window-text centred");
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgCongrats, kCongratsLines[i], 45, (float)(kCongratsLineY[i] - 3), 550, "window-text centred");
     }
     return rml;
 }

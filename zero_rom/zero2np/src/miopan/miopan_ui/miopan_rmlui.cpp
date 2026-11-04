@@ -1,3 +1,4 @@
+#include "miopan_rml_font_effect.h"
 #include "miopan_rml_language.h"
 #include "miopan_rmlui.h"
 #include "miopan_rml_options.h"
@@ -52,6 +53,7 @@ constexpr float kDesignHeight = 448.0f;
 
 constexpr const char *kFontFiles[] = {
     "resources/fonts/CrimsonText-Regular.ttf",
+    "resources/fonts/PanUi-Regular.ttf",
     "resources/fonts/CrimsonText-SemiBold.ttf",
     "resources/fonts/CrimsonText-Bold.ttf",
     "resources/fonts/CrimsonText-Italic.ttf",
@@ -1216,6 +1218,8 @@ bool Init(SDL_Window *window, SDL_GPUDevice *device, SDL_GPUTextureFormat format
         Shutdown();
         return false;
     }
+
+    MioPanRmlFontEffect::Register();
 
     for (const char *font : kFontFiles)
     {

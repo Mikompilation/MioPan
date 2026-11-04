@@ -61,8 +61,12 @@ std::string Message(int type, int id)
     return MessagePage(type, id, 0, false);
 }
 
-std::string MessagePage(int type, int id, int page, bool keep_breaks)
+std::string MessagePage(int type, int id, int page, bool keep_breaks,
+                        std::vector<ColourChange> *colours)
 {
+    if (colours != nullptr) colours->clear();
+    unsigned char colour = 1;
+    int last_colour = -1;
     if ((unsigned)type > 0x52 || id < 0 || id >= GetMsgIDNumMax(type))
     {
         return {};
@@ -97,6 +101,7 @@ std::string MessagePage(int type, int id, int page, bool keep_breaks)
             s += 2;
             break;
         case 0xfd:          /* MesColExe: a colour */
+            if (s[1] < 45) colour = s[1];
             s += 2;
             continue;
         case 0xf7:          /* MesSetExe: a pen position */
@@ -137,6 +142,11 @@ std::string MessagePage(int type, int id, int page, bool keep_breaks)
         if (at_page != page)
         {
             continue;
+        }
+        if (colours != nullptr && text[0] != '\0' && colour != last_colour)
+        {
+            colours->push_back({out.size(), colour});
+            last_colour = colour;
         }
         if (text[0] == '\n')
         {

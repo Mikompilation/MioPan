@@ -58,3 +58,9 @@
     color: #ddd6c8;
     font-effect: outline(1dp #0c0806);
 }
+
+/* Keep the confirmation readable while retaining a trace of the menu below. */
+.menu-window.item-confirm
+{
+    decorator: vertical-gradient(#1a120ae6 #050302e6);
+}

@@ -257,7 +257,7 @@ std::string Data()
     }
     if (page.room >= 0)
     {
-        rml += Text(scale, Game(kMsgRoom, page.room), 78, 349, 280, "photo-ink");
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgRoom, page.room, 78, 349, 280, "photo-ink");
     }
     const std::string slash = MioPanGameText::Message(kMsgCommon, 1);
     const std::string colon = MioPanGameText::Message(kMsgCommon, 0);
@@ -267,13 +267,12 @@ std::string Data()
                 Two(page.hour) + colon + Two(page.minute) + colon + Two(page.second), 204,
                 374, 120, "photo-ink");
     rml += Number(scale, std::to_string(page.score), 182, 398, 88, "photo-ink");
-    rml += Text(scale, MioPanGameText::Message(kMsgCommon, 2), 274, 398, 60, "photo-ink");
+    rml += MioPanRmlMenuArt::GameText(scale, kMsgCommon, 2, 274, 398, 60, "photo-ink");
     const int first_y[4] = {0x162, 0x17a, 0x16e, 0x162};
     float y = (float)first_y[page.subjects > 3 ? 3 : page.subjects] - 4.0f;
     for (int i = 0; i < page.subjects && i < MIOPAN_RML_MENU_PHOTO_SUBJECTS; i++, y += 24.0f)
     {
-        rml += Text(scale, Game(page.subject_type[i], page.subject_id[i]), 0x16f, y, 240,
-                    "photo-ink");
+        rml += MioPanRmlMenuArt::GameText(scale, page.subject_type[i], page.subject_id[i], 0x16f, y, 240, "photo-ink");
     }
     return rml;
 }
@@ -419,7 +418,7 @@ std::string Sort()
 std::string Ask(bool answers)
 {
     std::string rml = MioPanRmlMenuArt::Window(g_photo.scale, 24, 178, 592, 112);
-    rml += Text(g_photo.scale, Game(kMsgAsk, answers ? 0 : 1), 68, 194, 520, "window-text");
+    rml += MioPanRmlMenuArt::GameText(g_photo.scale, kMsgAsk, answers ? 0 : 1, 68, 194, 520, "window-text");
     if (answers)
     {
         rml += "<span id=\"choice-yes\" class=\"window-choice" +
@@ -450,8 +449,7 @@ std::string Album()
     {
         using namespace MioPanRmlMenuArt;
         return Window(g_photo.scale, kNoticeX, kNoticeY, kNoticeW, kNoticeH) +
-               Text(g_photo.scale, Game(kMsgEmpty, kMsgEmptyPhoto), kNoticeTextX,
-                    kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
+               MioPanRmlMenuArt::GameText(g_photo.scale, kMsgEmpty, kMsgEmptyPhoto, kNoticeTextX, kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
     }
     return Cells() + Data() + Large();
 }

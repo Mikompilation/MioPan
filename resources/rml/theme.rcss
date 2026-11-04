@@ -246,3 +246,81 @@ scrollbarvertical sliderarrowinc
     from { opacity: 0; transform: translateY(6dp); }
     to   { opacity: 1; transform: translateY(0dp); }
 }
+
+/* Cached bevel and shadow for UI text. */
+body,
+body .file-title,
+body .file-body,
+body #message.notice,
+body .map-name,
+body .menu-title,
+body .page-label,
+body .plate-num,
+body .menu-prompts,
+body .window-choice,
+body .window-choice.selected,
+body .row-text,
+body .row-text.lit,
+body #press-text,
+body .entry.selected,
+body .soul-name,
+body .soul-info,
+body .item-name,
+body .item-count,
+body .item-name.lit,
+body .item-count.lit,
+body .item-description,
+body .tab.active,
+body #frame.settings .entry.selected,
+body #row-start.selected .start-button,
+body .item.selected,
+body .title,
+body .radio-subtitle span,
+body .page.selected .page-label,
+body .reader-title,
+body .reader-body
+{
+    font-effect: pan-bevel(0.55), glow(1dp 2dp 0dp 0dp #00000055);
+}
+
+/* Match game-text proportions while retaining sprite-derived label sizes. */
+body .file-title,
+body .reader-title,
+body .file-count,
+body .reader-count,
+body .row-text,
+body .item-name,
+body .item-count,
+body .soul-name,
+body .soul-info
+{
+    font-family: "Pan UI";
+    transform: scale(0.95, 1.25);
+    transform-origin: 50% 50%;
+}
+
+/* Compensate multiline pitch so only the letters grow, not paragraph spacing. */
+body .file-body,
+body .reader-body,
+body .item-description,
+body .soul-explain,
+body .caption-text
+{
+    font-family: "Pan UI";
+    transform: scale(0.95, 1.25);
+    transform-origin: 0% 0%;
+}
+body .file-body { line-height: 1.010526; }
+body .reader-body { line-height: 1.056000; }
+body .item-description { line-height: 1.124000; }
+body .soul-explain { line-height: 0.888000; }
+
+body .caption-text { line-height: 1.08; }
+
+body .row-text,
+body .item-name,
+body .soul-name
+{
+    text-align: left;
+    transform-origin: 0% 50%;
+}

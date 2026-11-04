@@ -178,8 +178,7 @@ std::string Stage()
     std::string rml = Text(scale, "Camera", 41, 20, 160, "menu-title");
     rml += MioPanRmlMenuArt::Window(scale, 24, 352, 592, 100);
     rml += "<p class=\"caption-text\" style=\"" + Place(48, 370, 544, 70) + "\">" +
-           MioPanRmlCommon::Escape(MioPanRmlCommon::NameButtonIcons(
-               MioPanGameText::Message(kMsgCamera, g_cam.page.line))) +
+           MioPanRmlCommon::GameMessage(kMsgCamera, g_cam.page.line) +
            "</p>";
     rml += Hits();
     rml += "<div id=\"prompts\" class=\"menu-prompts\" style=\"" + Place(250, 30, 380, 30) +

@@ -2,6 +2,7 @@
 #define MIOPAN_GAME_TEXT_H
 
 #include <string>
+#include <vector>
 
 /*
  * The game's own strings, as UTF-8, for the screens the port draws itself --
@@ -25,7 +26,13 @@ std::string Message(int type, int id);
 /* Page `page` of it, from 0.  With `keep_breaks` the game's own line breaks
  * come out as '\n' rather than spaces, for text laid out line by line to fit
  * its window -- a note, a document. */
-std::string MessagePage(int type, int id, int page, bool keep_breaks);
+struct ColourChange
+{
+    size_t offset;
+    unsigned char label;
+};
+std::string MessagePage(int type, int id, int page, bool keep_breaks,
+                        std::vector<ColourChange> *colours = nullptr);
 }
 
 #endif

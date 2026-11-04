@@ -77,6 +77,9 @@ constexpr float kNoticeTextY = 222.0f;
  * its look -- where the game prints a number or a line. */
 std::string Text(const Scale &scale, const std::string &text, float x, float y,
                  float width, const char *cls);
+/* A game message in the same box, retaining its inline colours. */
+std::string GameText(const Scale &scale, int type, int id, float x, float y,
+                     float width, const char *cls);
 /* Text() right-aligned in its box, as the game's digit runs are. */
 std::string Number(const Scale &scale, const std::string &text, float x, float y,
                    float width, const char *cls);

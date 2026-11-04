@@ -214,8 +214,7 @@ std::string List()
         const bool lit = i == page.cursor;
         const float y = (float)(kRowY + i * kRowPitch);
         rml += MioPanRmlMenuArt::RowFrame(scale, kRowX, y, kRowW, lit);
-        rml += Text(scale, Game(kMsgMemo, MsgId(index, kMsgTitle)), kRowTextCentre - 120,
-                    y, 240, lit ? "row-text centred lit" : "row-text centred");
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgMemo, MsgId(index, kMsgTitle), kRowTextCentre - 120, y, 240, lit ? "row-text centred lit" : "row-text centred");
         if (page.unread[index] != 0)
         {
             for (const int piece : kUnread)
@@ -231,8 +230,7 @@ std::string List()
     rml += MioPanRmlMenuArt::Window(scale, 24, 346, 592, 100);
     if (page.count > 0)
     {
-        rml += Text(scale, Game(kMsgMemo, MsgId(Selected(), kMsgLine)), 48, 366, 544,
-                    "caption-text");
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgMemo, MsgId(Selected(), kMsgLine), 48, 366, 544, "caption-text");
     }
     return rml;
 }
@@ -251,23 +249,9 @@ std::string Read()
         MioPanRmlMenuArt::Window(scale, 36, 57, 572, 373, nullptr, "reader-window");
     rml += Text(scale, dash + "  " + Game(kMsgMemo, MsgId(index, kMsgTitle)) + "  " + dash,
                 36, 78, 572, "reader-title");
-    const std::string body = MioPanRmlCommon::NameButtonIcons(
-        MioPanGameText::MessagePage(kMsgMemo, MsgId(index, kMsgBody), page.page, true));
-    std::string lines;
-    for (size_t start = 0; start <= body.size();)
-    {
-        const size_t end = body.find('\n', start);
-        const std::string line =
-            body.substr(start, end == std::string::npos ? std::string::npos : end - start);
-        lines += MioPanRmlCommon::Escape(line) + "<br/>";
-        if (end == std::string::npos)
-        {
-            break;
-        }
-        start = end + 1;
-    }
-    rml += "<p class=\"reader-body\" style=\"" + Place(80, 120, 480, 240) + "\">" + lines +
-           "</p>";
+    const std::string lines = MioPanRmlCommon::GameMessage(kMsgMemo, MsgId(index, kMsgBody), page.page, true, true);
+    rml += "<div class=\"document-text\" style=\"" + Place(80, 120, 480, 240) +
+           "\"><p class=\"reader-body\">" + lines + "</p></div>";
     char count[64];
     std::snprintf(count, sizeof(count), "%s  %d / %d  %s", dash.c_str(), page.page + 1,
                   page.pages > 0 ? page.pages : 1, dash.c_str());
@@ -283,8 +267,7 @@ std::string Empty()
 {
     using namespace MioPanRmlMenuArt;
     return Window(g_memo.scale, kNoticeX, kNoticeY, kNoticeW, kNoticeH) +
-           Text(g_memo.scale, Game(kMsgEmpty, kMsgEmptyMemo), kNoticeTextX, kNoticeTextY,
-                kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
+           MioPanRmlMenuArt::GameText(g_memo.scale, kMsgEmpty, kMsgEmptyMemo, kNoticeTextX, kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
 }
 
 std::string Mode()

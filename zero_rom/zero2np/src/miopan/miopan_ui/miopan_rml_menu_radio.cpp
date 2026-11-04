@@ -151,22 +151,7 @@ std::string Game(int type, int id)
 /* A message in the game's own lines, for a <p>. */
 std::string Lines(int type, int id)
 {
-    const std::string text = MioPanRmlCommon::NameButtonIcons(
-        MioPanGameText::MessagePage(type, id, 0, true));
-    std::string lines;
-    for (size_t start = 0; start <= text.size();)
-    {
-        const size_t end = text.find('\n', start);
-        lines += MioPanRmlCommon::Escape(
-            text.substr(start, end == std::string::npos ? std::string::npos : end - start));
-        if (end == std::string::npos)
-        {
-            break;
-        }
-        lines += "<br/>";
-        start = end + 1;
-    }
-    return lines;
+    return MioPanRmlCommon::GameMessage(type, id, 0, true);
 }
 
 std::string Added(const SPRT_DAT &sprite, float x, float y, float w, float h)
@@ -259,8 +244,7 @@ std::string Rows()
             rml += ArtIn(scale, Pak(), right, x + left.w + kDimMiddle, left.y + dy, right.w,
                          right.h);
         }
-        rml += Text(scale, Game(kMsgName, page.crystal[i]), kNameX, kNameY + dy, 236,
-                    lit ? "row-text lit" : "row-text");
+        rml += MioPanRmlMenuArt::GameText(scale, kMsgName, page.crystal[i], kNameX, kNameY + dy, 236, lit ? "row-text lit" : "row-text");
     }
     for (int i = 0; i < shown; i++)
     {
@@ -402,8 +386,7 @@ std::string Explain()
     {
         using namespace MioPanRmlMenuArt;
         return Window(scale, kNoticeX, kNoticeY, kNoticeW, kNoticeH) +
-               Text(scale, Game(kMsgEmpty, kMsgEmptyRadio), kNoticeTextX, kNoticeTextY,
-                    kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
+               MioPanRmlMenuArt::GameText(scale, kMsgEmpty, kMsgEmptyRadio, kNoticeTextX, kNoticeTextY, kNoticeW - (kNoticeTextX - kNoticeX), "window-text");
     }
     std::string rml = MioPanRmlMenuArt::Window(scale, kWindowX, kWindowY, kWindowW, kWindowH);
     if (page.count > 0)

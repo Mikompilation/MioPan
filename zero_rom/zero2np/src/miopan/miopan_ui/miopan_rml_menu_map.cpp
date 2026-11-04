@@ -188,11 +188,11 @@ std::string Names()
     std::string rml;
     if (page.area >= 0)
     {
-        rml += Text(g_map.scale, Game(kMsgArea, page.area), kAreaX, kNameY, 178, "map-name");
+        rml += MioPanRmlMenuArt::GameText(g_map.scale, kMsgArea, page.area, kAreaX, kNameY, 178, "map-name");
     }
     if (page.room >= 0)
     {
-        rml += Text(g_map.scale, Game(kMsgRoom, page.room), kRoomX, kNameY, 250, "map-name");
+        rml += MioPanRmlMenuArt::GameText(g_map.scale, kMsgRoom, page.room, kRoomX, kNameY, 250, "map-name");
     }
     return rml;
 }

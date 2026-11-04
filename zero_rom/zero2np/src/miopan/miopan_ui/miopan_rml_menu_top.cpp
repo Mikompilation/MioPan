@@ -237,8 +237,7 @@ void Select(int page)
             g_top.rows[i]->SetClass("selected", i == page);
         }
     }
-    std::string help = MioPanRmlCommon::Escape(MioPanRmlCommon::NameButtonIcons(
-        MioPanGameText::Message(kMsgPageHelp, page)));
+    std::string help = MioPanRmlCommon::GameMessage(kMsgPageHelp, page);
     SetRml(g_top.help, g_top.shown_help, help);
 }
 

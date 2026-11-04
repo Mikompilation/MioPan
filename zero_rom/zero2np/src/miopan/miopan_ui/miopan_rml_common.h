@@ -25,6 +25,9 @@ void PlayCancel();
 
 /* `text` made safe to put inside RML. */
 std::string Escape(const std::string &text);
+/* Escaped game text with explicit palette colours; label 1 restores CSS. */
+std::string GameMessage(int type, int id, int page = 0, bool keep_breaks = false,
+                        bool reflow = false);
 
 /* The pad's button icons in the game's own text (MioPanGameText) named for
  * whichever the player last used: the pad's own lettering, or on the

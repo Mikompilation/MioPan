@@ -1,5 +1,10 @@
 #include "miopan_rml_common.h"
 #include "miopan_rmlui.h"
+#include "miopan_game_text.h"
+#include "../../graphics/graph2d/msg_col_tbl.h"
+
+#include <algorithm>
+#include <cstdio>
 
 #include "../../system/os/system.h"
 
@@ -77,6 +82,60 @@ std::string NameButtonIcons(const std::string &text)
         }
     }
     return out;
+}
+
+std::string GameMessage(int type, int id, int page, bool keep_breaks, bool reflow)
+{
+    std::vector<MioPanGameText::ColourChange> colours;
+    const std::string text = MioPanGameText::MessagePage(type, id, page, keep_breaks, &colours);
+    std::string rml;
+    for (size_t i = 0; i < colours.size(); ++i)
+    {
+        const size_t begin = std::min(colours[i].offset, text.size());
+        const size_t end = i + 1 < colours.size()
+            ? std::min(colours[i + 1].offset, text.size()) : text.size();
+        if (begin == end) continue;
+        std::string run = text.substr(begin, end - begin);
+        if (reflow)
+        {
+            // Keep sentence/list boundaries as well as blank lines.
+            for (size_t j = begin; j < end; ++j)
+            {
+                if (text[j] != '\n') continue;
+                size_t before = j;
+                while (before > 0 && text[before - 1] == ' ') --before;
+                size_t next = j + 1;
+                while (next < text.size() && text[next] == ' ') ++next;
+                unsigned codepoint = 0;
+                if (next < text.size())
+                {
+                    const unsigned char lead = text[next];
+                    if (lead < 0x80) codepoint = lead;
+                    else if ((lead & 0xe0) == 0xc0 && next + 1 < text.size())
+                        codepoint = ((lead & 0x1f) << 6) | (text[next + 1] & 0x3f);
+                }
+                const bool uppercase = (codepoint >= 'A' && codepoint <= 'Z') ||
+                    (codepoint >= 0xc0 && codepoint <= 0xde && codepoint != 0xd7) ||
+                    codepoint == 0x152 || codepoint == 0x178;
+                const bool keep = (before > 0 && (text[before - 1] == '.' || text[before - 1] == '\n')) ||
+                    (next < text.size() && text[next] == '\n') || uppercase;
+                if (!keep) run[j - begin] = ' ';
+            }
+        }
+        run = Escape(NameButtonIcons(run));
+        for (size_t at = 0; (at = run.find('\n', at)) != std::string::npos; at += 5)
+            run.replace(at, 1, "<br/>");
+        if (colours[i].label != 1)
+        {
+            const MSG_COLOR &colour = msg_col[colours[i].label];
+            char style[64];
+            std::snprintf(style, sizeof(style), "<span style=\"color: #%02x%02x%02x;\">",
+                          (unsigned)colour.r, (unsigned)colour.g, (unsigned)colour.b);
+            rml += style + run + "</span>";
+        }
+        else rml += run;
+    }
+    return rml;
 }
 
 std::string PromptsRml(const Prompt *prompts, int count)

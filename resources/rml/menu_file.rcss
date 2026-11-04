@@ -37,8 +37,8 @@
 {
     position: absolute;
     font-size: 1.9em;
-    line-height: 1.32;
-    color: #f2ebe0;
+    line-height: 1.263158; /* 24px pitch at the 19px font size, matching PrintMsg_P. */
+    color: #94906e;
     font-effect: outline(1dp #0c0806);
 }
 

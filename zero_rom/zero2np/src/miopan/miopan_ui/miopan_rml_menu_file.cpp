@@ -149,25 +149,6 @@ std::string FileText(int file, int which)
         MioPanGameText::Message(g_file.page.bank, file * kMsgPerFile + which));
 }
 
-/* A message in the game's own lines, for a <p>. */
-std::string Lines(const std::string &text)
-{
-    std::string lines;
-    for (size_t start = 0; start <= text.size();)
-    {
-        const size_t end = text.find('\n', start);
-        lines += MioPanRmlCommon::Escape(
-            text.substr(start, end == std::string::npos ? std::string::npos : end - start));
-        if (end == std::string::npos)
-        {
-            break;
-        }
-        lines += "<br/>";
-        start = end + 1;
-    }
-    return lines;
-}
-
 /* A piece of the page's art at its own place or at x, y, w, h, out of the
  * first of the mode's paks that holds it -- as each part sends its own pak
  * before it draws. */
@@ -257,16 +238,15 @@ std::string LineWindow()
 {
     return MioPanRmlMenuArt::Window(g_file.scale, kWindowX, kWindowY, kWindowW, kWindowH) +
            "<p class=\"caption-text\" style=\"" + Place(kLineX, kLineY, 544, 70) + "\">" +
-           Lines(MioPanRmlCommon::NameButtonIcons(MioPanGameText::MessagePage(
-               g_file.page.bank, g_file.page.selected * kMsgPerFile + kMsgLine, 0, true))) +
+           MioPanRmlCommon::GameMessage(
+               g_file.page.bank, g_file.page.selected * kMsgPerFile + kMsgLine, 0, true) +
            "</p>";
 }
 
 /* A viewer's title, centred as PrintMsg_Arrange() centres it on x 321. */
 std::string Title(float y)
 {
-    return Text(g_file.scale, FileText(g_file.page.selected, kMsgName), 121, y, 400,
-                "file-title");
+    return MioPanRmlMenuArt::GameText(g_file.scale, g_file.page.bank, g_file.page.selected * kMsgPerFile + kMsgName, 121, y, 400, "file-title");
 }
 
 /* The list: its picture under the window, the black panel, the window and
@@ -400,8 +380,7 @@ std::string List()
                              mark.y + dy, mark.w, mark.h);
             }
         }
-        rml += Text(g_file.scale, FileText(page.file[i], kMsgName), kNameX, kNameY + dy, 260,
-                    lit ? "row-text lit" : "row-text");
+        rml += MioPanRmlMenuArt::GameText(g_file.scale, g_file.page.bank, page.file[i] * kMsgPerFile + kMsgName, kNameX, kNameY + dy, 260, lit ? "row-text lit" : "row-text");
         rml += "<div id=\"row-" + std::to_string(i) + "\" class=\"row-hit\" style=\"" +
                Place(73, 116 + dy, 260, kRowPitch) + "\"></div>";
     }
@@ -428,15 +407,15 @@ std::string Document()
         rml += PageArrow(0, 16, 243);
         rml += PageArrow(1, 595, 243);
     }
-    rml += Title(58);
-    rml += "<p class=\"file-body\" style=\"" + Place(80, 134, 480, 250) + "\">" +
-           Lines(MioPanRmlCommon::NameButtonIcons(MioPanGameText::MessagePage(
-               page.bank, page.selected * kMsgPerFile + kMsgBody, page.page, true))) +
-           "</p>";
+    rml += Title(67);
+    rml += "<div class=\"document-text\" style=\"" + Place(80, 134, 480, 250) +
+           "\"><p class=\"file-body\">" + MioPanRmlCommon::GameMessage(
+               page.bank, page.selected * kMsgPerFile + kMsgBody, page.page, true, true) +
+           "</p></div>";
     char count[48];
     std::snprintf(count, sizeof(count), "%d / %d", page.page + 1,
                   page.pages > 0 ? page.pages : 1);
-    rml += Text(g_file.scale, count, 220, 388, 200, "file-count");
+    rml += Text(g_file.scale, count, 220, 393, 200, "file-count");
     return rml;
 }
 
@@ -496,7 +475,7 @@ std::string Viewer(bool map)
         }
     }
     rml += LineWindow();
-    rml += Title(map ? 55.0f : 57.0f);
+    rml += Title(map ? 55.0f : 65.0f);
     return rml;
 }
 

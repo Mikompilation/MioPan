@@ -164,13 +164,13 @@ std::string LineDown(const MioPanRmlMenuArt::Scale &scale, float x, float y, flo
 }
 
 std::string Box(const MioPanRmlMenuArt::Scale &scale, const std::string &text,
-                float x, float y, float width, const char *cls, const char *align)
+                float x, float y, float width, const char *cls, const char *align, bool markup = false)
 {
     char style[128];
     std::snprintf(style, sizeof(style), "left: %.2fdp; top: %.2fdp; width: %.2fdp;%s",
                   x * scale.x, y * scale.y, width * scale.x, align);
     return "<span class=\"" + std::string(cls) + "\" style=\"" + style + "\">" +
-           MioPanRmlCommon::Escape(text) + "</span>";
+           (markup ? text : MioPanRmlCommon::Escape(text)) + "</span>";
 }
 }
 
@@ -328,6 +328,12 @@ std::string Text(const Scale &scale, const std::string &text, float x, float y,
                  float width, const char *cls)
 {
     return Box(scale, text, x, y, width, cls, "");
+}
+
+std::string GameText(const Scale &scale, int type, int id, float x, float y,
+                     float width, const char *cls)
+{
+    return Box(scale, MioPanRmlCommon::GameMessage(type, id), x, y, width, cls, "", true);
 }
 
 std::string Number(const Scale &scale, const std::string &text, float x, float y,

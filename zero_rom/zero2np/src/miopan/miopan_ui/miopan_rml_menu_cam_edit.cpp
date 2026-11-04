@@ -90,18 +90,17 @@ std::string Stage()
     if (page.line >= 0)
     {
         rml += "<p class=\"caption-text\" style=\"" + Place(48, 370, 544, 30) + "\">" +
-               MioPanRmlCommon::Escape(MioPanRmlCommon::NameButtonIcons(
-                   MioPanGameText::Message(kMsgCamera, page.line))) +
+               MioPanRmlCommon::GameMessage(kMsgCamera, page.line) +
                "</p>";
     }
     if (page.kind == MIOPAN_RML_MENU_CAM_EDIT_CONFIRM)
     {
         rml += "<span id=\"answer-0\" class=\"window-choice" +
                std::string(page.answer == 0 ? " selected" : "") + "\" style=\"" +
-               Place(155, 399, 120, 30) + "\">Yes</span>";
+               Place(155, 399, 120, 30) + "\"><span class=\"menu-dialog-answer\">Yes</span></span>";
         rml += "<span id=\"answer-1\" class=\"window-choice" +
                std::string(page.answer != 0 ? " selected" : "") + "\" style=\"" +
-               Place(361, 399, 120, 30) + "\">No</span>";
+               Place(361, 399, 120, 30) + "\"><span class=\"menu-dialog-answer\">No</span></span>";
     }
     if (page.kind == MIOPAN_RML_MENU_CAM_EDIT_PICK)
     {
