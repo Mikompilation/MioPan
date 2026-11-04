@@ -1,6 +1,7 @@
 #include "miopan_rml_font_effect.h"
 #include "miopan_rml_language.h"
 #include "miopan_rmlui.h"
+#include "miopan_ui.h"
 #include "miopan_rml_options.h"
 #include "miopan_rml_load.h"
 #include "miopan_rml_menu_cam_edit.h"
@@ -1301,7 +1302,7 @@ void ProcessEvent(const SDL_Event *event)
     {
         return;
     }
-    if (WantsInput())
+    if (WantsInput() && !MioPanUi::CapturesEvent(*event))
     {
         DispatchEvent(*event);
     }
@@ -1316,7 +1317,7 @@ void Frame()
     }
 
     UpdateContextGeometry();
-    if (WantsInput())
+    if (WantsInput() && !MioPanUi::WantsKeyboardInput())
     {
         RepeatNavigation();
     }

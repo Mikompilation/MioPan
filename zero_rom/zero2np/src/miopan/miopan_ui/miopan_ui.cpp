@@ -3747,6 +3747,7 @@ void Shutdown()
         g_plot_context = nullptr;
     }
 
+    MioPan_InputSetOverlaySuppressed(0);
     ImGui::DestroyContext(g_context);
     g_context = nullptr;
     g_platform_initialized = false;
@@ -3772,6 +3773,33 @@ void Shutdown()
     g_follow_performance_history = true;
     g_performance_stats = {};
     ClearProfilerHistory();
+}
+
+bool WantsKeyboardInput()
+{
+    return IsInitialized() && ImGui::GetIO().WantCaptureKeyboard;
+}
+
+bool CapturesEvent(const SDL_Event &event)
+{
+    if (!IsInitialized()) return false;
+    switch (event.type)
+    {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+    case SDL_EVENT_TEXT_INPUT:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        return CaptureActive() || WantsKeyboardInput();
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL:
+        return ImGui::GetIO().WantCaptureMouse;
+    default:
+        return false;
+    }
 }
 
 void ProcessEvent(const SDL_Event *event)
@@ -3846,6 +3874,7 @@ void Draw()
     /* Ahead of the menu, so a change made this frame is compared against the
      * state the menu is about to redraw rather than against itself. */
     PersistSettingsIfChanged();
+    MioPan_InputSetOverlaySuppressed(WantsKeyboardInput());
     UpdateUiMouse();
 
     DrawMainMenuBar();

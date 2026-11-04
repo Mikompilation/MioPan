@@ -183,6 +183,8 @@ int  MioPan_InputIsSuppressed(void);
 // the press that closed the menu or made the binding -- read as released until
 // each is let go; everything else reaches the game at once.
 void MioPan_InputSetMenuSuppressed(int suppressed);
+// ImGui owns a separate hold so closing it cannot release an RmlUi menu.
+void MioPan_InputSetOverlaySuppressed(int suppressed);
 
 // 1 if every binding still matches the built-in defaults.  The settings file
 // writes the section either way — it is meant to be read and hand-edited, so

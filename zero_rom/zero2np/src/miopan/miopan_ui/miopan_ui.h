@@ -82,6 +82,8 @@ void Shutdown();
 
 void SetPerformanceStats(const PerformanceStats &stats);
 void ProcessEvent(const SDL_Event *event);
+bool WantsKeyboardInput();
+bool CapturesEvent(const SDL_Event &event);
 void BeginFrame();
 void Draw();
 void EndFrame();

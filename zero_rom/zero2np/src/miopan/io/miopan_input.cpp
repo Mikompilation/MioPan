@@ -91,10 +91,10 @@ static int                       s_bindings_ready;
 // read straight from SDL each time.
 static float s_stick_ramp[MIOPAN_PAD_STICK_COUNT];
 
-// Raised by the rebinding UI while it waits for a key, and by the RmlUi menus
-// while one holds the controls; s_suppressed is either.  See the header.
+// Independent holds for rebinding, RmlUi and ImGui; none can release another.
 static int s_rebind_suppressed;
 static int s_menu_suppressed;
+static int s_overlay_suppressed;
 static int s_suppressed;
 
 // Buttons that were down when the last suppression ended, one bit per logical
@@ -1208,7 +1208,7 @@ static void ApplySuppression(void)
     const int was = s_suppressed;
     int       i;
 
-    s_suppressed = (s_rebind_suppressed != 0 || s_menu_suppressed != 0) ? 1 : 0;
+    s_suppressed = (s_rebind_suppressed != 0 || s_menu_suppressed != 0 || s_overlay_suppressed != 0) ? 1 : 0;
 
     // Drop whatever deflection the digital keys had built up, so releasing
     // suppression does not hand the game a stick that is still pushed over.
@@ -1250,6 +1250,12 @@ void MioPan_InputSetSuppressed(int suppressed)
 void MioPan_InputSetMenuSuppressed(int suppressed)
 {
     s_menu_suppressed = suppressed != 0 ? 1 : 0;
+    ApplySuppression();
+}
+
+void MioPan_InputSetOverlaySuppressed(int suppressed)
+{
+    s_overlay_suppressed = suppressed != 0 ? 1 : 0;
     ApplySuppression();
 }
 
