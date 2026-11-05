@@ -83,8 +83,8 @@ int g3dbvIsEllipseInclude(float (*e)[4], float *v)
     float vInv[4];
     float matInv[4][4];
 
-    sceVu0InversMatrix(matInv, e);
-    sceVu0ApplyMatrix(vInv, matInv, v);
+    g3dxVu0InverseMatrix(matInv, e);
+    g3dxVu0ApplyInverseMatrix(vInv, matInv, v);
 
     return g3dxVu0CalcLength(vInv) <= 1.0f;
 }

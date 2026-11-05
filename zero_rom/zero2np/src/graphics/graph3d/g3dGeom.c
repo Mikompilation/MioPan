@@ -470,9 +470,9 @@ int g3dCalcIntersectionEllipseAndLine(float (*avRet)[4], float (*e)[4], float *v
     int   i;
 
     /* matInv = inverse(e) */
-    sceVu0InversMatrix(matInv, e);
+    g3dxVu0InverseMatrix(matInv, e);
 
-    sceVu0ApplyMatrix(vStartInv, matInv, vStart);
+    g3dxVu0ApplyInverseMatrix(vStartInv, matInv, vStart);
     sceVu0Normalize(vDirInv, vDir);
     sceVu0ApplyMatrix(vDirInv, matInv, vDirInv);
 

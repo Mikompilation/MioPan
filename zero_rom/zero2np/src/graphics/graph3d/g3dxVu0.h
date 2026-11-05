@@ -172,6 +172,56 @@ static inline void g3dxVu0TranslateMatrix(float (*matDest)[4], float (*matSrc)[4
     sceVu0CopyMatrix(matDest, tmp);
 }
 
+/* Inverse of a matrix whose rows need not be unit length: the cofactors over
+ * the determinant, transposed.  ROM: g3dxVu0.h 1645-1701, expanded only in
+ * g3dbvIsEllipseInclude() and g3dCalcIntersectionEllipseAndLine().
+ *
+ * Not sceVu0InversMatrix(), which transposes and so only inverts a pure
+ * rotation: those two callers pass a bounding-volume shape matrix, whose rows
+ * carry the half extents.
+ *
+ * Row 3 is -m1[3], not a finished inverse translation (vsub.xyz, so w is kept):
+ * it has to go on before the 3x3, which g3dxVu0ApplyInverseMatrix() does. */
+static inline void g3dxVu0InverseMatrix(float (*m0)[4], float (*m1)[4])
+{
+    float cof[3][4];
+    float q;
+    int   i;
+
+    sceVu0OuterProduct(cof[0], m1[1], m1[2]);
+    sceVu0OuterProduct(cof[1], m1[2], m1[0]);
+    sceVu0OuterProduct(cof[2], m1[0], m1[1]);
+
+    q = 1.0f / sceVu0InnerProduct(m1[0], cof[0]);
+
+    for (i = 0; i < 3; i++)
+    {
+        m0[i][0] = cof[0][i] * q;
+        m0[i][1] = cof[1][i] * q;
+        m0[i][2] = cof[2][i] * q;
+        m0[i][3] = 0.0f;
+    }
+
+    m0[3][0] = -m1[3][0];
+    m0[3][1] = -m1[3][1];
+    m0[3][2] = -m1[3][2];
+    m0[3][3] = m1[3][3];
+}
+
+/* v0 = (v1 + m[3]) through the 3x3 of m, for a g3dxVu0InverseMatrix() result.
+ * w stays v1's: only .xyz is written.  ROM: g3dxVu0.h 1614-1616. */
+static inline void g3dxVu0ApplyInverseMatrix(float *v0, const float (*m)[4], const float *v1)
+{
+    const float x = v1[0] + m[3][0];
+    const float y = v1[1] + m[3][1];
+    const float z = v1[2] + m[3][2];
+
+    v0[0] = m[0][0] * x + m[1][0] * y + m[2][0] * z;
+    v0[1] = m[0][1] * x + m[1][1] * y + m[2][1] * z;
+    v0[2] = m[0][2] * x + m[1][2] * y + m[2][2] * z;
+    v0[3] = v1[3];
+}
+
 /* Quadword copy (lq / sq through a GPR).  ROM: g3dxVu0.h 134-135. */
 static inline void g3dxVu0CopyVector(float* dst, const float* src)
 {
