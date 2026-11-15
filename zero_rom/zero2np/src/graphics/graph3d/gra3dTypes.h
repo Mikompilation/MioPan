@@ -865,7 +865,9 @@ struct GRA3DVU1MATERIALDATA          /* size 0x150 */
  *  into its per-pixel light block.
  *
  *  vParams is the packing the shader wants: x bTimes, y cos^2(cone half-angle),
- *  z 1/sin^2, w unused.  Point lanes leave y and z zero and never read them.
+ *  z 1/sin^2, w 1 for Mio's flashlight (LID_SPOT_FLASHLIGHT) and 0 otherwise
+ *  -- a port tag for its soft beam, not part of the VU1 image.  Point lanes
+ *  leave y, z and w zero and never read them.
  *  fRank is scratch for the over-budget displacement in the builder and is not
  *  uploaded.
  * ------------------------------------------------------------------------ */

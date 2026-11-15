@@ -51,6 +51,7 @@
 #include "../../miopan/miopan_profiler.h"
 #include "../../miopan/os/miopan_pacing.h" // host V-blank wait override (measurement harness)
 #include "../../miopan/rendering/miopan_renderer.h"
+#include "../../graphics/graph3d/gra3d.h" // gra3dPublishFlashlight
 #include "../pad/pad.h"             // InitPad / PadAnalog*
 #include "../../debug/zero2_debug.h" // DebugInit
 #include "../../ingame/map/MapSave.h" // MapSavePushFirstDat
@@ -9858,6 +9859,8 @@ void SendDMAMain(void)
     DrawPerformanceCounter2(draw_perf_count);
     vfunc();
     dmaVif1Kick();
+    /* PORT: the flashlight this frame was lit with, for the bounce light. */
+    gra3dPublishFlashlight();
     MioPan_RendererEndFrame();
     InitGraph2dEFrame();
 }

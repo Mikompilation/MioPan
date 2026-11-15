@@ -104,6 +104,38 @@ cbuffer MikuPanUniforms : register(b0, MIKUPAN_UNIFORM_SPACE)
     float4 uShadowPlane;
     float4 uShadowLight;
     float4 uShadowEye;
+
+    // Ray-traced shadows, read only by mesh_spot_rt.frag (miopan_rt.hlsli).
+    // uRtFlags: x = MIOPAN_RT_* light-type mask, y = static BVH node count,
+    // z = dynamic BVH node count, w = shadow rays per light (1 = hard).
+    // uRtParams: x = ray-origin offset along the normal, y = how far short of
+    // the light a ray stops, z = light radius for soft shadows, w = the
+    // smallest lane contribution, in GS 0..255 units, worth a ray.  Appended
+    // for the same reason as uAlphaTest.
+    int4 uRtFlags;
+    float4 uRtParams;
+    // xyz = centre, w = radius of the sphere around Mio inside which a light
+    // counts as hers (her flashlight, her reflection light); w = 0 when she is
+    // not drawn.  Her own triangles never shadow such a light.
+    float4 uRtPlayer;
+    // The screen-space shadow mask's four lights, by world position (w = 1 for
+    // a live channel), and x = 1 when the mask is bound this present.  A lane
+    // at one of these positions reads its visibility from the mask instead of
+    // tracing.  Appended for the same reason as uAlphaTest.
+    float4 uRtMaskLight[4];
+    int4 uRtMaskFlags;
+    // Mio's flashlight beam (port addition): x = edge softness 0..1 (0 is the
+    // PS2's cone), y = spill, the faint halo around the beam, as a fraction of
+    // its full brightness, z = how far the spill reaches in cone half-angles,
+    // w = 1 when either is on.  Read by the per-pixel spot kernel for the lane
+    // tagged as the flashlight (spotParams.w).  Appended for the same reason
+    // as uAlphaTest.
+    float4 uFlashlight;
+    // Ray-traced ambient occlusion (port addition): x = the exponent the
+    // occlusion is raised to in the GS's gamma units (strength / 2.2).  Read
+    // by mesh_spot_rt.frag where uRtMaskFlags.y says the occlusion is bound.
+    // Appended for the same reason as uAlphaTest.
+    float4 uRtAmbient;
 };
 
 // GS alpha test.  Returns true when the fragment should be thrown away, which

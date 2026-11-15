@@ -1,0 +1,1838 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+#pragma clang diagnostic ignored "-Wmissing-braces"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+template<typename T, size_t Num>
+struct spvUnsafeArray
+{
+    T elements[Num ? Num : 1];
+    
+    thread T& operator [] (size_t pos) thread
+    {
+        return elements[pos];
+    }
+    constexpr const thread T& operator [] (size_t pos) const thread
+    {
+        return elements[pos];
+    }
+    
+    device T& operator [] (size_t pos) device
+    {
+        return elements[pos];
+    }
+    constexpr const device T& operator [] (size_t pos) const device
+    {
+        return elements[pos];
+    }
+    
+    constexpr const constant T& operator [] (size_t pos) const constant
+    {
+        return elements[pos];
+    }
+    
+    threadgroup T& operator [] (size_t pos) threadgroup
+    {
+        return elements[pos];
+    }
+    constexpr const threadgroup T& operator [] (size_t pos) const threadgroup
+    {
+        return elements[pos];
+    }
+};
+
+struct type_MioPanRtMaskUniforms
+{
+    int4 uRtFlags;
+    float4 uRtParams;
+    float4 uRtPlayer;
+    float4 uMaskLightPos[4];
+    float4 uMaskBlend;
+    float4 uMaskSize;
+    float4 uMaskTuning;
+    float4 uMaskAo;
+};
+
+struct type_StructuredBuffer_v4float
+{
+    float4 _m0[1];
+};
+
+constant bool _102 = {};
+
+kernel void main0(constant type_MioPanRtMaskUniforms& MioPanRtMaskUniforms [[buffer(0)]], const device type_StructuredBuffer_v4float& uRtStaticNodes [[buffer(1)]], const device type_StructuredBuffer_v4float& uRtStaticTris [[buffer(2)]], const device type_StructuredBuffer_v4float& uRtDynamicNodes [[buffer(3)]], const device type_StructuredBuffer_v4float& uRtDynamicTris [[buffer(4)]], texture2d<float> uGPos [[texture(0)]], texture2d<float> uGNormal [[texture(1)]], texture2d<float> uHistory [[texture(2)]], texture2d<float> uPrevGPos [[texture(3)]], texture2d<float> uAoHistory [[texture(4)]], texture2d<float, access::write> uMaskOut [[texture(5)]], texture2d<float, access::write> uAoOut [[texture(6)]], uint3 gl_GlobalInvocationID [[thread_position_in_grid]])
+{
+    do
+    {
+        bool _132;
+        if (gl_GlobalInvocationID.x < uint(MioPanRtMaskUniforms.uMaskSize.x))
+        {
+            _132 = gl_GlobalInvocationID.y >= uint(MioPanRtMaskUniforms.uMaskSize.y);
+        }
+        else
+        {
+            _132 = true;
+        }
+        if (_132)
+        {
+            break;
+        }
+        int2 _140 = int3(int(gl_GlobalInvocationID.x), int(gl_GlobalInvocationID.y), 0).xy;
+        float4 _142 = uGPos.read(uint2(_140), 0);
+        if (_142.w <= 0.0)
+        {
+            uMaskOut.write(float4(1.0), uint2(gl_GlobalInvocationID.xy));
+            uAoOut.write(float4(1.0, 0.0, 0.0, 0.0), uint2(gl_GlobalInvocationID.xy));
+            break;
+        }
+        float3 _150 = _142.xyz;
+        float4 _152 = uGNormal.read(uint2(_140), 0);
+        float3 _154 = fast::normalize(_152.xyz);
+        uint _157 = uint(_152.w + 0.5);
+        float4 _159 = uPrevGPos.read(uint2(_140), 0);
+        float3 _161 = _159.xyz - _150;
+        bool _169;
+        if (MioPanRtMaskUniforms.uMaskSize.w > 0.0)
+        {
+            _169 = _159.w > 0.0;
+        }
+        else
+        {
+            _169 = false;
+        }
+        bool _176;
+        if (_169)
+        {
+            _176 = dot(_161, _161) <= MioPanRtMaskUniforms.uMaskTuning.x;
+        }
+        else
+        {
+            _176 = false;
+        }
+        float4 _182;
+        if (_176)
+        {
+            _182 = uHistory.read(uint2(_140), 0);
+        }
+        else
+        {
+            _182 = float4(1.0);
+        }
+        float4 _113 = _182;
+        int _190;
+        if (_176)
+        {
+            _190 = 1;
+        }
+        else
+        {
+            _190 = max(int(MioPanRtMaskUniforms.uMaskTuning.y), 1);
+        }
+        float2 _192 = float2(gl_GlobalInvocationID.xy);
+        float _195 = fmod(MioPanRtMaskUniforms.uMaskSize.z, 64.0);
+        float4 _114 = float4(1.0);
+        spvUnsafeArray<uint, 32> _109;
+        spvUnsafeArray<uint, 32> _110;
+        spvUnsafeArray<uint, 32> _111;
+        spvUnsafeArray<uint, 32> _112;
+        bool _198;
+        bool _201;
+        bool _203;
+        bool _205;
+        bool _197;
+        bool _200;
+        bool _202;
+        bool _204;
+        for (int _206 = 0; _206 < 4; _197 = _198, _200 = _201, _202 = _203, _204 = _205, _206++)
+        {
+            if (MioPanRtMaskUniforms.uMaskLightPos[_206].w < 0.5)
+            {
+                _198 = _197;
+                _201 = _200;
+                _203 = _202;
+                _205 = _204;
+                continue;
+            }
+            uint _217 = uint(_206);
+            bool _1066;
+            bool _1067;
+            bool _1068;
+            bool _1069;
+            float _1070;
+            if ((_157 & (1u << (_217 & 31u))) != 0u)
+            {
+                float3 _226 = MioPanRtMaskUniforms.uMaskLightPos[_206].xyz - _150;
+                bool _1061;
+                bool _1062;
+                bool _1063;
+                bool _1064;
+                float _1065;
+                do
+                {
+                    float _231 = length(_226);
+                    if ((isunordered(_231, 0.0) || _231 <= 0.0))
+                    {
+                        _1061 = _197;
+                        _1062 = _200;
+                        _1063 = _202;
+                        _1064 = _204;
+                        _1065 = 1.0;
+                        break;
+                    }
+                    float3 _236 = _226 / float3(_231);
+                    float3 _243;
+                    if (dot(_154, _236) >= 0.0)
+                    {
+                        _243 = _154;
+                    }
+                    else
+                    {
+                        _243 = -_154;
+                    }
+                    float3 _244 = _243 * MioPanRtMaskUniforms.uRtParams.x;
+                    float3 _245 = _150 + _244;
+                    float3 _249 = MioPanRtMaskUniforms.uMaskLightPos[_206].xyz - MioPanRtMaskUniforms.uRtPlayer.xyz;
+                    bool _258;
+                    if (MioPanRtMaskUniforms.uRtPlayer.w > 0.0)
+                    {
+                        _258 = dot(_249, _249) < (MioPanRtMaskUniforms.uRtPlayer.w * MioPanRtMaskUniforms.uRtPlayer.w);
+                    }
+                    else
+                    {
+                        _258 = false;
+                    }
+                    float3 _259 = _226 - _244;
+                    int _260 = clamp(_190, 1, 16);
+                    if (MioPanRtMaskUniforms.uRtParams.z <= 0.0)
+                    {
+                        float _267 = length(_259);
+                        float _270 = _267 - MioPanRtMaskUniforms.uRtParams.y;
+                        if (_270 <= 0.0)
+                        {
+                            _1061 = _197;
+                            _1062 = _200;
+                            _1063 = _202;
+                            _1064 = _204;
+                            _1065 = 1.0;
+                            break;
+                        }
+                        float3 _275 = _259 / float3(_267);
+                        bool _461;
+                        bool _633;
+                        bool _634;
+                        do
+                        {
+                            float _278 = _275.x;
+                            float _285;
+                            if (_278 >= 0.0)
+                            {
+                                _285 = precise::max(_278, 9.9999999392252902907785028219223e-09);
+                            }
+                            else
+                            {
+                                _285 = precise::min(_278, -9.9999999392252902907785028219223e-09);
+                            }
+                            float _286 = _275.y;
+                            float _293;
+                            if (_286 >= 0.0)
+                            {
+                                _293 = precise::max(_286, 9.9999999392252902907785028219223e-09);
+                            }
+                            else
+                            {
+                                _293 = precise::min(_286, -9.9999999392252902907785028219223e-09);
+                            }
+                            float _294 = _275.z;
+                            float _301;
+                            if (_294 >= 0.0)
+                            {
+                                _301 = precise::max(_294, 9.9999999392252902907785028219223e-09);
+                            }
+                            else
+                            {
+                                _301 = precise::min(_294, -9.9999999392252902907785028219223e-09);
+                            }
+                            float3 _303 = float3(1.0) / float3(_285, _293, _301);
+                            bool _462;
+                            if (MioPanRtMaskUniforms.uRtFlags.y > 0)
+                            {
+                                bool _460;
+                                do
+                                {
+                                    bool _313;
+                                    uint _316;
+                                    bool _318;
+                                    uint _320;
+                                    bool _457;
+                                    bool _458;
+                                    bool _312 = _200;
+                                    uint _315 = 0u;
+                                    bool _317 = false;
+                                    uint _319 = 0u;
+                                    uint _321 = 0u;
+                                    for (;;)
+                                    {
+                                        if (_321 < 4096u)
+                                        {
+                                            uint _326 = _319 * 2u;
+                                            uint _329 = _326 + 1u;
+                                            float3 _335 = (uRtStaticNodes._m0[_326].xyz - _245) * _303;
+                                            float3 _337 = (uRtStaticNodes._m0[_329].xyz - _245) * _303;
+                                            float3 _338 = precise::min(_335, _337);
+                                            float3 _339 = precise::max(_335, _337);
+                                            bool _449;
+                                            bool _450;
+                                            if (precise::max(precise::max(_338.x, _338.y), precise::max(_338.z, 0.0)) <= precise::min(precise::min(_339.x, _339.y), precise::min(_339.z, _270)))
+                                            {
+                                                uint _356 = as_type<uint>(uRtStaticNodes._m0[_326].w);
+                                                uint _358 = as_type<uint>(uRtStaticNodes._m0[_329].w);
+                                                if (_358 == 0u)
+                                                {
+                                                    uint _368;
+                                                    if (_315 < 32u)
+                                                    {
+                                                        _112[_315] = _356 + 1u;
+                                                        _368 = _315 + 1u;
+                                                    }
+                                                    else
+                                                    {
+                                                        _368 = _315;
+                                                    }
+                                                    _313 = _312;
+                                                    _316 = _368;
+                                                    _318 = _317;
+                                                    _320 = _356;
+                                                    uint _322 = _321 + 1u;
+                                                    _312 = _313;
+                                                    _315 = _316;
+                                                    _317 = _318;
+                                                    _319 = _320;
+                                                    _321 = _322;
+                                                    continue;
+                                                }
+                                                bool _446;
+                                                bool _447;
+                                                uint _370 = 0u;
+                                                for (;;)
+                                                {
+                                                    if (_370 < _358)
+                                                    {
+                                                        uint _377 = (_356 + _370) * 3u;
+                                                        bool _391;
+                                                        if ((uint(uRtStaticTris._m0[_377].w + 0.5) & 2u) == 0u)
+                                                        {
+                                                            _391 = (MioPanRtMaskUniforms.uRtFlags.x & 32) != 0;
+                                                        }
+                                                        else
+                                                        {
+                                                            _391 = true;
+                                                        }
+                                                        bool _443;
+                                                        do
+                                                        {
+                                                            float3 _403 = cross(_275, uRtStaticTris._m0[_377 + 2u].xyz);
+                                                            float _404 = dot(uRtStaticTris._m0[_377 + 1u].xyz, _403);
+                                                            bool _411;
+                                                            if (_391)
+                                                            {
+                                                                _411 = abs(_404) < 9.9999999600419720025001879548654e-13;
+                                                            }
+                                                            else
+                                                            {
+                                                                _411 = _404 > (-9.9999999600419720025001879548654e-13);
+                                                            }
+                                                            if (_411)
+                                                            {
+                                                                _443 = false;
+                                                                break;
+                                                            }
+                                                            float _414 = 1.0 / _404;
+                                                            float3 _415 = _245 - uRtStaticTris._m0[_377].xyz;
+                                                            float _417 = dot(_415, _403) * _414;
+                                                            bool _422;
+                                                            if ((isunordered(_417, 0.0) || _417 >= 0.0))
+                                                            {
+                                                                _422 = _417 > 1.0;
+                                                            }
+                                                            else
+                                                            {
+                                                                _422 = true;
+                                                            }
+                                                            if (_422)
+                                                            {
+                                                                _443 = false;
+                                                                break;
+                                                            }
+                                                            float3 _425 = cross(_415, uRtStaticTris._m0[_377 + 1u].xyz);
+                                                            float _427 = dot(_275, _425) * _414;
+                                                            bool _433;
+                                                            if ((isunordered(_427, 0.0) || _427 >= 0.0))
+                                                            {
+                                                                _433 = (_417 + _427) > 1.0;
+                                                            }
+                                                            else
+                                                            {
+                                                                _433 = true;
+                                                            }
+                                                            if (_433)
+                                                            {
+                                                                _443 = false;
+                                                                break;
+                                                            }
+                                                            float _437 = dot(uRtStaticTris._m0[_377 + 2u].xyz, _425) * _414;
+                                                            bool _442;
+                                                            if (_437 > 0.0)
+                                                            {
+                                                                _442 = _437 < _270;
+                                                            }
+                                                            else
+                                                            {
+                                                                _442 = false;
+                                                            }
+                                                            _443 = _442;
+                                                            break;
+                                                        } while(false);
+                                                        if (_443)
+                                                        {
+                                                            _446 = true;
+                                                            _447 = true;
+                                                            break;
+                                                        }
+                                                        _370++;
+                                                        continue;
+                                                    }
+                                                    else
+                                                    {
+                                                        _446 = _312;
+                                                        _447 = _317;
+                                                        break;
+                                                    }
+                                                }
+                                                if (_447)
+                                                {
+                                                    _457 = _446;
+                                                    _458 = _447;
+                                                    break;
+                                                }
+                                                _449 = _446;
+                                                _450 = _447;
+                                            }
+                                            else
+                                            {
+                                                _449 = _312;
+                                                _450 = _317;
+                                            }
+                                            if (_315 == 0u)
+                                            {
+                                                _457 = _449;
+                                                _458 = _450;
+                                                break;
+                                            }
+                                            uint _454 = _315 - 1u;
+                                            _313 = _449;
+                                            _316 = _454;
+                                            _318 = _450;
+                                            _320 = _112[_454];
+                                            uint _322 = _321 + 1u;
+                                            _312 = _313;
+                                            _315 = _316;
+                                            _317 = _318;
+                                            _319 = _320;
+                                            _321 = _322;
+                                            continue;
+                                        }
+                                        else
+                                        {
+                                            _457 = _312;
+                                            _458 = _317;
+                                            break;
+                                        }
+                                    }
+                                    if (_458)
+                                    {
+                                        _460 = _457;
+                                        break;
+                                    }
+                                    _460 = false;
+                                    break;
+                                } while(false);
+                                _461 = _460;
+                                _462 = _460;
+                            }
+                            else
+                            {
+                                _461 = _200;
+                                _462 = false;
+                            }
+                            if (_462)
+                            {
+                                _633 = _197;
+                                _634 = true;
+                                break;
+                            }
+                            bool _629;
+                            bool _630;
+                            if (MioPanRtMaskUniforms.uRtFlags.z > 0)
+                            {
+                                bool _628;
+                                do
+                                {
+                                    bool _474;
+                                    uint _477;
+                                    bool _479;
+                                    uint _481;
+                                    bool _625;
+                                    bool _626;
+                                    bool _473 = _197;
+                                    uint _476 = 0u;
+                                    bool _478 = false;
+                                    uint _480 = 0u;
+                                    uint _482 = 0u;
+                                    for (;;)
+                                    {
+                                        if (_482 < 4096u)
+                                        {
+                                            uint _487 = _480 * 2u;
+                                            uint _490 = _487 + 1u;
+                                            float3 _496 = (uRtDynamicNodes._m0[_487].xyz - _245) * _303;
+                                            float3 _498 = (uRtDynamicNodes._m0[_490].xyz - _245) * _303;
+                                            float3 _499 = precise::min(_496, _498);
+                                            float3 _500 = precise::max(_496, _498);
+                                            bool _617;
+                                            bool _618;
+                                            if (precise::max(precise::max(_499.x, _499.y), precise::max(_499.z, 0.0)) <= precise::min(precise::min(_500.x, _500.y), precise::min(_500.z, _270)))
+                                            {
+                                                uint _517 = as_type<uint>(uRtDynamicNodes._m0[_487].w);
+                                                uint _519 = as_type<uint>(uRtDynamicNodes._m0[_490].w);
+                                                if (_519 == 0u)
+                                                {
+                                                    uint _529;
+                                                    if (_476 < 32u)
+                                                    {
+                                                        _111[_476] = _517 + 1u;
+                                                        _529 = _476 + 1u;
+                                                    }
+                                                    else
+                                                    {
+                                                        _529 = _476;
+                                                    }
+                                                    _474 = _473;
+                                                    _477 = _529;
+                                                    _479 = _478;
+                                                    _481 = _517;
+                                                    uint _483 = _482 + 1u;
+                                                    _473 = _474;
+                                                    _476 = _477;
+                                                    _478 = _479;
+                                                    _480 = _481;
+                                                    _482 = _483;
+                                                    continue;
+                                                }
+                                                bool _614;
+                                                bool _615;
+                                                uint _531 = 0u;
+                                                for (;;)
+                                                {
+                                                    if (_531 < _519)
+                                                    {
+                                                        uint _537 = _517 + _531;
+                                                        uint _538 = _537 * 3u;
+                                                        uint _543 = uint(uRtDynamicTris._m0[_538].w + 0.5);
+                                                        bool _548;
+                                                        if (_258)
+                                                        {
+                                                            _548 = (_543 & 1u) != 0u;
+                                                        }
+                                                        else
+                                                        {
+                                                            _548 = false;
+                                                        }
+                                                        if (_548)
+                                                        {
+                                                            uint _532 = _531 + 1u;
+                                                            _531 = _532;
+                                                            continue;
+                                                        }
+                                                        bool _559;
+                                                        if ((_543 & 2u) == 0u)
+                                                        {
+                                                            _559 = (MioPanRtMaskUniforms.uRtFlags.x & 32) != 0;
+                                                        }
+                                                        else
+                                                        {
+                                                            _559 = true;
+                                                        }
+                                                        bool _611;
+                                                        do
+                                                        {
+                                                            float3 _571 = cross(_275, uRtDynamicTris._m0[_538 + 2u].xyz);
+                                                            float _572 = dot(uRtDynamicTris._m0[_538 + 1u].xyz, _571);
+                                                            bool _579;
+                                                            if (_559)
+                                                            {
+                                                                _579 = abs(_572) < 9.9999999600419720025001879548654e-13;
+                                                            }
+                                                            else
+                                                            {
+                                                                _579 = _572 > (-9.9999999600419720025001879548654e-13);
+                                                            }
+                                                            if (_579)
+                                                            {
+                                                                _611 = false;
+                                                                break;
+                                                            }
+                                                            float _582 = 1.0 / _572;
+                                                            float3 _583 = _245 - uRtDynamicTris._m0[_538].xyz;
+                                                            float _585 = dot(_583, _571) * _582;
+                                                            bool _590;
+                                                            if ((isunordered(_585, 0.0) || _585 >= 0.0))
+                                                            {
+                                                                _590 = _585 > 1.0;
+                                                            }
+                                                            else
+                                                            {
+                                                                _590 = true;
+                                                            }
+                                                            if (_590)
+                                                            {
+                                                                _611 = false;
+                                                                break;
+                                                            }
+                                                            float3 _593 = cross(_583, uRtDynamicTris._m0[_538 + 1u].xyz);
+                                                            float _595 = dot(_275, _593) * _582;
+                                                            bool _601;
+                                                            if ((isunordered(_595, 0.0) || _595 >= 0.0))
+                                                            {
+                                                                _601 = (_585 + _595) > 1.0;
+                                                            }
+                                                            else
+                                                            {
+                                                                _601 = true;
+                                                            }
+                                                            if (_601)
+                                                            {
+                                                                _611 = false;
+                                                                break;
+                                                            }
+                                                            float _605 = dot(uRtDynamicTris._m0[_538 + 2u].xyz, _593) * _582;
+                                                            bool _610;
+                                                            if (_605 > 0.0)
+                                                            {
+                                                                _610 = _605 < _270;
+                                                            }
+                                                            else
+                                                            {
+                                                                _610 = false;
+                                                            }
+                                                            _611 = _610;
+                                                            break;
+                                                        } while(false);
+                                                        if (_611)
+                                                        {
+                                                            _614 = true;
+                                                            _615 = true;
+                                                            break;
+                                                        }
+                                                        uint _532 = _531 + 1u;
+                                                        _531 = _532;
+                                                        continue;
+                                                    }
+                                                    else
+                                                    {
+                                                        _614 = _473;
+                                                        _615 = _478;
+                                                        break;
+                                                    }
+                                                }
+                                                if (_615)
+                                                {
+                                                    _625 = _614;
+                                                    _626 = _615;
+                                                    break;
+                                                }
+                                                _617 = _614;
+                                                _618 = _615;
+                                            }
+                                            else
+                                            {
+                                                _617 = _473;
+                                                _618 = _478;
+                                            }
+                                            if (_476 == 0u)
+                                            {
+                                                _625 = _617;
+                                                _626 = _618;
+                                                break;
+                                            }
+                                            uint _622 = _476 - 1u;
+                                            _474 = _617;
+                                            _477 = _622;
+                                            _479 = _618;
+                                            _481 = _111[_622];
+                                            uint _483 = _482 + 1u;
+                                            _473 = _474;
+                                            _476 = _477;
+                                            _478 = _479;
+                                            _480 = _481;
+                                            _482 = _483;
+                                            continue;
+                                        }
+                                        else
+                                        {
+                                            _625 = _473;
+                                            _626 = _478;
+                                            break;
+                                        }
+                                    }
+                                    if (_626)
+                                    {
+                                        _628 = _625;
+                                        break;
+                                    }
+                                    _628 = false;
+                                    break;
+                                } while(false);
+                                _629 = _628;
+                                _630 = _628;
+                            }
+                            else
+                            {
+                                _629 = _197;
+                                _630 = false;
+                            }
+                            if (_630)
+                            {
+                                _633 = _629;
+                                _634 = true;
+                                break;
+                            }
+                            _633 = _629;
+                            _634 = false;
+                            break;
+                        } while(false);
+                        _1061 = _633;
+                        _1062 = _461;
+                        _1063 = _202;
+                        _1064 = _204;
+                        _1065 = _634 ? 0.0 : 1.0;
+                        break;
+                    }
+                    float3 _642 = fast::normalize(cross(select(float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), bool3(abs(_236.y) < 0.9900000095367431640625)), _236));
+                    float3 _643 = cross(_236, _642);
+                    float2 _646 = _192 + float2(5.588237762451171875 * _195);
+                    float _651 = fract(52.98291778564453125 * fract(dot(_646, float2(0.067110560834407806396484375, 0.005837149918079376220703125)))) * 6.283185482025146484375;
+                    float _657 = fract(52.98291778564453125 * fract(dot(_646.yx + float2(37.0, 11.0), float2(0.067110560834407806396484375, 0.005837149918079376220703125))));
+                    bool _659;
+                    bool _662;
+                    float _664;
+                    _659 = _202;
+                    _662 = _204;
+                    _664 = 0.0;
+                    bool _660;
+                    bool _663;
+                    float _665;
+                    for (int _666 = 0; _666 < _260; _659 = _660, _662 = _663, _664 = _665, _666++)
+                    {
+                        float _671 = float(_666);
+                        float _678 = (_671 * 2.3999631404876708984375) + _651;
+                        float3 _685 = _259 + (((_642 * cos(_678)) + (_643 * sin(_678))) * (sqrt((_671 + _657) / float(_260)) * MioPanRtMaskUniforms.uRtParams.z));
+                        float _686 = length(_685);
+                        float _689 = _686 - MioPanRtMaskUniforms.uRtParams.y;
+                        bool _1055;
+                        if ((isunordered(_689, 0.0) || _689 > 0.0))
+                        {
+                            float3 _694 = _685 / float3(_686);
+                            bool _880;
+                            bool _1052;
+                            bool _1053;
+                            do
+                            {
+                                float _697 = _694.x;
+                                float _704;
+                                if (_697 >= 0.0)
+                                {
+                                    _704 = precise::max(_697, 9.9999999392252902907785028219223e-09);
+                                }
+                                else
+                                {
+                                    _704 = precise::min(_697, -9.9999999392252902907785028219223e-09);
+                                }
+                                float _705 = _694.y;
+                                float _712;
+                                if (_705 >= 0.0)
+                                {
+                                    _712 = precise::max(_705, 9.9999999392252902907785028219223e-09);
+                                }
+                                else
+                                {
+                                    _712 = precise::min(_705, -9.9999999392252902907785028219223e-09);
+                                }
+                                float _713 = _694.z;
+                                float _720;
+                                if (_713 >= 0.0)
+                                {
+                                    _720 = precise::max(_713, 9.9999999392252902907785028219223e-09);
+                                }
+                                else
+                                {
+                                    _720 = precise::min(_713, -9.9999999392252902907785028219223e-09);
+                                }
+                                float3 _722 = float3(1.0) / float3(_704, _712, _720);
+                                bool _881;
+                                if (MioPanRtMaskUniforms.uRtFlags.y > 0)
+                                {
+                                    bool _879;
+                                    do
+                                    {
+                                        bool _732;
+                                        uint _735;
+                                        bool _737;
+                                        uint _739;
+                                        bool _876;
+                                        bool _877;
+                                        bool _731 = _662;
+                                        uint _734 = 0u;
+                                        bool _736 = false;
+                                        uint _738 = 0u;
+                                        uint _740 = 0u;
+                                        for (;;)
+                                        {
+                                            if (_740 < 4096u)
+                                            {
+                                                uint _745 = _738 * 2u;
+                                                uint _748 = _745 + 1u;
+                                                float3 _754 = (uRtStaticNodes._m0[_745].xyz - _245) * _722;
+                                                float3 _756 = (uRtStaticNodes._m0[_748].xyz - _245) * _722;
+                                                float3 _757 = precise::min(_754, _756);
+                                                float3 _758 = precise::max(_754, _756);
+                                                bool _868;
+                                                bool _869;
+                                                if (precise::max(precise::max(_757.x, _757.y), precise::max(_757.z, 0.0)) <= precise::min(precise::min(_758.x, _758.y), precise::min(_758.z, _689)))
+                                                {
+                                                    uint _775 = as_type<uint>(uRtStaticNodes._m0[_745].w);
+                                                    uint _777 = as_type<uint>(uRtStaticNodes._m0[_748].w);
+                                                    if (_777 == 0u)
+                                                    {
+                                                        uint _787;
+                                                        if (_734 < 32u)
+                                                        {
+                                                            _110[_734] = _775 + 1u;
+                                                            _787 = _734 + 1u;
+                                                        }
+                                                        else
+                                                        {
+                                                            _787 = _734;
+                                                        }
+                                                        _732 = _731;
+                                                        _735 = _787;
+                                                        _737 = _736;
+                                                        _739 = _775;
+                                                        uint _741 = _740 + 1u;
+                                                        _731 = _732;
+                                                        _734 = _735;
+                                                        _736 = _737;
+                                                        _738 = _739;
+                                                        _740 = _741;
+                                                        continue;
+                                                    }
+                                                    bool _865;
+                                                    bool _866;
+                                                    uint _789 = 0u;
+                                                    for (;;)
+                                                    {
+                                                        if (_789 < _777)
+                                                        {
+                                                            uint _796 = (_775 + _789) * 3u;
+                                                            bool _810;
+                                                            if ((uint(uRtStaticTris._m0[_796].w + 0.5) & 2u) == 0u)
+                                                            {
+                                                                _810 = (MioPanRtMaskUniforms.uRtFlags.x & 32) != 0;
+                                                            }
+                                                            else
+                                                            {
+                                                                _810 = true;
+                                                            }
+                                                            bool _862;
+                                                            do
+                                                            {
+                                                                float3 _822 = cross(_694, uRtStaticTris._m0[_796 + 2u].xyz);
+                                                                float _823 = dot(uRtStaticTris._m0[_796 + 1u].xyz, _822);
+                                                                bool _830;
+                                                                if (_810)
+                                                                {
+                                                                    _830 = abs(_823) < 9.9999999600419720025001879548654e-13;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _830 = _823 > (-9.9999999600419720025001879548654e-13);
+                                                                }
+                                                                if (_830)
+                                                                {
+                                                                    _862 = false;
+                                                                    break;
+                                                                }
+                                                                float _833 = 1.0 / _823;
+                                                                float3 _834 = _245 - uRtStaticTris._m0[_796].xyz;
+                                                                float _836 = dot(_834, _822) * _833;
+                                                                bool _841;
+                                                                if ((isunordered(_836, 0.0) || _836 >= 0.0))
+                                                                {
+                                                                    _841 = _836 > 1.0;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _841 = true;
+                                                                }
+                                                                if (_841)
+                                                                {
+                                                                    _862 = false;
+                                                                    break;
+                                                                }
+                                                                float3 _844 = cross(_834, uRtStaticTris._m0[_796 + 1u].xyz);
+                                                                float _846 = dot(_694, _844) * _833;
+                                                                bool _852;
+                                                                if ((isunordered(_846, 0.0) || _846 >= 0.0))
+                                                                {
+                                                                    _852 = (_836 + _846) > 1.0;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _852 = true;
+                                                                }
+                                                                if (_852)
+                                                                {
+                                                                    _862 = false;
+                                                                    break;
+                                                                }
+                                                                float _856 = dot(uRtStaticTris._m0[_796 + 2u].xyz, _844) * _833;
+                                                                bool _861;
+                                                                if (_856 > 0.0)
+                                                                {
+                                                                    _861 = _856 < _689;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _861 = false;
+                                                                }
+                                                                _862 = _861;
+                                                                break;
+                                                            } while(false);
+                                                            if (_862)
+                                                            {
+                                                                _865 = true;
+                                                                _866 = true;
+                                                                break;
+                                                            }
+                                                            _789++;
+                                                            continue;
+                                                        }
+                                                        else
+                                                        {
+                                                            _865 = _731;
+                                                            _866 = _736;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (_866)
+                                                    {
+                                                        _876 = _865;
+                                                        _877 = _866;
+                                                        break;
+                                                    }
+                                                    _868 = _865;
+                                                    _869 = _866;
+                                                }
+                                                else
+                                                {
+                                                    _868 = _731;
+                                                    _869 = _736;
+                                                }
+                                                if (_734 == 0u)
+                                                {
+                                                    _876 = _868;
+                                                    _877 = _869;
+                                                    break;
+                                                }
+                                                uint _873 = _734 - 1u;
+                                                _732 = _868;
+                                                _735 = _873;
+                                                _737 = _869;
+                                                _739 = _110[_873];
+                                                uint _741 = _740 + 1u;
+                                                _731 = _732;
+                                                _734 = _735;
+                                                _736 = _737;
+                                                _738 = _739;
+                                                _740 = _741;
+                                                continue;
+                                            }
+                                            else
+                                            {
+                                                _876 = _731;
+                                                _877 = _736;
+                                                break;
+                                            }
+                                        }
+                                        if (_877)
+                                        {
+                                            _879 = _876;
+                                            break;
+                                        }
+                                        _879 = false;
+                                        break;
+                                    } while(false);
+                                    _880 = _879;
+                                    _881 = _879;
+                                }
+                                else
+                                {
+                                    _880 = _662;
+                                    _881 = false;
+                                }
+                                if (_881)
+                                {
+                                    _1052 = _659;
+                                    _1053 = true;
+                                    break;
+                                }
+                                bool _1048;
+                                bool _1049;
+                                if (MioPanRtMaskUniforms.uRtFlags.z > 0)
+                                {
+                                    bool _1047;
+                                    do
+                                    {
+                                        bool _893;
+                                        uint _896;
+                                        bool _898;
+                                        uint _900;
+                                        bool _1044;
+                                        bool _1045;
+                                        bool _892 = _659;
+                                        uint _895 = 0u;
+                                        bool _897 = false;
+                                        uint _899 = 0u;
+                                        uint _901 = 0u;
+                                        for (;;)
+                                        {
+                                            if (_901 < 4096u)
+                                            {
+                                                uint _906 = _899 * 2u;
+                                                uint _909 = _906 + 1u;
+                                                float3 _915 = (uRtDynamicNodes._m0[_906].xyz - _245) * _722;
+                                                float3 _917 = (uRtDynamicNodes._m0[_909].xyz - _245) * _722;
+                                                float3 _918 = precise::min(_915, _917);
+                                                float3 _919 = precise::max(_915, _917);
+                                                bool _1036;
+                                                bool _1037;
+                                                if (precise::max(precise::max(_918.x, _918.y), precise::max(_918.z, 0.0)) <= precise::min(precise::min(_919.x, _919.y), precise::min(_919.z, _689)))
+                                                {
+                                                    uint _936 = as_type<uint>(uRtDynamicNodes._m0[_906].w);
+                                                    uint _938 = as_type<uint>(uRtDynamicNodes._m0[_909].w);
+                                                    if (_938 == 0u)
+                                                    {
+                                                        uint _948;
+                                                        if (_895 < 32u)
+                                                        {
+                                                            _109[_895] = _936 + 1u;
+                                                            _948 = _895 + 1u;
+                                                        }
+                                                        else
+                                                        {
+                                                            _948 = _895;
+                                                        }
+                                                        _893 = _892;
+                                                        _896 = _948;
+                                                        _898 = _897;
+                                                        _900 = _936;
+                                                        uint _902 = _901 + 1u;
+                                                        _892 = _893;
+                                                        _895 = _896;
+                                                        _897 = _898;
+                                                        _899 = _900;
+                                                        _901 = _902;
+                                                        continue;
+                                                    }
+                                                    bool _1033;
+                                                    bool _1034;
+                                                    uint _950 = 0u;
+                                                    for (;;)
+                                                    {
+                                                        if (_950 < _938)
+                                                        {
+                                                            uint _956 = _936 + _950;
+                                                            uint _957 = _956 * 3u;
+                                                            uint _962 = uint(uRtDynamicTris._m0[_957].w + 0.5);
+                                                            bool _967;
+                                                            if (_258)
+                                                            {
+                                                                _967 = (_962 & 1u) != 0u;
+                                                            }
+                                                            else
+                                                            {
+                                                                _967 = false;
+                                                            }
+                                                            if (_967)
+                                                            {
+                                                                uint _951 = _950 + 1u;
+                                                                _950 = _951;
+                                                                continue;
+                                                            }
+                                                            bool _978;
+                                                            if ((_962 & 2u) == 0u)
+                                                            {
+                                                                _978 = (MioPanRtMaskUniforms.uRtFlags.x & 32) != 0;
+                                                            }
+                                                            else
+                                                            {
+                                                                _978 = true;
+                                                            }
+                                                            bool _1030;
+                                                            do
+                                                            {
+                                                                float3 _990 = cross(_694, uRtDynamicTris._m0[_957 + 2u].xyz);
+                                                                float _991 = dot(uRtDynamicTris._m0[_957 + 1u].xyz, _990);
+                                                                bool _998;
+                                                                if (_978)
+                                                                {
+                                                                    _998 = abs(_991) < 9.9999999600419720025001879548654e-13;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _998 = _991 > (-9.9999999600419720025001879548654e-13);
+                                                                }
+                                                                if (_998)
+                                                                {
+                                                                    _1030 = false;
+                                                                    break;
+                                                                }
+                                                                float _1001 = 1.0 / _991;
+                                                                float3 _1002 = _245 - uRtDynamicTris._m0[_957].xyz;
+                                                                float _1004 = dot(_1002, _990) * _1001;
+                                                                bool _1009;
+                                                                if ((isunordered(_1004, 0.0) || _1004 >= 0.0))
+                                                                {
+                                                                    _1009 = _1004 > 1.0;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _1009 = true;
+                                                                }
+                                                                if (_1009)
+                                                                {
+                                                                    _1030 = false;
+                                                                    break;
+                                                                }
+                                                                float3 _1012 = cross(_1002, uRtDynamicTris._m0[_957 + 1u].xyz);
+                                                                float _1014 = dot(_694, _1012) * _1001;
+                                                                bool _1020;
+                                                                if ((isunordered(_1014, 0.0) || _1014 >= 0.0))
+                                                                {
+                                                                    _1020 = (_1004 + _1014) > 1.0;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _1020 = true;
+                                                                }
+                                                                if (_1020)
+                                                                {
+                                                                    _1030 = false;
+                                                                    break;
+                                                                }
+                                                                float _1024 = dot(uRtDynamicTris._m0[_957 + 2u].xyz, _1012) * _1001;
+                                                                bool _1029;
+                                                                if (_1024 > 0.0)
+                                                                {
+                                                                    _1029 = _1024 < _689;
+                                                                }
+                                                                else
+                                                                {
+                                                                    _1029 = false;
+                                                                }
+                                                                _1030 = _1029;
+                                                                break;
+                                                            } while(false);
+                                                            if (_1030)
+                                                            {
+                                                                _1033 = true;
+                                                                _1034 = true;
+                                                                break;
+                                                            }
+                                                            uint _951 = _950 + 1u;
+                                                            _950 = _951;
+                                                            continue;
+                                                        }
+                                                        else
+                                                        {
+                                                            _1033 = _892;
+                                                            _1034 = _897;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (_1034)
+                                                    {
+                                                        _1044 = _1033;
+                                                        _1045 = _1034;
+                                                        break;
+                                                    }
+                                                    _1036 = _1033;
+                                                    _1037 = _1034;
+                                                }
+                                                else
+                                                {
+                                                    _1036 = _892;
+                                                    _1037 = _897;
+                                                }
+                                                if (_895 == 0u)
+                                                {
+                                                    _1044 = _1036;
+                                                    _1045 = _1037;
+                                                    break;
+                                                }
+                                                uint _1041 = _895 - 1u;
+                                                _893 = _1036;
+                                                _896 = _1041;
+                                                _898 = _1037;
+                                                _900 = _109[_1041];
+                                                uint _902 = _901 + 1u;
+                                                _892 = _893;
+                                                _895 = _896;
+                                                _897 = _898;
+                                                _899 = _900;
+                                                _901 = _902;
+                                                continue;
+                                            }
+                                            else
+                                            {
+                                                _1044 = _892;
+                                                _1045 = _897;
+                                                break;
+                                            }
+                                        }
+                                        if (_1045)
+                                        {
+                                            _1047 = _1044;
+                                            break;
+                                        }
+                                        _1047 = false;
+                                        break;
+                                    } while(false);
+                                    _1048 = _1047;
+                                    _1049 = _1047;
+                                }
+                                else
+                                {
+                                    _1048 = _659;
+                                    _1049 = false;
+                                }
+                                if (_1049)
+                                {
+                                    _1052 = _1048;
+                                    _1053 = true;
+                                    break;
+                                }
+                                _1052 = _1048;
+                                _1053 = false;
+                                break;
+                            } while(false);
+                            _660 = _1052;
+                            _663 = _880;
+                            _1055 = !_1053;
+                        }
+                        else
+                        {
+                            _660 = _659;
+                            _663 = _662;
+                            _1055 = true;
+                        }
+                        if (_1055)
+                        {
+                            _665 = _664 + 1.0;
+                        }
+                        else
+                        {
+                            _665 = _664;
+                        }
+                    }
+                    _1061 = _197;
+                    _1062 = _200;
+                    _1063 = _659;
+                    _1064 = _662;
+                    _1065 = _664 / float(_260);
+                    break;
+                } while(false);
+                _1066 = _1061;
+                _1067 = _1062;
+                _1068 = _1063;
+                _1069 = _1064;
+                _1070 = _1065;
+            }
+            else
+            {
+                _1066 = _197;
+                _1067 = _200;
+                _1068 = _202;
+                _1069 = _204;
+                _1070 = 1.0;
+            }
+            float _1076;
+            if (_176)
+            {
+                _1076 = MioPanRtMaskUniforms.uMaskBlend[_217];
+            }
+            else
+            {
+                _1076 = 1.0;
+            }
+            _114[_217] = mix(_113[_217], _1070, _1076);
+            _198 = _1066;
+            _201 = _1067;
+            _203 = _1068;
+            _205 = _1069;
+        }
+        uMaskOut.write(_114, uint2(gl_GlobalInvocationID.xy));
+        float4 _1548;
+        if (MioPanRtMaskUniforms.uMaskAo.x > 0.0)
+        {
+            bool _1093;
+            if (_176)
+            {
+                _1093 = MioPanRtMaskUniforms.uMaskAo.w > 0.0;
+            }
+            else
+            {
+                _1093 = false;
+            }
+            float4 _1099;
+            if (_1093)
+            {
+                _1099 = uAoHistory.read(uint2(_140), 0);
+            }
+            else
+            {
+                _1099 = float4(1.0, 0.0, 0.0, 0.0);
+            }
+            int _1109;
+            if (_1093)
+            {
+                _1109 = int(MioPanRtMaskUniforms.uMaskAo.y);
+            }
+            else
+            {
+                _1109 = int(MioPanRtMaskUniforms.uMaskAo.z);
+            }
+            float3 _1113 = _150 + (_154 * MioPanRtMaskUniforms.uRtParams.x);
+            float3 _1120 = fast::normalize(cross(select(float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), bool3(abs(_154.y) < 0.9900000095367431640625)), _154));
+            float3 _1121 = cross(_154, _1120);
+            float2 _1125 = (_192 + float2(17.0, 59.0)) + float2(5.588237762451171875 * _195);
+            float _1130 = fract(52.98291778564453125 * fract(dot(_1125, float2(0.067110560834407806396484375, 0.005837149918079376220703125)))) * 6.283185482025146484375;
+            float _1136 = fract(52.98291778564453125 * fract(dot(_1125.yx + float2(37.0, 11.0), float2(0.067110560834407806396484375, 0.005837149918079376220703125))));
+            int _1137 = clamp(_1109, 1, 16);
+            float _1144;
+            _1144 = 0.0;
+            spvUnsafeArray<uint, 32> _107;
+            spvUnsafeArray<uint, 32> _108;
+            bool _1140;
+            bool _1143;
+            float _1145;
+            bool _1139;
+            bool _1142;
+            for (int _1146 = 0; _1146 < _1137; _1139 = _1140, _1142 = _1143, _1144 = _1145, _1146++)
+            {
+                float _1151 = float(_1146);
+                float _1157 = (_1151 * 2.3999631404876708984375) + _1130;
+                float2 _1161 = float2(cos(_1157), sin(_1157)) * sqrt((_1151 + _1136) / float(_1137));
+                float3 _1172 = ((_1120 * _1161.x) + (_1121 * _1161.y)) + (_154 * sqrt(precise::max(1.0 - dot(_1161, _1161), 0.0)));
+                bool _1528;
+                do
+                {
+                    float _1175 = _1172.x;
+                    float _1182;
+                    if (_1175 >= 0.0)
+                    {
+                        _1182 = precise::max(_1175, 9.9999999392252902907785028219223e-09);
+                    }
+                    else
+                    {
+                        _1182 = precise::min(_1175, -9.9999999392252902907785028219223e-09);
+                    }
+                    float _1183 = _1172.y;
+                    float _1190;
+                    if (_1183 >= 0.0)
+                    {
+                        _1190 = precise::max(_1183, 9.9999999392252902907785028219223e-09);
+                    }
+                    else
+                    {
+                        _1190 = precise::min(_1183, -9.9999999392252902907785028219223e-09);
+                    }
+                    float _1191 = _1172.z;
+                    float _1198;
+                    if (_1191 >= 0.0)
+                    {
+                        _1198 = precise::max(_1191, 9.9999999392252902907785028219223e-09);
+                    }
+                    else
+                    {
+                        _1198 = precise::min(_1191, -9.9999999392252902907785028219223e-09);
+                    }
+                    float3 _1200 = float3(1.0) / float3(_1182, _1190, _1198);
+                    bool _1361;
+                    if (MioPanRtMaskUniforms.uRtFlags.y > 0)
+                    {
+                        bool _1360;
+                        do
+                        {
+                            bool _1210;
+                            uint _1213;
+                            bool _1215;
+                            uint _1217;
+                            bool _1357;
+                            bool _1358;
+                            bool _1209 = _1142;
+                            uint _1212 = 0u;
+                            bool _1214 = false;
+                            uint _1216 = 0u;
+                            uint _1218 = 0u;
+                            for (;;)
+                            {
+                                if (_1218 < 4096u)
+                                {
+                                    uint _1223 = _1216 * 2u;
+                                    uint _1226 = _1223 + 1u;
+                                    float3 _1232 = (uRtStaticNodes._m0[_1223].xyz - _1113) * _1200;
+                                    float3 _1234 = (uRtStaticNodes._m0[_1226].xyz - _1113) * _1200;
+                                    float3 _1235 = precise::min(_1232, _1234);
+                                    float3 _1236 = precise::max(_1232, _1234);
+                                    bool _1349;
+                                    bool _1350;
+                                    if (precise::max(precise::max(_1235.x, _1235.y), precise::max(_1235.z, 0.0)) <= precise::min(precise::min(_1236.x, _1236.y), precise::min(_1236.z, MioPanRtMaskUniforms.uMaskAo.x)))
+                                    {
+                                        uint _1253 = as_type<uint>(uRtStaticNodes._m0[_1223].w);
+                                        uint _1255 = as_type<uint>(uRtStaticNodes._m0[_1226].w);
+                                        if (_1255 == 0u)
+                                        {
+                                            uint _1265;
+                                            if (_1212 < 32u)
+                                            {
+                                                _108[_1212] = _1253 + 1u;
+                                                _1265 = _1212 + 1u;
+                                            }
+                                            else
+                                            {
+                                                _1265 = _1212;
+                                            }
+                                            _1210 = _1209;
+                                            _1213 = _1265;
+                                            _1215 = _1214;
+                                            _1217 = _1253;
+                                            uint _1219 = _1218 + 1u;
+                                            _1209 = _1210;
+                                            _1212 = _1213;
+                                            _1214 = _1215;
+                                            _1216 = _1217;
+                                            _1218 = _1219;
+                                            continue;
+                                        }
+                                        bool _1346;
+                                        bool _1347;
+                                        uint _1267 = 0u;
+                                        for (;;)
+                                        {
+                                            if (_1267 < _1255)
+                                            {
+                                                uint _1273 = _1253 + _1267;
+                                                uint _1274 = _1273 * 3u;
+                                                uint _1279 = uint(uRtStaticTris._m0[_1274].w + 0.5);
+                                                if ((_1279 & 4u) != 0u)
+                                                {
+                                                    if (fract(sin(dot(_1172, float3(12.98980045318603515625, 78.233001708984375, 37.71900177001953125)) + (float(_1273) * 0.61803400516510009765625)) * 43758.546875) >= (float(_1279 >> 4u) * 0.066666670143604278564453125))
+                                                    {
+                                                        uint _1268 = _1267 + 1u;
+                                                        _1267 = _1268;
+                                                        continue;
+                                                    }
+                                                }
+                                                bool _1343;
+                                                do
+                                                {
+                                                    float3 _1308 = cross(_1172, uRtStaticTris._m0[_1274 + 2u].xyz);
+                                                    float _1309 = dot(uRtStaticTris._m0[_1274 + 1u].xyz, _1308);
+                                                    if (abs(_1309) < 9.9999999600419720025001879548654e-13)
+                                                    {
+                                                        _1343 = false;
+                                                        break;
+                                                    }
+                                                    float _1314 = 1.0 / _1309;
+                                                    float3 _1315 = _1113 - uRtStaticTris._m0[_1274].xyz;
+                                                    float _1317 = dot(_1315, _1308) * _1314;
+                                                    bool _1322;
+                                                    if ((isunordered(_1317, 0.0) || _1317 >= 0.0))
+                                                    {
+                                                        _1322 = _1317 > 1.0;
+                                                    }
+                                                    else
+                                                    {
+                                                        _1322 = true;
+                                                    }
+                                                    if (_1322)
+                                                    {
+                                                        _1343 = false;
+                                                        break;
+                                                    }
+                                                    float3 _1325 = cross(_1315, uRtStaticTris._m0[_1274 + 1u].xyz);
+                                                    float _1327 = dot(_1172, _1325) * _1314;
+                                                    bool _1333;
+                                                    if ((isunordered(_1327, 0.0) || _1327 >= 0.0))
+                                                    {
+                                                        _1333 = (_1317 + _1327) > 1.0;
+                                                    }
+                                                    else
+                                                    {
+                                                        _1333 = true;
+                                                    }
+                                                    if (_1333)
+                                                    {
+                                                        _1343 = false;
+                                                        break;
+                                                    }
+                                                    float _1337 = dot(uRtStaticTris._m0[_1274 + 2u].xyz, _1325) * _1314;
+                                                    bool _1342;
+                                                    if (_1337 > 0.0)
+                                                    {
+                                                        _1342 = _1337 < MioPanRtMaskUniforms.uMaskAo.x;
+                                                    }
+                                                    else
+                                                    {
+                                                        _1342 = false;
+                                                    }
+                                                    _1343 = _1342;
+                                                    break;
+                                                } while(false);
+                                                if (_1343)
+                                                {
+                                                    _1346 = true;
+                                                    _1347 = true;
+                                                    break;
+                                                }
+                                                uint _1268 = _1267 + 1u;
+                                                _1267 = _1268;
+                                                continue;
+                                            }
+                                            else
+                                            {
+                                                _1346 = _1209;
+                                                _1347 = _1214;
+                                                break;
+                                            }
+                                        }
+                                        if (_1347)
+                                        {
+                                            _1357 = _1346;
+                                            _1358 = _1347;
+                                            break;
+                                        }
+                                        _1349 = _1346;
+                                        _1350 = _1347;
+                                    }
+                                    else
+                                    {
+                                        _1349 = _1209;
+                                        _1350 = _1214;
+                                    }
+                                    if (_1212 == 0u)
+                                    {
+                                        _1357 = _1349;
+                                        _1358 = _1350;
+                                        break;
+                                    }
+                                    uint _1354 = _1212 - 1u;
+                                    _1210 = _1349;
+                                    _1213 = _1354;
+                                    _1215 = _1350;
+                                    _1217 = _108[_1354];
+                                    uint _1219 = _1218 + 1u;
+                                    _1209 = _1210;
+                                    _1212 = _1213;
+                                    _1214 = _1215;
+                                    _1216 = _1217;
+                                    _1218 = _1219;
+                                    continue;
+                                }
+                                else
+                                {
+                                    _1357 = _1209;
+                                    _1358 = _1214;
+                                    break;
+                                }
+                            }
+                            if (_1358)
+                            {
+                                _1360 = _1357;
+                                break;
+                            }
+                            _1360 = false;
+                            break;
+                        } while(false);
+                        _1143 = _1360;
+                        _1361 = _1360;
+                    }
+                    else
+                    {
+                        _1143 = _1142;
+                        _1361 = false;
+                    }
+                    if (_1361)
+                    {
+                        _1140 = _1139;
+                        _1528 = true;
+                        break;
+                    }
+                    bool _1524;
+                    bool _1525;
+                    if (MioPanRtMaskUniforms.uRtFlags.z > 0)
+                    {
+                        bool _1523;
+                        do
+                        {
+                            bool _1373;
+                            uint _1376;
+                            bool _1378;
+                            uint _1380;
+                            bool _1520;
+                            bool _1521;
+                            bool _1372 = _1139;
+                            uint _1375 = 0u;
+                            bool _1377 = false;
+                            uint _1379 = 0u;
+                            uint _1381 = 0u;
+                            for (;;)
+                            {
+                                if (_1381 < 4096u)
+                                {
+                                    uint _1386 = _1379 * 2u;
+                                    uint _1389 = _1386 + 1u;
+                                    float3 _1395 = (uRtDynamicNodes._m0[_1386].xyz - _1113) * _1200;
+                                    float3 _1397 = (uRtDynamicNodes._m0[_1389].xyz - _1113) * _1200;
+                                    float3 _1398 = precise::min(_1395, _1397);
+                                    float3 _1399 = precise::max(_1395, _1397);
+                                    bool _1512;
+                                    bool _1513;
+                                    if (precise::max(precise::max(_1398.x, _1398.y), precise::max(_1398.z, 0.0)) <= precise::min(precise::min(_1399.x, _1399.y), precise::min(_1399.z, MioPanRtMaskUniforms.uMaskAo.x)))
+                                    {
+                                        uint _1416 = as_type<uint>(uRtDynamicNodes._m0[_1386].w);
+                                        uint _1418 = as_type<uint>(uRtDynamicNodes._m0[_1389].w);
+                                        if (_1418 == 0u)
+                                        {
+                                            uint _1428;
+                                            if (_1375 < 32u)
+                                            {
+                                                _107[_1375] = _1416 + 1u;
+                                                _1428 = _1375 + 1u;
+                                            }
+                                            else
+                                            {
+                                                _1428 = _1375;
+                                            }
+                                            _1373 = _1372;
+                                            _1376 = _1428;
+                                            _1378 = _1377;
+                                            _1380 = _1416;
+                                            uint _1382 = _1381 + 1u;
+                                            _1372 = _1373;
+                                            _1375 = _1376;
+                                            _1377 = _1378;
+                                            _1379 = _1380;
+                                            _1381 = _1382;
+                                            continue;
+                                        }
+                                        bool _1509;
+                                        bool _1510;
+                                        uint _1430 = 0u;
+                                        for (;;)
+                                        {
+                                            if (_1430 < _1418)
+                                            {
+                                                uint _1436 = _1416 + _1430;
+                                                uint _1437 = _1436 * 3u;
+                                                uint _1442 = uint(uRtDynamicTris._m0[_1437].w + 0.5);
+                                                if ((_1442 & 4u) != 0u)
+                                                {
+                                                    if (fract(sin(dot(_1172, float3(12.98980045318603515625, 78.233001708984375, 37.71900177001953125)) + (float(_1436) * 0.61803400516510009765625)) * 43758.546875) >= (float(_1442 >> 4u) * 0.066666670143604278564453125))
+                                                    {
+                                                        uint _1431 = _1430 + 1u;
+                                                        _1430 = _1431;
+                                                        continue;
+                                                    }
+                                                }
+                                                bool _1506;
+                                                do
+                                                {
+                                                    float3 _1471 = cross(_1172, uRtDynamicTris._m0[_1437 + 2u].xyz);
+                                                    float _1472 = dot(uRtDynamicTris._m0[_1437 + 1u].xyz, _1471);
+                                                    if (abs(_1472) < 9.9999999600419720025001879548654e-13)
+                                                    {
+                                                        _1506 = false;
+                                                        break;
+                                                    }
+                                                    float _1477 = 1.0 / _1472;
+                                                    float3 _1478 = _1113 - uRtDynamicTris._m0[_1437].xyz;
+                                                    float _1480 = dot(_1478, _1471) * _1477;
+                                                    bool _1485;
+                                                    if ((isunordered(_1480, 0.0) || _1480 >= 0.0))
+                                                    {
+                                                        _1485 = _1480 > 1.0;
+                                                    }
+                                                    else
+                                                    {
+                                                        _1485 = true;
+                                                    }
+                                                    if (_1485)
+                                                    {
+                                                        _1506 = false;
+                                                        break;
+                                                    }
+                                                    float3 _1488 = cross(_1478, uRtDynamicTris._m0[_1437 + 1u].xyz);
+                                                    float _1490 = dot(_1172, _1488) * _1477;
+                                                    bool _1496;
+                                                    if ((isunordered(_1490, 0.0) || _1490 >= 0.0))
+                                                    {
+                                                        _1496 = (_1480 + _1490) > 1.0;
+                                                    }
+                                                    else
+                                                    {
+                                                        _1496 = true;
+                                                    }
+                                                    if (_1496)
+                                                    {
+                                                        _1506 = false;
+                                                        break;
+                                                    }
+                                                    float _1500 = dot(uRtDynamicTris._m0[_1437 + 2u].xyz, _1488) * _1477;
+                                                    bool _1505;
+                                                    if (_1500 > 0.0)
+                                                    {
+                                                        _1505 = _1500 < MioPanRtMaskUniforms.uMaskAo.x;
+                                                    }
+                                                    else
+                                                    {
+                                                        _1505 = false;
+                                                    }
+                                                    _1506 = _1505;
+                                                    break;
+                                                } while(false);
+                                                if (_1506)
+                                                {
+                                                    _1509 = true;
+                                                    _1510 = true;
+                                                    break;
+                                                }
+                                                uint _1431 = _1430 + 1u;
+                                                _1430 = _1431;
+                                                continue;
+                                            }
+                                            else
+                                            {
+                                                _1509 = _1372;
+                                                _1510 = _1377;
+                                                break;
+                                            }
+                                        }
+                                        if (_1510)
+                                        {
+                                            _1520 = _1509;
+                                            _1521 = _1510;
+                                            break;
+                                        }
+                                        _1512 = _1509;
+                                        _1513 = _1510;
+                                    }
+                                    else
+                                    {
+                                        _1512 = _1372;
+                                        _1513 = _1377;
+                                    }
+                                    if (_1375 == 0u)
+                                    {
+                                        _1520 = _1512;
+                                        _1521 = _1513;
+                                        break;
+                                    }
+                                    uint _1517 = _1375 - 1u;
+                                    _1373 = _1512;
+                                    _1376 = _1517;
+                                    _1378 = _1513;
+                                    _1380 = _107[_1517];
+                                    uint _1382 = _1381 + 1u;
+                                    _1372 = _1373;
+                                    _1375 = _1376;
+                                    _1377 = _1378;
+                                    _1379 = _1380;
+                                    _1381 = _1382;
+                                    continue;
+                                }
+                                else
+                                {
+                                    _1520 = _1372;
+                                    _1521 = _1377;
+                                    break;
+                                }
+                            }
+                            if (_1521)
+                            {
+                                _1523 = _1520;
+                                break;
+                            }
+                            _1523 = false;
+                            break;
+                        } while(false);
+                        _1524 = _1523;
+                        _1525 = _1523;
+                    }
+                    else
+                    {
+                        _1524 = _1139;
+                        _1525 = false;
+                    }
+                    if (_1525)
+                    {
+                        _1140 = _1524;
+                        _1528 = true;
+                        break;
+                    }
+                    _1140 = _1524;
+                    _1528 = false;
+                    break;
+                } while(false);
+                if (!_1528)
+                {
+                    _1145 = _1144 + 1.0;
+                }
+                else
+                {
+                    _1145 = _1144;
+                }
+            }
+            float _1543;
+            if (_1093)
+            {
+                _1543 = precise::min(_1099.y + 1.0, MioPanRtMaskUniforms.uMaskAo.w);
+            }
+            else
+            {
+                _1543 = 1.0;
+            }
+            _1548 = float4(mix(_1099.x, _1144 / float(_1137), 1.0 / _1543), _1543, 0.0, 0.0);
+        }
+        else
+        {
+            _1548 = float4(1.0, 0.0, 0.0, 0.0);
+        }
+        uAoOut.write(_1548, uint2(gl_GlobalInvocationID.xy));
+        break;
+    } while(false);
+}
+

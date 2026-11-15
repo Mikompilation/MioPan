@@ -44,6 +44,17 @@
 #define MIOPAN_VU1_TERM_SPOT        2
 #define MIOPAN_VU1_TERM_POINT       4
 
+// Ray-traced shadows (port addition, proof of concept).  Defined only by
+// mesh_spot_rt.frag; every other stage compiles exactly the kernel below with
+// the #ifdef blocks absent.  Each block scales one lane by the fraction of
+// that light the point can see -- see miopan_rt.hlsli.
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+#include "miopan_rt.hlsli"
+// World position of the point being lit, for the directional lanes, whose
+// kernel signature has none.  Set by MioPanVu1Evaluate().
+static float3 gMioPanRtPosition = float3(0.0, 0.0, 0.0);
+#endif
+
 // Field-for-field mirror of MioPanLightState (miopan_renderer.h).  Every member
 // is a float4/int4, so the struct packs identically in a cbuffer and in C.
 // Derived from GRA3DVU1LIGHTSNAPSHOT (gra3dTypes.h), which is where the VU
@@ -79,7 +90,8 @@ struct MioPanVu1LightImage
     float4 spotColSpc[MIOPAN_VU1_MAX_LANES];
     // x = SPOTBTIMES (fMaxRange * SetMaxColor255's divisor),
     // y = SPOTINTENS (cos^2 of the cone half-angle),
-    // z = SPOTINTENSB (1 / sin^2), w unused.
+    // z = SPOTINTENSB (1 / sin^2),
+    // w = 1 for Mio's flashlight (port tag; see MioPanVu1SoftCone()).
     float4 spotParams[MIOPAN_VU1_MAX_LANES];
 
     float4 pointPos[MIOPAN_VU1_MAX_LANES];
@@ -135,6 +147,21 @@ float3 MioPanVu1Directional(MioPanVu1LightImage img, float3 N)
     ns = ns * ns;
     ns = ns * ns;                       // ^8
 
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+    // dirLightDif points towards the light (the dot above is N.L).
+    [unroll] for (int k = 0; k < 3; k++)
+    {
+        float contribution = MioPanRtMax3(img.dirColDif[k].rgb * nd[k] +
+                                          img.dirColSpc[k].rgb * ns[k]);
+        float vis = MioPanRtLaneVisibility(MIOPAN_RT_DIRECTIONAL,
+                                           gMioPanRtPosition, N,
+                                           img.dirLightDif[k].xyz,
+                                           contribution, true);
+        nd[k] *= vis;
+        ns[k] *= vis;
+    }
+#endif
+
     float3 result = img.ambient.xyz;
     result += img.dirColDif[0].rgb * nd.x +
               img.dirColDif[1].rgb * nd.y +
@@ -144,6 +171,41 @@ float3 MioPanVu1Directional(MioPanVu1LightImage img, float3 N)
               img.dirColSpc[2].rgb * ns.z;
     return result;
 }
+
+#ifdef MIOPAN_VU1_SOFT_FLASHLIGHT
+// PORT ADDITION -- Mio's flashlight with a soft beam.  Per-pixel stages only
+// (mesh_spot.frag, mesh_spot_rt.frag and the shadow mask's prepass, which must
+// agree with them); the vertex path keeps the PS2 cone.
+//
+// The microcode's cone is max(cos^2 - cos^2(a), 0) / sin^2(a), which with
+// x = sin(theta) / sin(a) -- 0 on the beam's axis, 1 on its rim -- is just
+// 1 - x^2: a ramp that hits zero at the rim with a crease.  The coefficient in
+// front of it saturates over most of a lit wall, so on screen that reads as a
+// flat bright disc with a sharp edge, which is not how a torch looks.
+//
+// Two dials (uFlashlight):
+//   softness  blends that ramp into a smooth bell, 1 - smoothstep(0, R, x),
+//             whose reach R runs from 1 (the rim) to 1.5 -- flat on the axis,
+//             no crease, fading out past where the PS2 beam stopped.  At 0.5
+//             the bell carries about the PS2 beam's total light.
+//   spill     adds a faint wide halo, the light a real reflector throws
+//             outside its hotspot, out to `reach` half-angles.
+// Both 0 is exactly the PS2 cone.  Nothing behind the light's plane is lit.
+float MioPanVu1SoftCone(float coneDot, float invLen2, float4 params, float cone)
+{
+    if (params.w < 0.5 || uFlashlight.w < 0.5 || coneDot <= 0.0)
+    {
+        return cone;
+    }
+    float cos2 = min(coneDot * coneDot * invLen2, 1.0);
+    float x = sqrt(max(1.0 - cos2, 0.0) * params.z);
+    float softness = saturate(uFlashlight.x);
+    float bell = 1.0 - smoothstep(0.0, 1.0 + 0.5 * softness, x);
+    float spill = uFlashlight.y *
+                  (1.0 - smoothstep(0.0, max(uFlashlight.z, 1.0), x));
+    return lerp(cone, bell, saturate(softness * 2.0)) + spill;
+}
+#endif
 
 // spot: CalcIntens 0x018-0x208, once per live lane.
 //
@@ -180,10 +242,26 @@ float3 MioPanVu1Spot(MioPanVu1LightImage img, float3 P, float3 N)
         float coneDot = max(-dot(img.spotDir[i].xyz, L), 0.0);
         float cone = max(coneDot * coneDot * invLen2 - img.spotParams[i].y,
                          0.0) * img.spotParams[i].z;
+#ifdef MIOPAN_VU1_SOFT_FLASHLIGHT
+        cone = MioPanVu1SoftCone(coneDot, invLen2, img.spotParams[i], cone);
+#endif
 
         // The coefficient is capped BEFORE the cone multiplies it, and the
         // cone itself is never capped (VU: MINIw at 0x178, then MUL at 0x1b0).
         float c = MioPanVu1Coefficient(N, L, invLen2, img.spotParams[i].x);
+
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+        // Both spot terms carry `cone`, so scaling it shadows the lane whole.
+        {
+            float e8 = c * c;
+            e8 = e8 * e8;
+            e8 = e8 * e8;
+            float contribution = MioPanRtMax3(img.spotColDif[i].rgb * (c * cone) +
+                                              img.spotColSpc[i].rgb * (cone * e8));
+            cone *= MioPanRtLaneVisibility(MIOPAN_RT_SPOT, P, N, L,
+                                           contribution, false);
+        }
+#endif
 
         result += img.spotColDif[i].rgb * (c * cone);
 
@@ -234,6 +312,19 @@ float3 MioPanVu1Point(MioPanVu1LightImage img, float3 P, float3 N)
         float c = min(max(dot(N, Ldot), 0.0) * img.pointParams[i].x * invLen2,
                       1.0);
 
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+        // The ray goes to where the light actually is -- L, not the ROM-bug
+        // Ldot, which only ever fed the dot product.
+        {
+            float e4 = c * c;
+            e4 = e4 * e4;
+            float3 lane = img.pointColDif[i].rgb * c + img.pointColSpc[i].rgb * e4;
+            result += lane * MioPanRtLaneVisibility(MIOPAN_RT_POINT, P, N, L,
+                                                    MioPanRtMax3(lane), false);
+            continue;
+        }
+#endif
+
         result += img.pointColDif[i].rgb * c;
 
         // Point specular is the coefficient to the FOURTH -- two squarings in
@@ -268,10 +359,21 @@ float3 MioPanVu1Evaluate(MioPanVu1LightImage img, float3 P, float3 N,
 {
     float3 result = seed255;
 
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+    gMioPanRtPosition = P;
+#endif
+
     if ((terms & MIOPAN_VU1_TERM_DIRECTIONAL) != 0)
     {
         result += MioPanVu1Directional(img, N);
     }
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+    // Ambient occlusion (port addition): everything so far -- the prelight
+    // bake, the ambient term and the three fill lights -- is light from all
+    // round, so it is what a crease or a corner hides.  The spot and point
+    // lanes below keep their own ray-traced shadows instead.
+    result *= gMioPanRtAo;
+#endif
     if ((terms & MIOPAN_VU1_TERM_SPOT) != 0 && (img.config.x & 1) != 0)
     {
         result += MioPanVu1Spot(img, P, N);

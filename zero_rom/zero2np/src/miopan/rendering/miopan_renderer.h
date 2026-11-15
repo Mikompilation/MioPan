@@ -571,6 +571,161 @@ enum
 int  MioPan_RendererGetLightingMode(void);
 void MioPan_RendererSetLightingMode(int mode);
 
+/* Ray-traced shadows -- a proof of concept, and a port addition.
+ *
+ * Every spot and point light (and optionally directional) the per-pixel VU1
+ * kernel evaluates is multiplied by whether the pixel can see it, found by a
+ * shadow ray through a BVH of the frame's world geometry.  The light law is
+ * untouched; only light that used to pass through walls, furniture and people
+ * stops.  Software ray tracing in the fragment shader (SDL_GPU exposes no
+ * hardware ray tracing), so it runs on any GPU the renderer does.
+ *
+ * Switching it on puts every fragment-lit draw on the FRAGMENT_ALL split
+ * whatever the lighting mode says, because a light the CPU already folded into
+ * the vertex colour cannot be shadowed.  Off by default.  Live.
+ *
+ * For now this, the flashlight beam and bounce below, and the ambient
+ * occlusion are set from the ImGui menu only: none of them is read from or
+ * saved to miopan.ini, so each run starts from the defaults here. */
+enum
+{
+    MIOPAN_RT_SPOT = 1 << 0,
+    MIOPAN_RT_POINT = 1 << 1,
+    MIOPAN_RT_DIRECTIONAL = 1 << 2,
+    /* Show the light image alone, untextured, on fragment-lit surfaces. */
+    MIOPAN_RT_DEBUG_LIGHT = 1 << 3,
+    /* Paint the rays: red where a lane was shadowed, green where lit. */
+    MIOPAN_RT_DEBUG_RAYS = 1 << 4,
+    /* Every triangle blocks light from both sides.  Off by default: the
+     * rooms place fill lights under floors and behind walls, aimed through
+     * geometry that a one-sided (shadow-map) test lets them pass. */
+    MIOPAN_RT_TWO_SIDED = 1 << 5,
+    /* Show the flashlight's bounce light alone (see
+     * MioPan_RendererSetFlashlightBounce()). */
+    MIOPAN_RT_DEBUG_BOUNCE = 1 << 6,
+    /* Show the ambient occlusion factor alone (see
+     * MioPan_RendererSetAmbientOcclusion()). */
+    MIOPAN_RT_DEBUG_AO = 1 << 7
+};
+typedef struct MioPanRayTracingSettings
+{
+    /* World units (about a millimetre).  How far a ray starts off the surface
+     * it leaves, and how far short of the light it stops -- the latter lets a
+     * light sit inside its own lantern without the lantern eclipsing it. */
+    float bias;
+    float light_offset;
+    /* Soft shadows: the light's radius, and rays per light (1 = hard). */
+    float light_radius;
+    int samples;
+    /* A lane adding less than this, in GS 0..255 units, gets no ray. */
+    float min_contribution;
+} MioPanRayTracingSettings;
+typedef struct MioPanRayTracingStats
+{
+    int static_tris;
+    int static_nodes;
+    int dynamic_tris;
+    int dynamic_nodes;
+    int instances;
+    int depth;
+    int static_builds;
+    int building;
+    float static_build_ms;
+    float dynamic_build_ms;
+    /* The whole per-frame CPU cost: gathering, the dynamic build, upload. */
+    float update_ms;
+    /* The screen-space mask: lights it holds, whether the last present used
+     * it, and how many draws its G-buffer prepass replayed. */
+    int mask_lights;
+    int mask_live;
+    int mask_draws;
+    /* The flashlight bounce: rays cast across the beam this frame, how many
+     * landed, the area lights they became, and the CPU time it took. */
+    int bounce_rays;
+    int bounce_hits;
+    int bounce_lights;
+    float bounce_ms;
+} MioPanRayTracingStats;
+void MioPan_RendererSetRayTracing(int enable);
+int  MioPan_RendererGetRayTracing(void);
+void MioPan_RendererSetRayTracingFlags(unsigned int flags);
+unsigned int MioPan_RendererGetRayTracingFlags(void);
+void MioPan_RendererSetRayTracingSettings(const MioPanRayTracingSettings *settings);
+void MioPan_RendererGetRayTracingSettings(MioPanRayTracingSettings *settings);
+void MioPan_RendererGetRayTracingStats(MioPanRayTracingStats *stats);
+/* The screen-space shadow mask: Mio's light and the three lights brightest
+ * near her are traced once per visible pixel in a compute pass and averaged
+ * over frames -- soft, and far cheaper than tracing per fragment -- and every
+ * other light is traced per fragment as before.  On by default; off traces
+ * everything per fragment.  Live. */
+void MioPan_RendererSetRayTracingMask(int enable);
+int  MioPan_RendererGetRayTracingMask(void);
+/* Ray-traced ambient occlusion: a few short rays over the hemisphere at every
+ * visible fragment-lit pixel, in the shadow mask's compute pass and averaged
+ * over frames like it.  The fraction that get out scales the light that comes
+ * from all round -- the prelight bake, the ambient term and the three fill
+ * lights, and the flashlight's bounce -- so corners, creases and the floor
+ * under things darken; the spot and point lights keep their own shadows.
+ *
+ * Applied as a fraction of linear light: `strength` 1 is the physical amount,
+ * higher deepens it (2.2 is multiplying the GS colour outright), 0 is off.
+ * `radius` is how far a ray looks, in world units (about 2 mm each).  Runs
+ * whether or not the mask itself is switched on.  Live. */
+void MioPan_RendererSetAmbientOcclusion(float strength, float radius);
+void MioPan_RendererGetAmbientOcclusion(float *strength, float *radius);
+/* Brackets DrawGirl(): meshes queued inside belong to Mio, and never shadow a
+ * light within reach of her -- her flashlight is mounted behind her chest. */
+void MioPan_RendererRtBeginPlayer(void);
+void MioPan_RendererRtEndPlayer(void);
+
+/* Mio's flashlight beam -- a port addition.
+ *
+ * The VU1's spot cone ramps to zero exactly at the cone's rim with a crease,
+ * and the light's coefficient saturates over most of what it hits, so the
+ * flashlight reads as a flat bright disc with a hard edge.  `softness` (0..1)
+ * blends that cone into a smooth bell reaching up to half again as wide;
+ * `spill` (0..0.5) adds a faint halo around it, the light a real reflector
+ * throws outside its hotspot.  Both 0 is exactly the PS2's cone.
+ *
+ * Only Mio's flashlight (the LID_SPOT_FLASHLIGHT slot), and only where
+ * lighting is per pixel -- a FRAGMENT lighting mode, or ray-traced shadows on.
+ * The PS2 vertex path keeps the original cone.  Live. */
+void MioPan_RendererSetFlashlightBeam(float softness, float spill);
+void MioPan_RendererGetFlashlightBeam(float *softness, float *spill);
+
+/* Mio's flashlight bounce -- a port addition, riding on ray tracing.
+ *
+ * A torch in a dark room lights the whole room a little, off whatever its
+ * beam lands on.  Each frame a fixed pattern of rays is cast across the beam
+ * on the CPU, against the hierarchies the shadow rays walk; where they land,
+ * lit by the flashlight's own law, is gathered into a few small area lights
+ * that every per-pixel lit surface then receives.  The bounce is summed in
+ * linear light rather than in the GS's gamma-encoded units, so a faint
+ * bounce stays faint instead of greying the blacks.  It casts no shadows of
+ * its own, and the surfaces it leaves are taken to be neutral grey.
+ *
+ * `strength` scales how much the surfaces reflect: 1 is about 40%, a fairly
+ * dark wooden room; 0 is off.  Needs ray tracing on.  Live. */
+void  MioPan_RendererSetFlashlightBounce(float strength);
+float MioPan_RendererGetFlashlightBounce(void);
+/* How many times that light bounces, 1..4.  1 is the beam's own patch
+ * lighting the room.  Each one more carries the light on from wherever the
+ * last bounce landed, so surfaces the beam's patch cannot see -- round a
+ * corner, or the rest of the wall the beam is on -- pick some up too.  Each
+ * casts 96 more CPU rays a frame and adds up to 8 more lights to every
+ * per-pixel lit surface.  Live. */
+void MioPan_RendererSetFlashlightBounceCount(int count);
+int  MioPan_RendererGetFlashlightBounceCount(void);
+/* This frame's spot flashlight, from gra3dPublishFlashlight() just before
+ * EndFrame -- its lane as a plain white material would receive it: world
+ * position, beam direction, diffuse colour normalised to 255, and
+ * (bTimes, cos^2 of the half-angle, 1/sin^2, 1).  A NULL position means the
+ * spot flashlight is off this frame. */
+void MioPan_RendererSetFlashlightSource(const float *position,
+                                        const float *direction,
+                                        const float *colour,
+                                        const float *params);
+
 /* Point-visibility probes -- the host half of effect_sub.c's CheckPointDepth().
  *
  * The ROM asked the GS for an 8x1 strip of the Z buffer and compared it against
@@ -1402,7 +1557,8 @@ struct MioPanLightState
     float spot_diffuse[MIOPAN_VU1_MAX_LANES][4];
     float spot_specular[MIOPAN_VU1_MAX_LANES][4];
     /* x = bTimes (fMaxRange * SetMaxColor255's divisor),
-     * y = cos^2(cone half-angle), z = 1 / sin^2, w unused. */
+     * y = cos^2(cone half-angle), z = 1 / sin^2, w = 1 for Mio's flashlight
+     * (a port tag for MioPan_RendererSetFlashlightBeam(); 0 otherwise). */
     float spot_params[MIOPAN_VU1_MAX_LANES][4];
 
     float point_position[MIOPAN_VU1_MAX_LANES][4];

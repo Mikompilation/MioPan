@@ -834,6 +834,242 @@ void DrawAntiAliasingMenu()
 }
 
 /*
+ * Mio's flashlight beam.  Beside the shading choices because it only exists
+ * where lighting is per pixel.
+ */
+void DrawFlashlightMenu()
+{
+    if (!ImGui::BeginMenu("Flashlight beam"))
+    {
+        return;
+    }
+    float softness = 0.0f;
+    float spill = 0.0f;
+    MioPan_RendererGetFlashlightBeam(&softness, &spill);
+    bool changed = false;
+    ImGui::PushItemWidth(160.0f);
+    changed |= ImGui::SliderFloat("Edge softness", &softness, 0.0f, 1.0f, "%.2f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Fade the beam out smoothly past its rim instead of\n"
+                          "the PS2's hard edge.  0 is the original cone.");
+    }
+    changed |= ImGui::SliderFloat("Spill", &spill, 0.0f, 0.3f, "%.2f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("A faint halo of light around the beam, as a real\n"
+                          "torch's reflector throws.  0 is none.");
+    }
+    ImGui::PopItemWidth();
+    if (changed)
+    {
+        MioPan_RendererSetFlashlightBeam(softness, spill);
+    }
+    if (ImGui::MenuItem("PS2 beam"))
+    {
+        MioPan_RendererSetFlashlightBeam(0.0f, 0.0f);
+    }
+    ImGui::TextDisabled("Per-pixel lighting only: a Fragment mode,\n"
+                        "or ray-traced shadows on.");
+
+    ImGui::Separator();
+    float bounce = MioPan_RendererGetFlashlightBounce();
+    ImGui::PushItemWidth(160.0f);
+    if (ImGui::SliderFloat("Bounce light", &bounce, 0.0f, 2.0f, "%.2f"))
+    {
+        MioPan_RendererSetFlashlightBounce(bounce);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Light reflected back off whatever the beam hits,\n"
+                          "so the room around the beam is lit a little too.\n"
+                          "1 is a dark wooden room; 0 is off, as on the PS2.");
+    }
+    int bounces = MioPan_RendererGetFlashlightBounceCount();
+    if (ImGui::SliderInt("Bounces", &bounces, 1, 4))
+    {
+        MioPan_RendererSetFlashlightBounceCount(bounces);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("How many times that light bounces.  1 is the beam's\n"
+                          "own patch lighting the room; each more carries it on\n"
+                          "round corners and onto walls that patch cannot see,\n"
+                          "for a little more CPU time per frame.");
+    }
+    ImGui::PopItemWidth();
+    if (MioPan_RendererGetRayTracing() == 0)
+    {
+        ImGui::TextDisabled("Bounce needs ray-traced shadows on.");
+    }
+    ImGui::EndMenu();
+}
+
+/*
+ * Ray-traced shadows (proof of concept).  A submenu under the mesh shading
+ * choices, because switching it on overrides them: every light goes per pixel
+ * so the shader can shadow it.
+ */
+void DrawRayTracingMenu()
+{
+    if (!ImGui::BeginMenu("Ray-traced shadows (experimental)"))
+    {
+        return;
+    }
+
+    bool enabled = MioPan_RendererGetRayTracing() != 0;
+    if (ImGui::MenuItem("Enabled", nullptr, &enabled))
+    {
+        MioPan_RendererSetRayTracing(enabled ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Cast a shadow ray from every pixel to every spot and point light.\n"
+            "Software ray tracing through a BVH of the room; any GPU.\n"
+            "Forces per-pixel lighting while on.");
+    }
+
+    bool mask = MioPan_RendererGetRayTracingMask() != 0;
+    if (ImGui::MenuItem("Screen-space mask (soft, temporal)", nullptr, &mask))
+    {
+        MioPan_RendererSetRayTracingMask(mask ? 1 : 0);
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Trace Mio's light and the three lights brightest near her once\n"
+            "per pixel in a compute pass, averaged over frames: soft edges,\n"
+            "and far less work than tracing per fragment.  Off traces every\n"
+            "light per fragment, hard-edged.");
+    }
+
+    {
+        float ao_strength = 0.0f;
+        float ao_radius = 0.0f;
+        MioPan_RendererGetAmbientOcclusion(&ao_strength, &ao_radius);
+        bool ao_changed = false;
+        ImGui::PushItemWidth(160.0f);
+        ao_changed |= ImGui::SliderFloat("Ambient occlusion", &ao_strength,
+                                         0.0f, 2.2f, "%.2f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Darken corners, creases and the floor under things: short\n"
+                "rays round every pixel, averaged over frames.  Scales the\n"
+                "baked and ambient light only; lamps keep their own shadows.\n"
+                "1 is the physical amount, 2.2 multiplies the colour outright,\n"
+                "0 is off.");
+        }
+        ao_changed |= ImGui::SliderFloat("Occlusion radius", &ao_radius,
+                                         50.0f, 1500.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How far round a surface the rays look, in world\n"
+                              "units (about 2 mm).  400 is about 80 cm.");
+        }
+        ImGui::PopItemWidth();
+        if (ao_changed)
+        {
+            MioPan_RendererSetAmbientOcclusion(ao_strength, ao_radius);
+        }
+    }
+
+    unsigned int flags = MioPan_RendererGetRayTracingFlags();
+    auto flag_item = [&flags](const char *label, unsigned int bit,
+                              const char *tip) {
+        bool on = (flags & bit) != 0;
+        if (ImGui::MenuItem(label, nullptr, &on))
+        {
+            flags = on ? (flags | bit) : (flags & ~bit);
+            MioPan_RendererSetRayTracingFlags(flags);
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s", tip);
+        }
+    };
+    ImGui::Separator();
+    ImGui::TextDisabled("Shadowed lights");
+    flag_item("Spot lights", MIOPAN_RT_SPOT,
+              "Room spots and Mio's flashlight.");
+    flag_item("Point lights", MIOPAN_RT_POINT, "Lanterns, candles, lamps.");
+    flag_item("Directional lights", MIOPAN_RT_DIRECTIONAL,
+              "The engine's three fill lights.  They were never meant to be "
+              "blocked, so indoors this mostly darkens the room.");
+    flag_item("Two-sided occluders", MIOPAN_RT_TWO_SIDED,
+              "Let every triangle block light from both sides.\n"
+              "Off matches a shadow map: the rooms hide fill lights under "
+              "floors\nand behind walls, and those must shine through.");
+    ImGui::Separator();
+    ImGui::TextDisabled("Debug views");
+    flag_item("Show lighting only", MIOPAN_RT_DEBUG_LIGHT,
+              "Untextured light image, so shadow edges are easy to see.");
+    flag_item("Show shadow rays", MIOPAN_RT_DEBUG_RAYS,
+              "Red where a light was blocked, green where it got through,\n"
+              "black where no light was bright enough to trace.  Blue where\n"
+              "a draw had to trace for itself because the mask could not\n"
+              "answer (a light it does not hold, or a surface it did not see).");
+    flag_item("Show flashlight bounce", MIOPAN_RT_DEBUG_BOUNCE,
+              "The light bounced off what the flashlight hits, alone.");
+    flag_item("Show ambient occlusion", MIOPAN_RT_DEBUG_AO,
+              "The occlusion factor as applied: white is open, black is\n"
+              "fully enclosed.");
+
+    ImGui::Separator();
+    MioPanRayTracingSettings settings;
+    MioPan_RendererGetRayTracingSettings(&settings);
+    bool changed = false;
+    ImGui::PushItemWidth(160.0f);
+    changed |= ImGui::SliderInt("Rays per light", &settings.samples, 1, 8);
+    changed |= ImGui::SliderFloat("Light radius", &settings.light_radius,
+                                  0.0f, 300.0f, "%.0f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Soft shadow size, in world units (about 2 mm).\n"
+                          "The mask softens with one ray per light; lights\n"
+                          "traced per fragment need more than one ray.");
+    }
+    changed |= ImGui::SliderFloat("Surface offset", &settings.bias, 0.0f,
+                                  50.0f, "%.1f");
+    changed |= ImGui::SliderFloat("Stop short of light",
+                                  &settings.light_offset, 0.0f, 600.0f,
+                                  "%.0f");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Lets a light sit inside its own lantern.");
+    }
+    changed |= ImGui::SliderFloat("Skip lanes below", &settings.min_contribution,
+                                  0.0f, 16.0f, "%.1f");
+    ImGui::PopItemWidth();
+    if (changed)
+    {
+        MioPan_RendererSetRayTracingSettings(&settings);
+    }
+
+    MioPanRayTracingStats stats;
+    MioPan_RendererGetRayTracingStats(&stats);
+    ImGui::Separator();
+    ImGui::TextDisabled("Static: %d tris, %d nodes (%.1f ms, %d builds)%s",
+                        stats.static_tris, stats.static_nodes,
+                        stats.static_build_ms, stats.static_builds,
+                        stats.building ? ", building" : "");
+    ImGui::TextDisabled("Dynamic: %d tris, %d nodes (%.2f ms)",
+                        stats.dynamic_tris, stats.dynamic_nodes,
+                        stats.dynamic_build_ms);
+    ImGui::TextDisabled("CPU per frame: %.2f ms", stats.update_ms);
+    ImGui::TextDisabled("Mask: %d lights, %d draws, %s", stats.mask_lights,
+                        stats.mask_draws, stats.mask_live ? "live" : "off");
+    ImGui::TextDisabled("Bounce: %d lights, %d of %d rays hit (%.2f ms)",
+                        stats.bounce_lights, stats.bounce_hits,
+                        stats.bounce_rays, stats.bounce_ms);
+    ImGui::TextDisabled("Instances: %d, depth %d", stats.instances,
+                        stats.depth);
+
+    ImGui::EndMenu();
+}
+
+/*
  * Screen effects a player may want off.
  *
  * Sits beside the viewfinder surround rather than under the debug views
@@ -2728,6 +2964,8 @@ void DrawGraphicsSettingsMenu()
             "The whole light image per pixel; no CPU vertex lighting at "
             "all.\nSharper speculars and cone edges than the PS2 had.");
     }
+    DrawFlashlightMenu();
+    DrawRayTracingMenu();
     ImGui::Separator();
 
     ImGui::TextDisabled("Projected shadows");

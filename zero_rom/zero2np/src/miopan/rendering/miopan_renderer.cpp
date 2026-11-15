@@ -11,6 +11,7 @@
 #include "../miopan_ui/miopan_rmlui.h"
 #include "../miopan_ui/miopan_ui.h"
 #include "miopan_video.h"
+#include "miopan_rt_bvh.h"
 #include "iop_voice.h"
 
 #include <SDL3/SDL.h>
@@ -29,6 +30,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -163,6 +165,21 @@ struct ResidentMesh
     Uint32 vertex_count = 0;
     Uint32 index_count = 0;
     size_t bytes = 0;
+    /* A CPU copy of the object-space positions (xyz per vertex) and the
+     * indices, for the ray-traced shadow BVH, which is built on the CPU from
+     * whatever slices the frame draws.  Kept whether or not ray tracing is on,
+     * so switching it on mid-room needs no re-upload. */
+    std::vector<float> rt_positions;
+    /* Wound so cross(v1 - v0, v2 - v0) is the front normal, which the shadow
+     * rays' one-sided test needs; rt_tri_flags holds one MioPanRt::kTri* byte
+     * per triangle (kTriTwoSided where the normals could not settle it). */
+    std::vector<Uint32> rt_indices;
+    std::vector<unsigned char> rt_tri_flags;
+    /* Texture coordinates (st per vertex), so a triangle drawn through a
+     * texture with holes can be told how much of it is hole
+     * (RtMarkCutout()); and the index ranges already told. */
+    std::vector<float> rt_uvs;
+    std::vector<uint64_t> rt_cutout_checked;
 
     ResidentMesh() = default;
     ResidentMesh(const ResidentMesh &) = delete;
@@ -504,6 +521,9 @@ struct DrawCommand
      * caster, the projector it samples if it is a receiver.  -1 for the vast
      * majority of draws, which are neither. */
     int shadow_episode = -1;
+    /* Queued inside DrawGirl() -- Mio's own geometry, which the ray-traced
+     * shadows must not let occlude the lights she carries. */
+    bool rt_player = false;
 };
 
 static_assert(sizeof(MioPanLightState) == (3u + 12u + 9u * MIOPAN_VU1_MAX_LANES)
@@ -609,6 +629,23 @@ struct SpriteUniformBlock
     float shadowPlane[4];
     float shadowLight[4];
     float shadowEye[4];
+
+    /* Ray-traced shadows, read by mesh_spot_rt.frag only.  Mirror `uRtFlags`,
+     * `uRtParams` and `uRtPlayer`; appended for the same reason as the fields
+     * above.  See the ray-tracing block before DrawQueuedSprites(). */
+    int rtFlags[4];
+    float rtParams[4];
+    float rtPlayer[4];
+    /* The shadow mask's lights and whether it is bound.  Mirror
+     * `uRtMaskLight` / `uRtMaskFlags`. */
+    float rtMaskLight[4][4];
+    int rtMaskFlags[4];
+    /* Mio's flashlight beam: softness, spill, spill reach, enabled.  Mirrors
+     * `uFlashlight`; see MioPan_RendererSetFlashlightBeam(). */
+    float flashlight[4];
+    /* Ray-traced ambient occlusion: x = strength / 2.2, the exponent in GS
+     * units.  Mirrors `uRtAmbient`; see MioPan_RendererSetAmbientOcclusion(). */
+    float rtAmbient[4];
 };
 
 static const ShaderFormatInfo kShaderFormats[] = {
@@ -693,11 +730,16 @@ SDL_GPUSampleCount SdlSampleCount(int samples)
  * the alternative of waiting for the GPU to go idle mid-session.
  */
 constexpr int kPipelineLayoutCount = 3;
+/* The fragment-lighting index is 0 off, 1 the per-pixel VU1 image, 2 the same
+ * with ray-traced shadows (mesh_spot_rt.frag). */
+constexpr int kFragmentLightingVariants = 3;
 SDL_GPUGraphicsPipeline
     *g_pipeline_cache[kSampleSlotCount][kPipelineLayoutCount][2][2]
-                     [GS_DEPTH_COMPARE_COUNT][2][2][2][GS_BLEND_COUNT];
+                     [GS_DEPTH_COMPARE_COUNT][2][2][kFragmentLightingVariants]
+                     [GS_BLEND_COUNT];
 bool g_pipeline_failed[kSampleSlotCount][kPipelineLayoutCount][2][2]
-                      [GS_DEPTH_COMPARE_COUNT][2][2][2][GS_BLEND_COUNT];
+                      [GS_DEPTH_COMPARE_COUNT][2][2][kFragmentLightingVariants]
+                      [GS_BLEND_COUNT];
 
 struct CachedShaderInfo
 {
@@ -705,6 +747,8 @@ struct CachedShaderInfo
     SDL_GPUShaderStage stage;
     Uint32 sampler_count;
     SDL_GPUShader *shader;
+    Uint32 storage_buffer_count = 0;
+    Uint32 uniform_count = 3;
 };
 
 /* Pipeline state varies far more often than shader code.  Keep the seven
@@ -717,7 +761,18 @@ CachedShaderInfo g_cached_shaders[] = {
     {"mesh_spot.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, nullptr},
     {"mesh_animated_lit.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, nullptr},
     {"sprite.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, nullptr},
-    {"mesh_spot.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, nullptr},
+    /* Four uniform blocks: the fourth is the flashlight's bounce lights
+     * (MioPanBounceBlock), pushed once per pass rather than per draw. */
+    {"mesh_spot.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, nullptr, 0, 4},
+    /* mesh_spot.frag with ray-traced shadows: three more sampled textures (the
+     * shadow mask, the G-buffer position it is checked against and the
+     * ambient occlusion), then the four BVH storage buffers (static
+     * nodes/triangles, dynamic nodes/triangles). */
+    {"mesh_spot_rt.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 5, nullptr, 4, 4},
+    /* The shadow mask's G-buffer prepass, one vertex shader per layout. */
+    {"rt_gbuffer.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, nullptr},
+    {"rt_gbuffer_streamed.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, nullptr},
+    {"rt_gbuffer.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, nullptr},
     /* Projected shadows.  Both fragment stages keep two samplers declared --
      * shadercross is deliberately run without --cull, so uTexture stays in the
      * signature even where only uAuxTexture is read. */
@@ -735,6 +790,7 @@ CachedShaderInfo g_cached_shaders[] = {
 void ReleaseCachedShaders();
 void ReleaseDepthProbeResources();
 void ReleasePresentResources();
+void ReleaseRayTracingResources();
 /* Defined with display-rate presentation, used wherever a texture a queued
  * draw may name is released. */
 void ReleaseFrameTexture(SDL_GPUTexture *texture);
@@ -1439,6 +1495,64 @@ size_t g_mesh_cache_build_bytes;
 Uint64 g_mesh_cache_build_start;
 
 std::unordered_map<uint64_t, TextureEntry> g_texture_cache;
+/* Where a texture is see-through, for the ray-traced scene's cut-outs
+ * (MioPanRt::kTriCutout): a coarse grid, each cell the fraction of its texels
+ * that are solid (0..255).  Measured once as the pixels are staged
+ * (CreatePendingTexture()), and only kept for textures that have holes at
+ * all.  The GS alpha test cannot tell a cut-out apart: nearly every draw in
+ * the game has it on, just to drop empty texels. */
+struct TextureOpacity
+{
+    int width = 0;
+    int height = 0;
+    std::vector<unsigned char> cells;
+};
+std::unordered_map<const SDL_GPUTexture *, TextureOpacity> g_texture_opacity;
+constexpr int kTextureOpacityCells = 64;
+
+/* A texel is a hole when under half the alpha of the most opaque one -- both
+ * scales the game's textures arrive in (0x80 or 0xFF for opaque) agree on
+ * that.  False, and `out` untouched, for a texture without any. */
+bool MeasureTextureOpacity(const std::vector<unsigned char> &rgba, int width,
+                           int height, TextureOpacity *out)
+{
+    unsigned char lo = 255;
+    unsigned char hi = 0;
+    for (size_t i = 3; i < rgba.size(); i += 4)
+    {
+        lo = std::min(lo, rgba[i]);
+        hi = std::max(hi, rgba[i]);
+    }
+    if (hi == 0 || (unsigned)lo * 2u >= (unsigned)hi)
+    {
+        return false;
+    }
+    const int cw = std::min(width, kTextureOpacityCells);
+    const int ch = std::min(height, kTextureOpacityCells);
+    std::vector<unsigned> solid((size_t)cw * (size_t)ch, 0u);
+    std::vector<unsigned> total((size_t)cw * (size_t)ch, 0u);
+    for (int y = 0; y < height; y++)
+    {
+        const size_t row = (size_t)(y * ch / height) * (size_t)cw;
+        for (int x = 0; x < width; x++)
+        {
+            const size_t cell = row + (size_t)(x * cw / width);
+            const unsigned char a = rgba[((size_t)y * (size_t)width + x) * 4u + 3u];
+            total[cell]++;
+            solid[cell] += (unsigned)a * 2u >= (unsigned)hi ? 1u : 0u;
+        }
+    }
+    out->width = cw;
+    out->height = ch;
+    out->cells.resize(solid.size());
+    for (size_t i = 0; i < solid.size(); i++)
+    {
+        out->cells[i] = (unsigned char)(total[i] != 0
+                                            ? solid[i] * 255u / total[i]
+                                            : 255u);
+    }
+    return true;
+}
 std::unordered_map<uint64_t, Tex0CacheEntry> g_tex0_cache;
 std::vector<PendingTextureUpload> g_pending_texture_uploads;
 std::unordered_map<MeshCacheKey, MeshCacheEntryPtr, MeshCacheKeyHash>
@@ -3733,6 +3847,7 @@ void ShutdownMeshCache()
     g_vertex_light_states.clear();
     g_fragment_light_states.clear();
     ReleaseDepthProbeResources();
+    ReleaseRayTracingResources();
     ReleaseCachedShaders();
     ReleasePresentResources();
 }
@@ -4566,7 +4681,8 @@ bool ReadWholeFile(const char *path, std::vector<Uint8> *out)
  * vertex stage declares none and whose fragment stage declares one.
  */
 SDL_GPUShader *LoadShader(const char *name, SDL_GPUShaderStage stage,
-                          Uint32 sampler_count, Uint32 uniform_count = 3)
+                          Uint32 sampler_count, Uint32 uniform_count = 3,
+                          Uint32 storage_buffer_count = 0)
 {
     SDL_Log("Loading shader %s\n", name);
 
@@ -4599,7 +4715,7 @@ SDL_GPUShader *LoadShader(const char *name, SDL_GPUShaderStage stage,
     info.stage = stage;
     info.num_samplers = sampler_count;
     info.num_storage_textures = 0;
-    info.num_storage_buffers = 0;
+    info.num_storage_buffers = storage_buffer_count;
     info.num_uniform_buffers = uniform_count;
 
     SDL_GPUShader *shader = SDL_CreateGPUShader(g_device, &info);
@@ -4620,7 +4736,9 @@ SDL_GPUShader *GetCachedShader(const char *name, SDL_GPUShaderStage stage,
         {
             if (cached.shader == nullptr)
             {
-                cached.shader = LoadShader(name, stage, sampler_count);
+                cached.shader = LoadShader(name, stage, sampler_count,
+                                           cached.uniform_count,
+                                           cached.storage_buffer_count);
             }
             return cached.shader;
         }
@@ -4999,10 +5117,12 @@ bool CreatePipelineVariant(SDL_GPUGraphicsPipeline **out_pipeline,
                            bool enable_depth_write, bool wireframe,
                            GsBlendMode blend_mode,
                            MeshPipelineLayout mesh_layout,
-                           bool fragment_lighting, int sample_count, bool visibility = false)
+                           bool fragment_lighting, int sample_count, bool visibility = false,
+                           bool ray_traced = false)
 {
     fragment_lighting = fragment_lighting && transform_mesh &&
                         mesh_layout != MESH_PIPELINE_CACHED_ANIMATED;
+    ray_traced = ray_traced && fragment_lighting && !visibility;
     const char *vertex_shader_name =
         mesh_layout == MESH_PIPELINE_CACHED_ANIMATED
             ? "mesh_animated_lit.vert"
@@ -5015,8 +5135,9 @@ bool CreatePipelineVariant(SDL_GPUGraphicsPipeline **out_pipeline,
     SDL_GPUShader *vertex_shader = GetCachedShader(
         vertex_shader_name, SDL_GPU_SHADERSTAGE_VERTEX, 0);
     SDL_GPUShader *fragment_shader = GetCachedShader(
-        fragment_lighting ? "mesh_spot.frag" : "sprite.frag",
-        SDL_GPU_SHADERSTAGE_FRAGMENT, 2);
+        ray_traced ? "mesh_spot_rt.frag"
+                   : (fragment_lighting ? "mesh_spot.frag" : "sprite.frag"),
+        SDL_GPU_SHADERSTAGE_FRAGMENT, ray_traced ? 5 : 2);
     if (vertex_shader == nullptr || fragment_shader == nullptr)
     {
         return false;
@@ -5120,10 +5241,13 @@ SDL_GPUGraphicsPipeline *GetPipeline(MeshPipelineLayout mesh_layout,
                                      GsDepthCompare depth_compare,
                                      bool depth_write, bool wireframe,
                                      GsBlendMode blend_mode,
-                                     bool fragment_lighting)
+                                     bool fragment_lighting,
+                                     bool ray_traced = false)
 {
     fragment_lighting = fragment_lighting && transform_mesh &&
                         mesh_layout != MESH_PIPELINE_CACHED_ANIMATED;
+    ray_traced = ray_traced && fragment_lighting;
+    const int lighting_variant = ray_traced ? 2 : (fragment_lighting ? 1 : 0);
     /* A pipeline with depth testing disabled cannot write depth, and its
      * comparison is unobservable.  Canonicalize the otherwise-identical keys so
      * cold GS state cannot compile a duplicate depth-off pipeline.  The
@@ -5143,12 +5267,12 @@ SDL_GPUGraphicsPipeline *GetPipeline(MeshPipelineLayout mesh_layout,
         g_pipeline_cache[sample_slot][mesh_layout][transform_mesh ? 1 : 0]
                         [depth_test ? 1 : 0][depth_compare]
                         [depth_write ? 1 : 0][wireframe ? 1 : 0]
-                        [fragment_lighting ? 1 : 0][blend_mode];
+                        [lighting_variant][blend_mode];
     bool &failed =
         g_pipeline_failed[sample_slot][mesh_layout][transform_mesh ? 1 : 0]
                          [depth_test ? 1 : 0][depth_compare]
                          [depth_write ? 1 : 0][wireframe ? 1 : 0]
-                         [fragment_lighting ? 1 : 0][blend_mode];
+                         [lighting_variant][blend_mode];
     if (slot != nullptr)
     {
         return slot;
@@ -5157,7 +5281,7 @@ SDL_GPUGraphicsPipeline *GetPipeline(MeshPipelineLayout mesh_layout,
     if (!failed &&
         CreatePipelineVariant(&slot, transform_mesh, depth_test, depth_compare,
                               depth_write, wireframe, blend_mode, mesh_layout,
-                              fragment_lighting, samples))
+                              fragment_lighting, samples, false, ray_traced))
     {
         return slot;
     }
@@ -5169,7 +5293,8 @@ SDL_GPUGraphicsPipeline *GetPipeline(MeshPipelineLayout mesh_layout,
         return nullptr;
     }
     return GetPipeline(mesh_layout, transform_mesh, depth_test, depth_compare,
-                       true, wireframe, GS_BLEND_ALPHA, fragment_lighting);
+                       true, wireframe, GS_BLEND_ALPHA, fragment_lighting,
+                       ray_traced);
 }
 
 SDL_GPUGraphicsPipeline *GetVisibilityPipeline(MeshPipelineLayout layout,
@@ -6036,6 +6161,21 @@ TextureEntry *CreatePendingTexture(uint64_t hash, int width, int height,
     if (pending.texture == nullptr)
     {
         return nullptr;
+    }
+    try
+    {
+        TextureOpacity opacity;
+        if (MeasureTextureOpacity(pending.rgba, width, height, &opacity))
+        {
+            g_texture_opacity[pending.texture] = std::move(opacity);
+        }
+        else
+        {
+            g_texture_opacity.erase(pending.texture);
+        }
+    }
+    catch (const std::bad_alloc &)
+    {
     }
 
     TextureEntry entry{pending.texture, width, height, hash, false};
@@ -10338,7 +10478,1285 @@ bool ResidentDrawContinues(const DrawCommand &previous, const DrawCommand &next)
            previous.shadow_caster == next.shadow_caster &&
            previous.shadow_receiver == next.shadow_receiver &&
            previous.shadow_episode == next.shadow_episode &&
+           previous.rt_player == next.rt_player &&
            !previous.finder_mask && !next.finder_mask;
+}
+
+/* ------------------------------------------------------------------------
+ *  Ray-traced shadows -- a proof of concept, off by default.
+ *
+ *  What: every positional light the per-pixel VU1 kernel evaluates is scaled
+ *  by whether the pixel can see it, decided by a shadow ray.  The light law
+ *  itself is untouched (resources/shaders/hlsl/miopan_rt.hlsli), so the
+ *  picture differs from FRAGMENT_ALL lighting only where light used to pass
+ *  through walls, furniture and people.
+ *
+ *  How: SDL_GPU has no hardware ray tracing, so this is the software kind and
+ *  runs wherever the renderer does.  The frame's opaque world geometry is
+ *  gathered from the draw queue at EndFrame, built into a BVH on the CPU
+ *  (miopan_rt_bvh.cpp), uploaded as four storage buffers and walked by
+ *  mesh_spot_rt.frag, which replaces mesh_spot.frag on every fragment-lit draw
+ *  while this is on.
+ *
+ *  Two hierarchies:
+ *    STATIC   resident (room and prop) meshes, remembered per (mesh, matrix)
+ *             across frames, so an occluder the camera has turned away from --
+ *             the engine culls by view -- still casts.  Rebuilt on a worker
+ *             thread when that set changes, at most every
+ *             kRtStaticRebuildFrames.
+ *    DYNAMIC  everything else, rebuilt every frame on this thread: streamed
+ *             meshes (characters, anything animated), plus resident slices
+ *             the static build does not hold yet -- a door mid-swing, a unit
+ *             the camera has only just revealed.
+ *
+ *  Mio is tagged (MioPan_RendererRtBeginPlayer) and her triangles flagged, so
+ *  the lights she carries -- the flashlight is mounted behind her chest -- are
+ *  not eclipsed by her own body; other lights still cast her shadow.
+ *
+ *  Known limits, acceptable for a proof of concept: cut-outs (textures with
+ *  holes) cast shadows as solid quads -- ambient occlusion and the bounce see
+ *  through them by how much of each triangle is hole (MioPanRt::kTriCutout),
+ *  but only on resident meshes; geometry never drawn since the room loaded casts
+ *  nothing; a resident object that moves leaves its old pose casting until it
+ *  expires (kRtExpireFrames); display-rate presentation binds the newest
+ *  tick's hierarchy even while still showing an older tick.
+ * --------------------------------------------------------------------- */
+
+/* Frames a (mesh, matrix) pair must be drawn before it joins the static
+ * hierarchy; anything still moving keeps producing new pairs and so stays
+ * dynamic. */
+constexpr uint32_t kRtPromoteFrames = 4;
+/* Frames a static pair survives without being drawn. */
+constexpr uint64_t kRtExpireFrames = 600;
+constexpr uint64_t kRtStaticRebuildFrames = 15;
+/* Frames the dynamic tree is refitted before it is rebuilt outright. */
+constexpr uint64_t kRtDynamicRebuildFrames = 20;
+constexpr size_t kRtMaxDynamicTris = 400000;
+/* How far past Mio's own bounds a light still counts as one she carries. */
+constexpr float kRtPlayerLightMargin = 250.0f;
+
+enum RtBufferSlot
+{
+    RT_STATIC_NODES = 0,
+    RT_STATIC_TRIS,
+    RT_DYNAMIC_NODES,
+    RT_DYNAMIC_TRIS,
+    RT_BUFFER_COUNT
+};
+
+struct RtSpan
+{
+    Uint32 begin;
+    Uint32 end;
+};
+
+/* One resident mesh drawn through one local->world matrix. */
+struct RtInstance
+{
+    std::weak_ptr<ResidentMesh> mesh;
+    float model[16];
+    /* Every index range drawn with this matrix, sorted and merged. */
+    std::vector<RtSpan> spans;
+    /* The ranges the static hierarchy on the GPU holds. */
+    std::vector<RtSpan> static_spans;
+    uint64_t last_seen = 0;
+    uint32_t frames_seen = 0;
+    bool promoted = false;
+};
+
+struct RtStaticJob
+{
+    std::vector<float> corners;
+    std::vector<unsigned char> flags;
+    std::vector<std::pair<uint64_t, std::vector<RtSpan>>> spans;
+    MioPanRt::Bvh bvh;
+    std::atomic<bool> done{false};
+};
+
+struct RtGpuBuffer
+{
+    SDL_GPUBuffer *buffer = nullptr;
+    Uint32 size = 0;
+};
+
+/* Mio's flashlight beam (MioPan_RendererSetFlashlightBeam()).  Both zero is
+ * the PS2's cone. */
+float g_flashlight_softness = 0.5f;
+float g_flashlight_spill = 0.06f;
+/* How far the spill reaches, in cone half-angles. */
+constexpr float kFlashlightSpillReach = 2.5f;
+
+void FillFlashlightUniforms()
+{
+    g_uniforms.flashlight[0] = g_flashlight_softness;
+    g_uniforms.flashlight[1] = g_flashlight_spill;
+    g_uniforms.flashlight[2] = kFlashlightSpillReach;
+    g_uniforms.flashlight[3] =
+        g_flashlight_softness > 0.0f || g_flashlight_spill > 0.0f ? 1.0f : 0.0f;
+}
+
+/* Mio's flashlight bounce (MioPan_RendererSetFlashlightBounce()).  Built on
+ * the game thread at EndFrame by UpdateBounceLights(), published under
+ * PresentStateGuard with the hierarchies it was traced against, and pushed
+ * once per pass as the per-pixel mesh shaders' fourth uniform block.
+ * Mirrors `MioPanBounceBlock` in mesh_spot_frag.hlsli. */
+/* Lights per bounce, and the most bounces
+ * MioPan_RendererSetFlashlightBounceCount() takes.  The block holds every
+ * bounce's lights, the beam's own first. */
+constexpr int kBouncePools = 8;
+constexpr int kBounceMaxCount = 4;
+constexpr int kBounceLights = kBouncePools * kBounceMaxCount;
+struct BounceUniforms
+{
+    /* x = live lights. */
+    float info[4];
+    /* xyz = where the light sits, just off the surface; w = the patch's
+     * area in square world units. */
+    float position[kBounceLights][4];
+    /* xyz = the patch's unit normal. */
+    float normal[kBounceLights][4];
+    /* rgb = what the patch gives back, in LINEAR lighting-multiplier units
+     * (1.0 is the GS's unity modulate once decoded). */
+    float colour[kBounceLights][4];
+};
+static_assert(sizeof(BounceUniforms) % 16 == 0,
+              "BounceUniforms must be whole float4s");
+
+/* 1 = about 40% reflected; 0 = off. */
+float g_bounce_strength = 1.0f;
+/* 1 = the beam's patch alone lights the room; up to kBounceMaxCount. */
+int g_bounce_count = 1;
+BounceUniforms g_bounce_live{};
+const BounceUniforms kNoBounce{};
+
+/* This frame's flashlight, from MioPan_RendererSetFlashlightSource(). */
+struct FlashlightSource
+{
+    bool valid = false;
+    unsigned long long frame = 0;
+    float position[3] = {};
+    float direction[3] = {};
+    float colour[3] = {};
+    float params[4] = {};
+};
+FlashlightSource g_flashlight_source;
+
+struct BounceSlot
+{
+    bool live = false;
+    float position[3] = {};
+    float normal[3] = {};
+    float area = 0.0f;
+    float colour[3] = {};
+};
+/* One running light per pool, kBouncePools per bounce; see
+ * UpdateBounceLights(). */
+BounceSlot g_bounce_slots[kBounceLights];
+BounceUniforms g_bounce_pending{};
+
+bool g_rt_enabled = false;
+unsigned int g_rt_flags = MIOPAN_RT_SPOT | MIOPAN_RT_POINT;
+MioPanRayTracingSettings g_rt_settings = {4.0f, 120.0f, 40.0f, 1, 1.0f};
+/* mesh_spot_rt.frag could not be built; fragment-lit draws keep mesh_spot. */
+bool g_rt_shader_failed = false;
+int g_rt_player_scope = 0;
+
+std::unordered_map<uint64_t, RtInstance> g_rt_instances;
+bool g_rt_static_dirty = false;
+uint64_t g_rt_last_static_launch = 0;
+std::shared_ptr<RtStaticJob> g_rt_job;
+/* Joined on destruction: a std::thread still joinable at exit would call
+ * std::terminate, and the job it runs owns everything it touches. */
+struct RtWorkerThread : std::thread
+{
+    RtWorkerThread &operator=(std::thread &&other)
+    {
+        std::thread::operator=(std::move(other));
+        return *this;
+    }
+    ~RtWorkerThread()
+    {
+        if (joinable())
+        {
+            join();
+        }
+    }
+};
+RtWorkerThread g_rt_worker;
+
+/* CPU results waiting for UploadRayTracingScene().  The static one is kept
+ * after it is uploaded: the flashlight's bounce rays walk it on the CPU. */
+MioPanRt::Bvh g_rt_static_bvh;
+bool g_rt_static_upload_pending = false;
+MioPanRt::Bvh g_rt_dynamic_bvh;
+bool g_rt_dynamic_upload_pending = false;
+uint64_t g_rt_dynamic_built_frame = 0;
+/* Reused every upload and cycled by SDL, rather than one created per frame. */
+SDL_GPUTransferBuffer *g_rt_transfer = nullptr;
+Uint32 g_rt_transfer_size = 0;
+std::vector<float> g_rt_dynamic_corners;
+std::vector<unsigned char> g_rt_dynamic_flags;
+float g_rt_player_sphere_pending[4];
+
+/* What the GPU holds.  Written under PresentStateGuard, read by
+ * DrawQueuedSprites() on whichever thread records. */
+RtGpuBuffer g_rt_gpu[RT_BUFFER_COUNT];
+Uint32 g_rt_static_nodes_live = 0;
+Uint32 g_rt_dynamic_nodes_live = 0;
+float g_rt_player_sphere[4];
+
+MioPanRayTracingStats g_rt_stats;
+int g_rt_static_depth = 0;
+
+/* What may cast: opaque, depth-writing world meshes.  Effects, the sky, 2D,
+ * shadow-map passes and anything blended additively are left out. */
+/* The draw's texture has holes somewhere (g_texture_opacity), or null. */
+const TextureOpacity *RtDrawOpacity(const DrawCommand &draw)
+{
+    const auto found = g_texture_opacity.find(draw.texture);
+    return found != g_texture_opacity.end() ? &found->second : nullptr;
+}
+
+/* How solid the texture is at (s, t), 0..1, wrapping as the sampler repeats. */
+float RtOpacityAt(const TextureOpacity &opacity, float s, float t)
+{
+    s -= std::floor(s);
+    t -= std::floor(t);
+    const int x = std::min((int)(s * (float)opacity.width), opacity.width - 1);
+    const int y = std::min((int)(t * (float)opacity.height), opacity.height - 1);
+    return (float)opacity.cells[(size_t)y * (size_t)opacity.width + (size_t)x] /
+           255.0f;
+}
+
+/* Tell each triangle of a resident range drawn through a texture with holes
+ * how solid it is -- sampled at its corners, edge midpoints and centre --
+ * into the mesh's own triangle flags, which is where both hierarchies read
+ * them from.  The static build snapshots those, so this has to happen before
+ * the range is promoted, and it does: a range is told the first frame it is
+ * drawn, and never again. */
+void RtMarkCutout(ResidentMesh &mesh, Uint32 begin, Uint32 end,
+                  const TextureOpacity &opacity)
+{
+    const uint64_t key = ((uint64_t)begin << 32) | (uint64_t)end;
+    if (std::find(mesh.rt_cutout_checked.begin(), mesh.rt_cutout_checked.end(),
+                  key) != mesh.rt_cutout_checked.end())
+    {
+        return;
+    }
+    mesh.rt_cutout_checked.push_back(key);
+    const size_t tris = mesh.rt_indices.size() / 3u;
+    const size_t verts = mesh.rt_uvs.size() / 2u;
+    if (mesh.rt_tri_flags.size() < tris)
+    {
+        mesh.rt_tri_flags.resize(tris, 0);
+    }
+    for (size_t t = begin / 3u; t < std::min<size_t>(end / 3u, tris); t++)
+    {
+        const Uint32 *idx = &mesh.rt_indices[t * 3u];
+        if (idx[0] >= verts || idx[1] >= verts || idx[2] >= verts)
+        {
+            continue;
+        }
+        const float *a = &mesh.rt_uvs[(size_t)idx[0] * 2u];
+        const float *b = &mesh.rt_uvs[(size_t)idx[1] * 2u];
+        const float *c = &mesh.rt_uvs[(size_t)idx[2] * 2u];
+        static const float kWeights[7][3] = {
+            {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},
+            {0.5f, 0.5f, 0.0f}, {0.0f, 0.5f, 0.5f}, {0.5f, 0.0f, 0.5f},
+            {1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f}};
+        float solid = 0.0f;
+        for (const float *w : kWeights)
+        {
+            solid += RtOpacityAt(opacity, w[0] * a[0] + w[1] * b[0] + w[2] * c[0],
+                                 w[0] * a[1] + w[1] * b[1] + w[2] * c[1]);
+        }
+        solid /= 7.0f;
+        if (solid >= 0.97f)
+        {
+            continue;
+        }
+        const int level = std::min(std::max((int)(solid * 15.0f + 0.5f), 0), 15);
+        mesh.rt_tri_flags[t] =
+            (unsigned char)((mesh.rt_tri_flags[t] & 0x0Fu) |
+                            MioPanRt::kTriCutout |
+                            (level << MioPanRt::kTriOpacityShift));
+    }
+}
+
+bool RtDrawCasts(const DrawCommand &draw)
+{
+    return draw.source == DRAW_SOURCE_GENERIC && draw.transform_mesh &&
+           draw.depth_test && draw.depth_write && !draw.indexed_mesh &&
+           !draw.shadow_caster && !draw.shadow_receiver && !draw.finder_mask &&
+           (draw.blend_mode == GS_BLEND_ALPHA ||
+            draw.blend_mode == GS_BLEND_SRC_ONLY);
+}
+
+/* p' = p * M with the translation in row 3 -- this file's convention. */
+inline void RtTransformPoint(const float *m, const float *p, float *out)
+{
+    out[0] = p[0] * m[0] + p[1] * m[4] + p[2] * m[8] + m[12];
+    out[1] = p[0] * m[1] + p[1] * m[5] + p[2] * m[9] + m[13];
+    out[2] = p[0] * m[2] + p[1] * m[6] + p[2] * m[10] + m[14];
+}
+
+uint64_t RtInstanceKey(const ResidentMesh *mesh, const float *model)
+{
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](const void *data, size_t size) {
+        const unsigned char *p = static_cast<const unsigned char *>(data);
+        for (size_t i = 0; i < size; i++)
+        {
+            h ^= p[i];
+            h *= 1099511628211ull;
+        }
+    };
+    mix(&mesh, sizeof(mesh));
+    mix(model, sizeof(float) * 16);
+    return h;
+}
+
+bool RtSpansContain(const std::vector<RtSpan> &spans, Uint32 begin, Uint32 end)
+{
+    auto it = std::upper_bound(
+        spans.begin(), spans.end(), begin,
+        [](Uint32 value, const RtSpan &span) { return value < span.begin; });
+    if (it == spans.begin())
+    {
+        return false;
+    }
+    --it;
+    return it->end >= end;
+}
+
+/* Returns true when the set grew. */
+bool RtSpansAdd(std::vector<RtSpan> &spans, Uint32 begin, Uint32 end)
+{
+    if (RtSpansContain(spans, begin, end))
+    {
+        return false;
+    }
+    spans.push_back(RtSpan{begin, end});
+    std::sort(spans.begin(), spans.end(),
+              [](const RtSpan &l, const RtSpan &r) { return l.begin < r.begin; });
+    size_t out = 0;
+    for (size_t i = 1; i < spans.size(); i++)
+    {
+        if (spans[i].begin <= spans[out].end)
+        {
+            spans[out].end = std::max(spans[out].end, spans[i].end);
+        }
+        else
+        {
+            spans[++out] = spans[i];
+        }
+    }
+    spans.resize(out + 1);
+    return true;
+}
+
+/* A mirroring matrix reverses winding, so it has to be undone for the front
+ * face to survive the trip into world space. */
+bool RtMatrixMirrors(const float *m)
+{
+    const float det = m[0] * (m[5] * m[10] - m[6] * m[9]) -
+                      m[1] * (m[4] * m[10] - m[6] * m[8]) +
+                      m[2] * (m[4] * m[9] - m[5] * m[8]);
+    return det < 0.0f;
+}
+
+void RtAppendResident(std::vector<float> &corners,
+                      std::vector<unsigned char> &flags,
+                      const ResidentMesh &mesh, const float *model,
+                      Uint32 begin, Uint32 end, unsigned char extra_flags)
+{
+    const size_t vertex_count = mesh.rt_positions.size() / 3u;
+    const bool mirror = RtMatrixMirrors(model);
+    end = std::min<Uint32>(end, (Uint32)mesh.rt_indices.size());
+    for (Uint32 i = begin; i + 2 < end; i += 3)
+    {
+        const Uint32 a = mesh.rt_indices[i];
+        const Uint32 b = mesh.rt_indices[mirror ? i + 2 : i + 1];
+        const Uint32 c = mesh.rt_indices[mirror ? i + 1 : i + 2];
+        if (a >= vertex_count || b >= vertex_count || c >= vertex_count)
+        {
+            continue;
+        }
+        const size_t at = corners.size();
+        corners.resize(at + 9);
+        RtTransformPoint(model, &mesh.rt_positions[(size_t)a * 3u], &corners[at]);
+        RtTransformPoint(model, &mesh.rt_positions[(size_t)b * 3u],
+                         &corners[at + 3]);
+        RtTransformPoint(model, &mesh.rt_positions[(size_t)c * 3u],
+                         &corners[at + 6]);
+        const size_t tri = i / 3u;
+        flags.push_back((tri < mesh.rt_tri_flags.size() ? mesh.rt_tri_flags[tri]
+                                                        : MioPanRt::kTriTwoSided) |
+                        extra_flags);
+    }
+}
+
+void RtAppendStreamed(const DrawCommand &draw, unsigned char flag)
+{
+    const size_t vertex_count = g_vertices.size();
+    auto emit = [&](Uint32 a, Uint32 b, Uint32 c) {
+        if (a >= vertex_count || b >= vertex_count || c >= vertex_count ||
+            g_rt_dynamic_flags.size() >= kRtMaxDynamicTris)
+        {
+            return;
+        }
+        const size_t at = g_rt_dynamic_corners.size();
+        g_rt_dynamic_corners.resize(at + 9);
+        RtTransformPoint(draw.model, g_vertices[a].position,
+                         &g_rt_dynamic_corners[at]);
+        RtTransformPoint(draw.model, g_vertices[b].position,
+                         &g_rt_dynamic_corners[at + 3]);
+        RtTransformPoint(draw.model, g_vertices[c].position,
+                         &g_rt_dynamic_corners[at + 6]);
+        /* Streamed meshes are characters and other moving things: closed
+         * enough that either side may face the light. */
+        g_rt_dynamic_flags.push_back(flag | MioPanRt::kTriTwoSided);
+    };
+    if (draw.stream_indexed)
+    {
+        const size_t index_count = g_stream_indices.size();
+        for (Uint32 i = 0; i + 2 < draw.index_count; i += 3)
+        {
+            const size_t at = (size_t)draw.first_index + i;
+            if (at + 2 >= index_count)
+            {
+                break;
+            }
+            emit(g_stream_indices[at], g_stream_indices[at + 1],
+                 g_stream_indices[at + 2]);
+        }
+    }
+    else
+    {
+        for (Uint32 i = 0; i + 2 < draw.vertex_count; i += 3)
+        {
+            const Uint32 at = draw.first_vertex + i;
+            emit(at, at + 1, at + 2);
+        }
+    }
+}
+
+bool RayTracingActive()
+{
+    if (!g_rt_enabled || g_rt_shader_failed)
+    {
+        return false;
+    }
+    for (const RtGpuBuffer &buffer : g_rt_gpu)
+    {
+        if (buffer.buffer == nullptr)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* ---- Ray-traced shadows: the screen-space mask -----------------------------
+ *
+ * Tracing inside mesh_spot_rt.frag pays for every fragment of every draw,
+ * overdraw included, and can only afford one hard ray per light.  The mask
+ * moves the important lights out of that: a G-buffer prepass records where
+ * the visible fragment-lit surface is at each pixel, rt_shadow_mask.comp
+ * traces once per pixel for up to four lights and blends the answer into last
+ * frame's, and the forward shader reads it.  One jittered ray per frame then
+ * converges on a soft edge wherever the camera holds still -- which in this
+ * game is most of the time.
+ *
+ * The mask is only ever a cache.  The forward shader uses it when the
+ * G-buffer holds the very surface it is shading (same world position) and the
+ * lane is one of the four lights; any other lane or fragment traces exactly as
+ * it did before the mask existed.  So which lights are picked, or a pass that
+ * fails, changes the cost and the softness and never the correctness.
+ *
+ * Which four (RtSelectMaskLights(), at EndFrame): Mio's own light if she has
+ * one lit, then the lights brightest at her position by the VU1 law's own
+ * attenuation.  A light keeps its channel for as long as it stays picked, so
+ * the history a channel carries stays that light's.
+ *
+ * Per present, so a frame-smoothing in-between, whose camera differs, gets a
+ * G-buffer of its own; the history carries across presents the same way it
+ * does across ticks.
+ *
+ * Ambient occlusion (MioPan_RendererSetAmbientOcclusion()) rides in the same
+ * dispatch, into a texture pair of its own, and needs the pass even when the
+ * mask's lights are switched off -- it then runs with none.  Like the mask it
+ * only answers for surfaces the G-buffer holds, so Mio and anything else the
+ * prepass skips (the cached animated layout) get none.
+ * --------------------------------------------------------------------------- */
+
+constexpr int kRtMaskChannels = 4;
+/* Weight of this frame's answer: about five frames of history for a light
+ * holding still, two for one moving fast, none for a channel that has just
+ * changed light.  Between the first two it ramps with how far the light moved
+ * since the last present -- Mio's flashlight sways a little even when she
+ * stands still, and treating that as motion threw the history away. */
+constexpr float kRtMaskBlend = 0.2f;
+constexpr float kRtMaskBlendMoving = 0.5f;
+constexpr float kRtMaskStillMove = 4.0f;   /* world units: still below this */
+constexpr float kRtMaskFastMove = 40.0f;   /* ...and fully moving above this */
+/* Rays per light where a pixel has no usable history. */
+constexpr int kRtMaskRaysWithoutHistory = 4;
+/* How far (world units) the surface under a pixel may move and keep its
+ * history: float noise, not motion. */
+constexpr float kRtMaskHistoryTolerance = 1.0f;
+
+/* Ambient occlusion (MioPan_RendererSetAmbientOcclusion()), traced in the same
+ * dispatch into a texture pair of its own.  Rays per pixel per frame, where
+ * the history holds and where it does not, and how many frames the average
+ * runs to.  Software rays are dear -- one per pixel roughly matches a mask
+ * light's whole cost -- so a still pixel takes one a frame and lets the
+ * average do the rest: twelve frames, plus the forward shader's five-tap
+ * filter, settle a still view in about a fifth of a second at 60 presents,
+ * and the cap keeps something walking past from leaving a contact shadow
+ * behind for much longer than that. */
+constexpr int kRtAoRays = 1;
+constexpr int kRtAoRaysWithoutHistory = 4;
+constexpr float kRtAoFrames = 12.0f;
+
+/* One channel's light.  Lights are told apart by type and position: the lanes
+ * the forward shader evaluates carry exactly these positions.  `btimes` and
+ * `brightness` (the brightest colour channel on any draw) only rank them. */
+struct RtMaskLight
+{
+    bool valid = false;
+    bool player = false;
+    int type = 0;                 /* 1 spot, 2 point */
+    float pos[3] = {};
+    float btimes = 0.0f;
+    float brightness = 0.0f;
+    uint32_t generation = 0;
+};
+
+/* Mirror of rt_shadow_mask.comp's MioPanRtMaskUniforms. */
+struct RtMaskUniforms
+{
+    int rtFlags[4];
+    float rtParams[4];
+    float rtPlayer[4];
+    float lightPos[kRtMaskChannels][4];
+    float blend[4];
+    float size[4];
+    float tuning[4];
+    float ao[4];
+};
+
+bool g_rt_mask_enabled = true;
+/* 1 = physically scaled; 0 = off.  World units, about 2 mm each. */
+float g_rt_ao_strength = 1.0f;
+float g_rt_ao_radius = 400.0f;
+/* Picked at EndFrame on the game thread; published under PresentStateGuard by
+ * UploadRayTracingScene() for whichever thread records. */
+RtMaskLight g_rt_mask_pending[kRtMaskChannels];
+RtMaskLight g_rt_mask_lights[kRtMaskChannels];
+uint32_t g_rt_mask_generation = 0;
+
+/* Everything below belongs to the thread that records (RecordFramePasses()). */
+SDL_GPUTexture *g_rt_gpos[2];
+SDL_GPUTexture *g_rt_gnormal;
+SDL_GPUTexture *g_rt_gdepth;
+SDL_GPUTexture *g_rt_mask_tex[2];
+SDL_GPUTexture *g_rt_ao_tex[2];
+Uint32 g_rt_mask_width;
+Uint32 g_rt_mask_height;
+int g_rt_mask_current = 0;
+bool g_rt_mask_history = false;
+/* This present's mask is recorded and bound. */
+bool g_rt_mask_live = false;
+/* ...and holds ambient occlusion; and last present's occlusion is usable as
+ * this one's history. */
+bool g_rt_ao_live = false;
+bool g_rt_ao_history = false;
+/* A resource or pipeline would not build; the forward path carries on. */
+bool g_rt_mask_failed = false;
+SDL_GPUGraphicsPipeline *g_rt_gbuffer_pipeline[2]; /* streamed, cached static */
+SDL_GPUComputePipeline *g_rt_mask_pipeline;
+uint32_t g_rt_mask_recorded_generation[kRtMaskChannels];
+float g_rt_mask_recorded_pos[kRtMaskChannels][3];
+uint32_t g_rt_mask_frame;
+int g_rt_mask_stat_draws;
+
+float RtMax3(const float *v)
+{
+    return std::max(v[0], std::max(v[1], v[2]));
+}
+
+/* EndFrame, game thread, after the player sphere is known. */
+void RtSelectMaskLights()
+{
+    struct Candidate
+    {
+        RtMaskLight light;
+        float score;
+    };
+    static std::vector<Candidate> candidates;
+    candidates.clear();
+
+    auto consider = [](int type, const float *pos, float btimes,
+                       const float *dif, const float *spc) {
+        const float brightness = std::max(RtMax3(dif), RtMax3(spc));
+        if (!(brightness > 0.0f) || !(btimes > 0.0f))
+        {
+            return;
+        }
+        for (Candidate &c : candidates)
+        {
+            const float dx = c.light.pos[0] - pos[0];
+            const float dy = c.light.pos[1] - pos[1];
+            const float dz = c.light.pos[2] - pos[2];
+            if (c.light.type == type && dx * dx + dy * dy + dz * dz < 1.0f)
+            {
+                /* The same light seen through another material's scales. */
+                c.light.brightness = std::max(c.light.brightness, brightness);
+                return;
+            }
+        }
+        Candidate c{};
+        c.light.valid = true;
+        c.light.type = type;
+        std::memcpy(c.light.pos, pos, sizeof(c.light.pos));
+        c.light.btimes = btimes;
+        c.light.brightness = brightness;
+        candidates.push_back(c);
+    };
+
+    for (const MioPanLightState &state : g_fragment_light_states)
+    {
+        if ((state.config[2] & MIOPAN_VU1_TERM_SPOT) != 0 &&
+            (state.config[0] & 1) != 0 && (g_rt_flags & MIOPAN_RT_SPOT) != 0)
+        {
+            const int count = std::min(state.counts[0], (int)MIOPAN_VU1_MAX_LANES);
+            for (int i = 0; i < count; i++)
+            {
+                consider(1, state.spot_position[i], state.spot_params[i][0],
+                         state.spot_diffuse[i], state.spot_specular[i]);
+            }
+        }
+        if ((state.config[2] & MIOPAN_VU1_TERM_POINT) != 0 &&
+            (state.config[0] & 2) != 0 && (g_rt_flags & MIOPAN_RT_POINT) != 0)
+        {
+            const int count = std::min(state.counts[1], (int)MIOPAN_VU1_MAX_LANES);
+            for (int i = 0; i < count; i++)
+            {
+                consider(2, state.point_position[i], state.point_params[i][0],
+                         state.point_diffuse[i], state.point_specular[i]);
+            }
+        }
+    }
+
+    /* Brightness at Mio by the kernel's own falloff -- bTimes / |L|, capped
+     * at full -- so the lights that matter where she stands, which is where
+     * the camera looks, win.  Her own light always wins. */
+    const float *sphere = g_rt_player_sphere_pending;
+    for (Candidate &c : candidates)
+    {
+        float d = 1000.0f;
+        if (sphere[3] > 0.0f)
+        {
+            const float dx = c.light.pos[0] - sphere[0];
+            const float dy = c.light.pos[1] - sphere[1];
+            const float dz = c.light.pos[2] - sphere[2];
+            d = std::sqrt(dx * dx + dy * dy + dz * dz);
+            c.light.player = d < sphere[3];
+        }
+        c.score = c.light.brightness *
+                  std::min(1.0f, c.light.btimes / std::max(d, 1.0f));
+        if (c.light.player)
+        {
+            c.score = std::numeric_limits<float>::max();
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate &l, const Candidate &r) {
+                  return l.score > r.score;
+              });
+    if (candidates.size() > (size_t)kRtMaskChannels)
+    {
+        candidates.resize(kRtMaskChannels);
+    }
+
+    /* A light keeps its channel while it stays picked: Mio's light by being
+     * hers (it moves every frame), any other by where it is. */
+    RtMaskLight next[kRtMaskChannels];
+    bool taken[kRtMaskChannels] = {};
+    for (int slot = 0; slot < kRtMaskChannels; slot++)
+    {
+        const RtMaskLight &old = g_rt_mask_pending[slot];
+        if (!old.valid)
+        {
+            continue;
+        }
+        for (size_t i = 0; i < candidates.size(); i++)
+        {
+            const RtMaskLight &c = candidates[i].light;
+            const float dx = c.pos[0] - old.pos[0];
+            const float dy = c.pos[1] - old.pos[1];
+            const float dz = c.pos[2] - old.pos[2];
+            const bool same = c.type == old.type &&
+                              (old.player ? c.player
+                                          : !c.player &&
+                                                dx * dx + dy * dy + dz * dz < 1.0f);
+            if (!taken[i] && same)
+            {
+                next[slot] = c;
+                next[slot].generation = old.generation;
+                taken[i] = true;
+                break;
+            }
+        }
+    }
+    for (size_t i = 0; i < candidates.size(); i++)
+    {
+        if (taken[i])
+        {
+            continue;
+        }
+        for (int slot = 0; slot < kRtMaskChannels; slot++)
+        {
+            if (!next[slot].valid)
+            {
+                next[slot] = candidates[i].light;
+                next[slot].generation = ++g_rt_mask_generation;
+                break;
+            }
+        }
+    }
+    std::copy(std::begin(next), std::end(next), std::begin(g_rt_mask_pending));
+}
+
+void ReleaseRtMaskTargets()
+{
+    SDL_GPUTexture **all[] = {&g_rt_gpos[0],     &g_rt_gpos[1],
+                              &g_rt_gnormal,     &g_rt_gdepth,
+                              &g_rt_mask_tex[0], &g_rt_mask_tex[1],
+                              &g_rt_ao_tex[0],   &g_rt_ao_tex[1]};
+    for (SDL_GPUTexture **texture : all)
+    {
+        if (*texture != nullptr && g_device != nullptr)
+        {
+            /* Deferred by SDL past any submission still using it. */
+            SDL_ReleaseGPUTexture(g_device, *texture);
+        }
+        *texture = nullptr;
+    }
+    g_rt_mask_width = 0;
+    g_rt_mask_height = 0;
+    g_rt_mask_history = false;
+    g_rt_ao_history = false;
+}
+
+SDL_GPUTexture *RtCreateMaskTexture(SDL_GPUTextureFormat format,
+                                    SDL_GPUTextureUsageFlags usage,
+                                    Uint32 width, Uint32 height)
+{
+    if (!SDL_GPUTextureSupportsFormat(g_device, format, SDL_GPU_TEXTURETYPE_2D,
+                                      usage))
+    {
+        SDL_Log("MioPan RT: texture format %d with usage 0x%x unsupported",
+                (int)format, (unsigned)usage);
+        return nullptr;
+    }
+    SDL_GPUTextureCreateInfo info{};
+    info.type = SDL_GPU_TEXTURETYPE_2D;
+    info.format = format;
+    info.usage = usage;
+    info.width = width;
+    info.height = height;
+    info.layer_count_or_depth = 1;
+    info.num_levels = 1;
+    info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    SDL_GPUTexture *texture = SDL_CreateGPUTexture(g_device, &info);
+    if (texture == nullptr)
+    {
+        LogSdlError("SDL_CreateGPUTexture(ray tracing mask)");
+    }
+    return texture;
+}
+
+/* The G-buffer and the mask pair, at the scene target's size: the forward
+ * shader reads them at its own pixel coordinates. */
+bool RtEnsureMaskTargets(Uint32 width, Uint32 height)
+{
+    if (g_rt_mask_width == width && g_rt_mask_height == height &&
+        g_rt_gpos[0] != nullptr)
+    {
+        return true;
+    }
+    ReleaseRtMaskTargets();
+    const SDL_GPUTextureUsageFlags gpos_usage =
+        SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER |
+        SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ;
+    const SDL_GPUTextureUsageFlags mask_usage =
+        SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ |
+        SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE;
+    /* Positions in full float: rooms span tens of thousands of units, where a
+     * half float's step is several of them. */
+    for (int i = 0; i < 2; i++)
+    {
+        g_rt_gpos[i] = RtCreateMaskTexture(
+            SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT, gpos_usage, width, height);
+        g_rt_mask_tex[i] = RtCreateMaskTexture(
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, mask_usage, width, height);
+        g_rt_ao_tex[i] = RtCreateMaskTexture(
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, mask_usage, width, height);
+    }
+    g_rt_gnormal = RtCreateMaskTexture(
+        SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
+        SDL_GPU_TEXTUREUSAGE_COLOR_TARGET |
+            SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ,
+        width, height);
+    g_rt_gdepth = RtCreateMaskTexture(
+        g_depth_format, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, width,
+        height);
+    if (g_rt_gpos[0] == nullptr || g_rt_gpos[1] == nullptr ||
+        g_rt_mask_tex[0] == nullptr || g_rt_mask_tex[1] == nullptr ||
+        g_rt_ao_tex[0] == nullptr || g_rt_ao_tex[1] == nullptr ||
+        g_rt_gnormal == nullptr || g_rt_gdepth == nullptr)
+    {
+        ReleaseRtMaskTargets();
+        return false;
+    }
+    g_rt_mask_width = width;
+    g_rt_mask_height = height;
+    g_rt_mask_history = false;
+    g_rt_ao_history = false;
+    return true;
+}
+
+SDL_GPUComputePipeline *LoadComputePipeline(const char *name,
+                                            Uint32 readonly_textures,
+                                            Uint32 readonly_buffers,
+                                            Uint32 readwrite_textures,
+                                            Uint32 uniform_buffers)
+{
+    const ShaderFormatInfo *format = PickShaderFormat();
+    char path[1024];
+    std::vector<Uint8> bytecode;
+    if (format == nullptr || !BuildShaderPath(name, format, path, sizeof(path)) ||
+        !ReadWholeFile(path, &bytecode))
+    {
+        SDL_Log("MioPan SDL_GPU: missing compute shader bytecode for %s", name);
+        return nullptr;
+    }
+    SDL_GPUComputePipelineCreateInfo info{};
+    info.code_size = bytecode.size();
+    info.code = bytecode.data();
+    info.entrypoint = format->entrypoint;
+    info.format = format->format;
+    info.num_readonly_storage_textures = readonly_textures;
+    info.num_readonly_storage_buffers = readonly_buffers;
+    info.num_readwrite_storage_textures = readwrite_textures;
+    info.num_uniform_buffers = uniform_buffers;
+    info.threadcount_x = 8;
+    info.threadcount_y = 8;
+    info.threadcount_z = 1;
+    SDL_GPUComputePipeline *pipeline =
+        SDL_CreateGPUComputePipeline(g_device, &info);
+    if (pipeline == nullptr)
+    {
+        SDL_Log("MioPan SDL_GPU: compute shader %s failed: %s", path,
+                SDL_GetError());
+    }
+    return pipeline;
+}
+
+bool RtEnsureMaskPipelines()
+{
+    for (int i = 0; i < 2; i++)
+    {
+        if (g_rt_gbuffer_pipeline[i] != nullptr)
+        {
+            continue;
+        }
+        const MeshPipelineLayout layout =
+            i == 0 ? MESH_PIPELINE_STREAMED : MESH_PIPELINE_CACHED_STATIC;
+        SDL_GPUShader *vertex_shader = GetCachedShader(
+            i == 0 ? "rt_gbuffer_streamed.vert" : "rt_gbuffer.vert",
+            SDL_GPU_SHADERSTAGE_VERTEX, 0);
+        SDL_GPUShader *fragment_shader = GetCachedShader(
+            "rt_gbuffer.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 2);
+        if (vertex_shader == nullptr || fragment_shader == nullptr)
+        {
+            return false;
+        }
+        /* The fragment-lit layout: the static stream carries its normal. */
+        SDL_GPUVertexBufferDescription buffer_desc[2]{};
+        SDL_GPUVertexAttribute attributes[4]{};
+        Uint32 num_buffers = 0;
+        Uint32 num_attributes = 0;
+        BuildMeshVertexInput(layout, true, buffer_desc, attributes,
+                             &num_buffers, &num_attributes);
+
+        SDL_GPUColorTargetDescription targets[2]{};
+        targets[0].format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT;
+        targets[1].format = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
+
+        SDL_GPUGraphicsPipelineCreateInfo info{};
+        info.vertex_shader = vertex_shader;
+        info.fragment_shader = fragment_shader;
+        info.vertex_input_state.vertex_buffer_descriptions = buffer_desc;
+        info.vertex_input_state.num_vertex_buffers = num_buffers;
+        info.vertex_input_state.vertex_attributes = attributes;
+        info.vertex_input_state.num_vertex_attributes = num_attributes;
+        info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+        /* As the mesh pipelines draw them, so the same surface wins. */
+        info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_BACK;
+        info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
+        info.rasterizer_state.enable_depth_clip = true;
+        info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.depth_stencil_state.enable_depth_test = true;
+        info.depth_stencil_state.enable_depth_write = true;
+        info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
+        info.target_info.color_target_descriptions = targets;
+        info.target_info.num_color_targets = 2;
+        info.target_info.has_depth_stencil_target = true;
+        info.target_info.depth_stencil_format = g_depth_format;
+        g_rt_gbuffer_pipeline[i] = SDL_CreateGPUGraphicsPipeline(g_device, &info);
+        if (g_rt_gbuffer_pipeline[i] == nullptr)
+        {
+            LogSdlError("SDL_CreateGPUGraphicsPipeline(ray tracing G-buffer)");
+            return false;
+        }
+    }
+    if (g_rt_mask_pipeline == nullptr)
+    {
+        g_rt_mask_pipeline = LoadComputePipeline("rt_shadow_mask.comp", 5,
+                                                 RT_BUFFER_COUNT, 2, 1);
+    }
+    return g_rt_mask_pipeline != nullptr;
+}
+
+void ReleaseRtMaskResources()
+{
+    ReleaseRtMaskTargets();
+    for (SDL_GPUGraphicsPipeline *&pipeline : g_rt_gbuffer_pipeline)
+    {
+        if (pipeline != nullptr && g_device != nullptr)
+        {
+            SDL_ReleaseGPUGraphicsPipeline(g_device, pipeline);
+        }
+        pipeline = nullptr;
+    }
+    if (g_rt_mask_pipeline != nullptr && g_device != nullptr)
+    {
+        SDL_ReleaseGPUComputePipeline(g_device, g_rt_mask_pipeline);
+    }
+    g_rt_mask_pipeline = nullptr;
+    g_rt_mask_live = false;
+    g_rt_ao_live = false;
+}
+
+/* A mask channel the pass traces and the forward shader may use: the mask is
+ * switched on and the channel holds a light. */
+bool RtMaskChannelUsed(int c)
+{
+    return g_rt_mask_enabled && g_rt_mask_lights[c].valid;
+}
+
+bool RtAmbientOcclusionOn()
+{
+    return g_rt_ao_strength > 0.0f && g_rt_ao_radius > 0.0f;
+}
+
+void FillRayTracingUniforms();
+
+/* The G-buffer prepass and the compute pass, ahead of the frame's first scene
+ * pass.  Leaves g_rt_mask_live saying whether the forward shader may read the
+ * result this present. */
+void RecordShadowMaskPass(SDL_GPUCommandBuffer *cmd, Uint32 width,
+                          Uint32 height, bool streamed_ready,
+                          bool colours_ready, bool animated_ready)
+{
+    g_rt_mask_live = false;
+    g_rt_ao_live = false;
+    g_rt_mask_stat_draws = 0;
+    /* Occlusion needs the pass whether or not the mask's lights do: with the
+     * mask switched off it runs with no lights, and every lane is traced per
+     * fragment as before. */
+    const bool ao_on = RtAmbientOcclusionOn();
+    if (!ao_on)
+    {
+        /* Whatever the pair holds goes stale while occlusion is off. */
+        g_rt_ao_history = false;
+    }
+    if (!RayTracingActive() || g_rt_mask_failed || width == 0 || height == 0)
+    {
+        return;
+    }
+    bool any_light = false;
+    for (int c = 0; c < kRtMaskChannels; c++)
+    {
+        any_light = any_light || RtMaskChannelUsed(c);
+    }
+    if (!any_light && !ao_on)
+    {
+        return;
+    }
+    if (!RtEnsureMaskPipelines() || !RtEnsureMaskTargets(width, height))
+    {
+        SDL_Log("MioPan RT: shadow mask unavailable; tracing per fragment");
+        g_rt_mask_failed = true;
+        return;
+    }
+
+    const int next = 1 - g_rt_mask_current;
+
+    SDL_GPUColorTargetInfo targets[2]{};
+    for (int i = 0; i < 2; i++)
+    {
+        targets[i].texture = i == 0 ? g_rt_gpos[next] : g_rt_gnormal;
+        targets[i].clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
+        targets[i].load_op = SDL_GPU_LOADOP_CLEAR;
+        targets[i].store_op = SDL_GPU_STOREOP_STORE;
+    }
+    SDL_GPUDepthStencilTargetInfo depth{};
+    depth.texture = g_rt_gdepth;
+    depth.clear_depth = 0.0f; /* reversed-Z, as the scene */
+    depth.load_op = SDL_GPU_LOADOP_CLEAR;
+    depth.store_op = SDL_GPU_STOREOP_DONT_CARE;
+    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, targets, 2, &depth);
+    if (pass == nullptr)
+    {
+        LogSdlError("SDL_BeginGPURenderPass(ray tracing G-buffer)");
+        return;
+    }
+    /* The scene's own viewport, so a G-buffer pixel is the scene pixel. */
+    const SDL_GPUViewport viewport = BuildOutputViewport(width, height);
+    SDL_SetGPUViewport(pass, &viewport);
+
+    /* rt_gbuffer.frag decides, per pixel, which of the four lights the
+     * forward shader would trace -- it needs the lights (live or not; the
+     * mask is not live yet) and the forward shader's threshold. */
+    FillRayTracingUniforms();
+    FillFlashlightUniforms();
+    for (int c = 0; c < kRtMaskChannels; c++)
+    {
+        g_uniforms.rtMaskLight[c][3] = RtMaskChannelUsed(c) ? 1.0f : 0.0f;
+    }
+
+    const int aniso_slot = ActiveAnisoSlot();
+    SDL_GPUGraphicsPipeline *bound = nullptr;
+    Uint32 bound_light_index = std::numeric_limits<Uint32>::max();
+    bool streamed_bound = false;
+    for (const DrawCommand &draw : g_draws)
+    {
+        /* Exactly the draws mesh_spot_rt.frag shades and that win the depth
+         * test: fragment-lit, opaque, depth-writing. */
+        if (!draw.fragment_lighting || !draw.transform_mesh ||
+            !draw.depth_test || !draw.depth_write || draw.indexed_mesh ||
+            draw.shadow_caster || draw.shadow_receiver || draw.finder_mask ||
+            !DrawGeometryReady(draw, streamed_ready, colours_ready,
+                               animated_ready))
+        {
+            continue;
+        }
+        const MeshPipelineLayout layout = DrawPipelineLayout(draw);
+        if (layout == MESH_PIPELINE_CACHED_ANIMATED ||
+            draw.fragment_light_index >= g_fragment_light_states.size())
+        {
+            continue;
+        }
+        SDL_GPUGraphicsPipeline *pipeline =
+            g_rt_gbuffer_pipeline[layout == MESH_PIPELINE_STREAMED ? 0 : 1];
+        if (pipeline != bound)
+        {
+            SDL_BindGPUGraphicsPipeline(pass, pipeline);
+            bound = pipeline;
+            streamed_bound = false;
+        }
+        std::memcpy(g_uniforms.mvp, draw.mvp, sizeof(g_uniforms.mvp));
+        std::memcpy(g_uniforms.model, draw.model, sizeof(g_uniforms.model));
+        std::memcpy(g_uniforms.alphaTest, draw.alpha_test,
+                    sizeof(g_uniforms.alphaTest));
+        g_uniforms.alphaSharpen[0] = g_alpha_sharpen;
+        g_uniforms.alphaSharpen[1] = g_alpha_cutoff;
+        SDL_PushGPUVertexUniformData(cmd, 0, &g_uniforms,
+                                     (Uint32)sizeof(g_uniforms));
+        SDL_PushGPUFragmentUniformData(cmd, 0, &g_uniforms,
+                                       (Uint32)sizeof(g_uniforms));
+        if (draw.fragment_light_index != bound_light_index)
+        {
+            SDL_PushGPUFragmentUniformData(
+                cmd, 1, &g_fragment_light_states[draw.fragment_light_index],
+                (Uint32)sizeof(MioPanLightState));
+            bound_light_index = draw.fragment_light_index;
+        }
+
+        SDL_GPUTextureSamplerBinding samplers[2]{};
+        samplers[0].texture = draw.texture;
+        samplers[0].sampler = g_samplers[aniso_slot][draw.repeat_uv ? 1 : 0]
+                                        [draw.min_linear ? 1 : 0]
+                                        [draw.mag_linear ? 1 : 0];
+        samplers[1].texture = g_white_texture;
+        samplers[1].sampler = g_samplers[0][0][1][1];
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 2);
+
+        if (draw.resident_mesh)
+        {
+            if (!DrawResidentMesh(pass, draw))
+            {
+                continue;
+            }
+            streamed_bound = false;
+        }
+        else
+        {
+            if (!streamed_bound)
+            {
+                SDL_GPUBufferBinding binding{};
+                binding.buffer = g_vertex_buffer;
+                SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+                streamed_bound = true;
+            }
+            DrawStreamedPrimitives(pass, draw);
+        }
+        g_rt_mask_stat_draws++;
+    }
+    SDL_EndGPURenderPass(pass);
+    if (g_rt_mask_stat_draws == 0)
+    {
+        /* Nothing fragment-lit this present; the pair keeps last frame's. */
+        return;
+    }
+
+    RtMaskUniforms u{};
+    u.rtFlags[0] = (int)g_rt_flags;
+    u.rtFlags[1] = (int)g_rt_static_nodes_live;
+    u.rtFlags[2] = (int)g_rt_dynamic_nodes_live;
+    u.rtFlags[3] = 1;
+    u.rtParams[0] = g_rt_settings.bias;
+    u.rtParams[1] = g_rt_settings.light_offset;
+    u.rtParams[2] = g_rt_settings.light_radius;
+    u.rtParams[3] = g_rt_settings.min_contribution;
+    std::memcpy(u.rtPlayer, g_rt_player_sphere, sizeof(u.rtPlayer));
+    for (int c = 0; c < kRtMaskChannels; c++)
+    {
+        const RtMaskLight &light = g_rt_mask_lights[c];
+        float blend = 1.0f;
+        if (RtMaskChannelUsed(c))
+        {
+            for (int a = 0; a < 3; a++)
+            {
+                u.lightPos[c][a] = light.pos[a];
+            }
+            u.lightPos[c][3] = (float)light.type;
+
+            const float dx = light.pos[0] - g_rt_mask_recorded_pos[c][0];
+            const float dy = light.pos[1] - g_rt_mask_recorded_pos[c][1];
+            const float dz = light.pos[2] - g_rt_mask_recorded_pos[c][2];
+            if (light.generation != g_rt_mask_recorded_generation[c])
+            {
+                blend = 1.0f;
+            }
+            else
+            {
+                const float moved = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const float t = std::min(
+                    std::max((moved - kRtMaskStillMove) /
+                                 (kRtMaskFastMove - kRtMaskStillMove),
+                             0.0f),
+                    1.0f);
+                blend = kRtMaskBlend + (kRtMaskBlendMoving - kRtMaskBlend) * t;
+            }
+            g_rt_mask_recorded_generation[c] = light.generation;
+            std::memcpy(g_rt_mask_recorded_pos[c], light.pos,
+                        sizeof(g_rt_mask_recorded_pos[c]));
+        }
+        u.blend[c] = blend;
+    }
+    u.size[0] = (float)width;
+    u.size[1] = (float)height;
+    u.size[2] = (float)(g_rt_mask_frame++ % 4096u);
+    u.size[3] = g_rt_mask_history ? 1.0f : 0.0f;
+    u.tuning[0] = kRtMaskHistoryTolerance * kRtMaskHistoryTolerance;
+    u.tuning[1] = (float)std::max(kRtMaskRaysWithoutHistory,
+                                  g_rt_settings.samples);
+    if (ao_on)
+    {
+        u.ao[0] = g_rt_ao_radius;
+        u.ao[1] = (float)kRtAoRays;
+        u.ao[2] = (float)kRtAoRaysWithoutHistory;
+        u.ao[3] = g_rt_ao_history ? kRtAoFrames : 0.0f;
+    }
+
+    SDL_GPUStorageTextureReadWriteBinding outputs[2]{};
+    outputs[0].texture = g_rt_mask_tex[next];
+    outputs[1].texture = g_rt_ao_tex[next];
+    SDL_GPUComputePass *compute = SDL_BeginGPUComputePass(cmd, outputs, 2,
+                                                          nullptr, 0);
+    if (compute == nullptr)
+    {
+        LogSdlError("SDL_BeginGPUComputePass(ray tracing mask)");
+        return;
+    }
+    SDL_BindGPUComputePipeline(compute, g_rt_mask_pipeline);
+    SDL_GPUTexture *inputs[5] = {g_rt_gpos[next], g_rt_gnormal,
+                                 g_rt_mask_tex[g_rt_mask_current],
+                                 g_rt_gpos[g_rt_mask_current],
+                                 g_rt_ao_tex[g_rt_mask_current]};
+    SDL_BindGPUComputeStorageTextures(compute, 0, inputs, 5);
+    SDL_GPUBuffer *buffers[RT_BUFFER_COUNT];
+    for (int i = 0; i < RT_BUFFER_COUNT; i++)
+    {
+        buffers[i] = g_rt_gpu[i].buffer;
+    }
+    SDL_BindGPUComputeStorageBuffers(compute, 0, buffers, RT_BUFFER_COUNT);
+    SDL_PushGPUComputeUniformData(cmd, 0, &u, (Uint32)sizeof(u));
+    SDL_DispatchGPUCompute(compute, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+    SDL_EndGPUComputePass(compute);
+
+    g_rt_mask_current = next;
+    g_rt_mask_history = true;
+    g_rt_mask_live = true;
+    g_rt_ao_live = ao_on;
+    g_rt_ao_history = ao_on;
+}
+
+void FillRayTracingUniforms()
+{
+    g_uniforms.rtFlags[0] = (int)g_rt_flags;
+    g_uniforms.rtFlags[1] = (int)g_rt_static_nodes_live;
+    g_uniforms.rtFlags[2] = (int)g_rt_dynamic_nodes_live;
+    g_uniforms.rtFlags[3] = std::min(std::max(g_rt_settings.samples, 1), 16);
+    g_uniforms.rtParams[0] = g_rt_settings.bias;
+    g_uniforms.rtParams[1] = g_rt_settings.light_offset;
+    g_uniforms.rtParams[2] = g_rt_settings.light_radius;
+    g_uniforms.rtParams[3] = g_rt_settings.min_contribution;
+    std::memcpy(g_uniforms.rtPlayer, g_rt_player_sphere,
+                sizeof(g_uniforms.rtPlayer));
+    for (int c = 0; c < kRtMaskChannels; c++)
+    {
+        const RtMaskLight &light = g_rt_mask_lights[c];
+        for (int a = 0; a < 3; a++)
+        {
+            g_uniforms.rtMaskLight[c][a] = light.pos[a];
+        }
+        g_uniforms.rtMaskLight[c][3] =
+            g_rt_mask_live && RtMaskChannelUsed(c) ? 1.0f : 0.0f;
+    }
+    g_uniforms.rtMaskFlags[0] = g_rt_mask_live ? 1 : 0;
+    g_uniforms.rtMaskFlags[1] = g_rt_ao_live ? 1 : 0;
+    g_uniforms.rtAmbient[0] = g_rt_ao_strength / 2.2f;
+    g_uniforms.rtMaskFlags[2] = 0;
+    g_uniforms.rtMaskFlags[3] = 0;
+}
+
+void BindRayTracingBuffers(SDL_GPURenderPass *pass)
+{
+    SDL_GPUBuffer *buffers[RT_BUFFER_COUNT];
+    for (int i = 0; i < RT_BUFFER_COUNT; i++)
+    {
+        buffers[i] = g_rt_gpu[i].buffer;
+    }
+    SDL_BindGPUFragmentStorageBuffers(pass, 0, buffers, RT_BUFFER_COUNT);
 }
 
 /* Replays g_draws[first, last).  The range exists so a draw that samples the
@@ -10370,6 +11788,24 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
 
     g_uniforms.flags1[1] = g_shadow_valid ? 1 : 0;
     g_uniforms.flags1[2] = g_dbg_shadow_view ? 1 : 0;
+
+    /* Once per segment, like the anisotropy slot below: the hierarchy only
+     * changes between frames. */
+    const bool rt_active = !visibility && RayTracingActive();
+    if (rt_active)
+    {
+        FillRayTracingUniforms();
+    }
+    FillFlashlightUniforms();
+    /* The bounce lights have a block of their own, set once for the whole
+     * segment.  Only the per-pixel mesh shaders declare it; SDL leaves the
+     * slot alone for every other pipeline. */
+    {
+        const BounceUniforms &bounce =
+            RayTracingActive() ? g_bounce_live : kNoBounce;
+        SDL_PushGPUFragmentUniformData(cmd, 3, &bounce,
+                                       (Uint32)sizeof(bounce));
+    }
 
     /* Once per segment rather than per draw: the setting cannot move inside a
      * frame, and ActiveAnisoSlot() walks the table. */
@@ -10452,6 +11888,7 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         bool depth_test = draw.depth_test && !g_dbg_nodepth;
         const MeshPipelineLayout layout = DrawPipelineLayout(draw);
         SDL_GPUGraphicsPipeline *pipeline;
+        bool rt_draw = false;
         if (visibility)
         {
             pipeline = GetVisibilityPipeline(layout,
@@ -10478,12 +11915,26 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         }
         else
         {
-            pipeline = GetPipeline(layout,
-                                   draw.indexed_mesh ? true
-                                                     : draw.transform_mesh,
-                                   depth_test, draw.depth_compare,
-                                   draw.depth_write, g_dbg_wireframe,
-                                   draw.blend_mode, draw.fragment_lighting);
+            const bool transform =
+                draw.indexed_mesh ? true : draw.transform_mesh;
+            rt_draw = rt_active && draw.fragment_lighting;
+            pipeline = GetPipeline(layout, transform, depth_test,
+                                   draw.depth_compare, draw.depth_write,
+                                   g_dbg_wireframe, draw.blend_mode,
+                                   draw.fragment_lighting, rt_draw);
+            if (pipeline == nullptr && rt_draw)
+            {
+                /* Missing or broken mesh_spot_rt bytecode must not take the
+                 * room with it: drop back to the plain per-pixel shader. */
+                SDL_Log("MioPan SDL_GPU: ray-traced pipeline unavailable; "
+                        "ray-traced shadows disabled");
+                g_rt_shader_failed = true;
+                rt_draw = false;
+                pipeline = GetPipeline(layout, transform, depth_test,
+                                       draw.depth_compare, draw.depth_write,
+                                       g_dbg_wireframe, draw.blend_mode,
+                                       draw.fragment_lighting, false);
+            }
         }
         if (pipeline == nullptr)
         {
@@ -10493,6 +11944,10 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
         {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
             bound_pipeline = pipeline;
+            if (rt_draw)
+            {
+                BindRayTracingBuffers(pass);
+            }
         }
 
         if (draw.blend_mode == GS_BLEND_FIXED_ALPHA)
@@ -10624,13 +12079,30 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
             }
         }
 
-        SDL_GPUTextureSamplerBinding samplers[2]{};
+        SDL_GPUTextureSamplerBinding samplers[5]{};
         samplers[0].texture = draw.texture;
         samplers[0].sampler =
             g_samplers[material_aniso_slot]
                       [draw.repeat_uv ? 1 : 0]
                       [draw.min_linear ? 1 : 0]
                       [draw.mag_linear ? 1 : 0];
+        /* mesh_spot_rt.frag's shadow mask and the G-buffer position it is
+         * checked against, read with Load.  White stand-ins when the mask is
+         * not live -- the shader is told not to look (uRtMaskFlags). */
+        if (rt_draw)
+        {
+            const bool live = g_rt_mask_live;
+            samplers[2].texture =
+                live ? g_rt_mask_tex[g_rt_mask_current] : g_white_texture;
+            samplers[2].sampler = g_samplers[0][0][0][0];
+            samplers[3].texture =
+                live ? g_rt_gpos[g_rt_mask_current] : g_white_texture;
+            samplers[3].sampler = g_samplers[0][0][0][0];
+            samplers[4].texture = live && g_rt_ao_live
+                                      ? g_rt_ao_tex[g_rt_mask_current]
+                                      : g_white_texture;
+            samplers[4].sampler = g_samplers[0][0][0][0];
+        }
         /* Slot 1 is uAuxTexture.  A receiver samples the shadow map through it
          * -- clamped, so the projector's edge does not wrap round the map --
          * and everything else leaves it on the white 1x1. */
@@ -10644,7 +12116,7 @@ void DrawQueuedSprites(SDL_GPURenderPass *pass, SDL_GPUCommandBuffer *cmd,
             samplers[1].texture = g_white_texture;
             samplers[1].sampler = g_samplers[0][0][1][1];
         }
-        SDL_BindGPUFragmentSamplers(pass, 0, samplers, 2);
+        SDL_BindGPUFragmentSamplers(pass, 0, samplers, rt_draw ? 5 : 2);
 
         if (draw.resident_mesh)
         {
@@ -11640,6 +13112,11 @@ void RecordFramePasses(SDL_GPUCommandBuffer *cmd,
     g_shadow_valid = RecordShadowMapPass(cmd, vertices_uploaded, colours_ready,
                                          animated_vertices_ready);
 
+    /* Ray-traced shadows: the G-buffer and the shadow mask, before the first
+     * scene segment reads them.  Per present, like the shadow map above. */
+    RecordShadowMaskPass(cmd, render_width, render_height, vertices_uploaded,
+                         colours_ready, animated_vertices_ready);
+
     /*
      * The queue is replayed in one pass unless an effect samples the GS frame
      * buffer.  Each such draw breaks the pass: the segment before it is drawn
@@ -12628,6 +14105,1250 @@ private:
     bool m_swapchain;
     bool m_state;
 };
+
+/* ---- Ray-traced shadows: hierarchy builds and upload ----------------------
+ * The other half of the block before DrawQueuedSprites(); it lives here
+ * because the upload has to hold PresentStateGuard. */
+
+/* Take a finished static build, if there is one.  Its spans become what the
+ * instances say the GPU holds; anything promoted since it was launched is
+ * still missing from it and keeps going through the dynamic hierarchy. */
+void RtPollStaticJob()
+{
+    if (g_rt_job == nullptr ||
+        !g_rt_job->done.load(std::memory_order_acquire))
+    {
+        return;
+    }
+    if (g_rt_worker.joinable())
+    {
+        g_rt_worker.join();
+    }
+    std::shared_ptr<RtStaticJob> job = std::move(g_rt_job);
+    g_rt_job.reset();
+
+    for (auto &entry : g_rt_instances)
+    {
+        entry.second.static_spans.clear();
+    }
+    for (auto &built : job->spans)
+    {
+        auto found = g_rt_instances.find(built.first);
+        if (found != g_rt_instances.end())
+        {
+            found->second.static_spans = std::move(built.second);
+        }
+    }
+    g_rt_static_bvh = std::move(job->bvh);
+    g_rt_static_upload_pending = true;
+
+    g_rt_stats.static_tris = (int)g_rt_static_bvh.tris.size();
+    g_rt_stats.static_nodes = (int)g_rt_static_bvh.nodes.size();
+    g_rt_stats.static_build_ms = (float)g_rt_static_bvh.build_ms;
+    g_rt_static_depth = g_rt_static_bvh.depth;
+    g_rt_stats.static_builds++;
+    if (!g_rt_static_bvh.nodes.empty())
+    {
+        const MioPanRt::GpuNode &root = g_rt_static_bvh.nodes[0];
+        SDL_Log("MioPan RT: static BVH %d tris, %d nodes, depth %d, %.1f ms; "
+                "bounds (%.0f %.0f %.0f)-(%.0f %.0f %.0f)",
+                g_rt_stats.static_tris, g_rt_stats.static_nodes,
+                g_rt_static_bvh.depth, g_rt_static_bvh.build_ms,
+                root.bmin[0], root.bmin[1], root.bmin[2], root.bmax[0],
+                root.bmax[1], root.bmax[2]);
+    }
+}
+
+/* Snapshot every promoted instance's triangles in world space and build them
+ * off this thread.  The copy is what makes that safe: the worker never
+ * touches a ResidentMesh. */
+void RtLaunchStaticBuild()
+{
+    std::shared_ptr<RtStaticJob> job;
+    try
+    {
+        job = std::make_shared<RtStaticJob>();
+        for (const auto &entry : g_rt_instances)
+        {
+            const RtInstance &instance = entry.second;
+            if (!instance.promoted)
+            {
+                continue;
+            }
+            const ResidentMeshPtr mesh = instance.mesh.lock();
+            if (mesh == nullptr)
+            {
+                continue;
+            }
+            for (const RtSpan &span : instance.spans)
+            {
+                RtAppendResident(job->corners, job->flags, *mesh,
+                                 instance.model, span.begin, span.end, 0);
+            }
+            job->spans.emplace_back(entry.first, instance.spans);
+        }
+    }
+    catch (const std::bad_alloc &)
+    {
+        return;
+    }
+
+    g_rt_static_dirty = false;
+    g_rt_last_static_launch = g_frame_index;
+    g_rt_job = job;
+    try
+    {
+        g_rt_worker = std::thread([job]() {
+            MioPanRt::BuildBvh(job->corners.data(), job->flags.data(),
+                               job->flags.size(), 12, true, &job->bvh);
+            job->done.store(true, std::memory_order_release);
+        });
+    }
+    catch (const std::exception &)
+    {
+        /* No thread: build here instead, once. */
+        MioPanRt::BuildBvh(job->corners.data(), job->flags.data(),
+                           job->flags.size(), 12, true, &job->bvh);
+        job->done.store(true, std::memory_order_release);
+    }
+}
+
+bool RtEnsureGpuBuffer(RtGpuBuffer &target, size_t bytes)
+{
+    if (bytes > std::numeric_limits<Uint32>::max() / 2u)
+    {
+        return false;
+    }
+    const Uint32 needed = std::max<Uint32>((Uint32)bytes, 256u);
+    if (target.buffer != nullptr && target.size >= needed)
+    {
+        return true;
+    }
+    Uint32 size = target.buffer != nullptr
+        ? std::max<Uint32>(needed, target.size + target.size / 2u)
+        : needed;
+    size = (size + 4095u) & ~4095u;
+
+    SDL_GPUBufferCreateInfo info{};
+    /* Read by mesh_spot_rt.frag and by the shadow mask's compute pass. */
+    info.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ |
+                 SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ;
+    info.size = size;
+    SDL_GPUBuffer *buffer = SDL_CreateGPUBuffer(g_device, &info);
+    if (buffer == nullptr)
+    {
+        LogSdlError("SDL_CreateGPUBuffer(ray tracing)");
+        return false;
+    }
+    if (target.buffer != nullptr)
+    {
+        /* Deferred by SDL past any submission still reading it. */
+        SDL_ReleaseGPUBuffer(g_device, target.buffer);
+    }
+    target.buffer = buffer;
+    target.size = size;
+    return true;
+}
+
+/* Copy whatever was rebuilt into the four storage buffers, on a command
+ * buffer of its own.  Submitted ahead of the frame's own, which is all the
+ * ordering the draws need.  Held under the presenter's lock, because in
+ * display mode the presenter binds these same buffers. */
+void UploadRayTracingScene()
+{
+    PresentStateGuard guard;
+    /* The mask's lights travel with the hierarchy they are traced against. */
+    std::copy(std::begin(g_rt_mask_pending), std::end(g_rt_mask_pending),
+              std::begin(g_rt_mask_lights));
+    /* So do the bounce lights. */
+    g_bounce_live = g_bounce_pending;
+    for (RtGpuBuffer &buffer : g_rt_gpu)
+    {
+        if (!RtEnsureGpuBuffer(buffer, 256u))
+        {
+            return;
+        }
+    }
+
+    struct Piece
+    {
+        int slot;
+        const void *data;
+        size_t bytes;
+    };
+    Piece pieces[RT_BUFFER_COUNT];
+    int piece_count = 0;
+    bool static_ok = g_rt_static_upload_pending;
+    bool dynamic_ok = g_rt_dynamic_upload_pending;
+    if (!static_ok && !dynamic_ok)
+    {
+        return;
+    }
+    auto add = [&](int slot, const void *data, size_t bytes) {
+        if (bytes == 0)
+        {
+            return true;
+        }
+        if (!RtEnsureGpuBuffer(g_rt_gpu[slot], bytes))
+        {
+            return false;
+        }
+        pieces[piece_count++] = Piece{slot, data, bytes};
+        return true;
+    };
+    if (static_ok)
+    {
+        static_ok =
+            add(RT_STATIC_NODES, g_rt_static_bvh.nodes.data(),
+                g_rt_static_bvh.nodes.size() * sizeof(MioPanRt::GpuNode)) &&
+            add(RT_STATIC_TRIS, g_rt_static_bvh.tris.data(),
+                g_rt_static_bvh.tris.size() * sizeof(MioPanRt::GpuTri));
+    }
+    if (dynamic_ok)
+    {
+        dynamic_ok =
+            add(RT_DYNAMIC_NODES, g_rt_dynamic_bvh.nodes.data(),
+                g_rt_dynamic_bvh.nodes.size() * sizeof(MioPanRt::GpuNode)) &&
+            add(RT_DYNAMIC_TRIS, g_rt_dynamic_bvh.tris.data(),
+                g_rt_dynamic_bvh.tris.size() * sizeof(MioPanRt::GpuTri));
+    }
+
+    bool uploaded = piece_count == 0;
+    if (piece_count != 0)
+    {
+        size_t total = 0;
+        size_t offsets[RT_BUFFER_COUNT];
+        for (int i = 0; i < piece_count; i++)
+        {
+            offsets[i] = total;
+            total = AlignUploadOffset(total + pieces[i].bytes);
+        }
+        if (total <= std::numeric_limits<Uint32>::max() / 2u &&
+            (g_rt_transfer == nullptr || g_rt_transfer_size < total))
+        {
+            if (g_rt_transfer != nullptr)
+            {
+                SDL_ReleaseGPUTransferBuffer(g_device, g_rt_transfer);
+                g_rt_transfer = nullptr;
+            }
+            /* Headroom, so a growing scene does not reallocate every frame. */
+            const Uint32 size = (Uint32)((total + total / 2u + 65535u) &
+                                         ~size_t(65535u));
+            SDL_GPUTransferBufferCreateInfo transfer_info{};
+            transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+            transfer_info.size = size;
+            g_rt_transfer = SDL_CreateGPUTransferBuffer(g_device, &transfer_info);
+            g_rt_transfer_size = g_rt_transfer != nullptr ? size : 0u;
+        }
+        SDL_GPUTransferBuffer *transfer =
+            g_rt_transfer_size >= total ? g_rt_transfer : nullptr;
+        /* Cycle on map: the previous upload's copy may still be pending. */
+        unsigned char *mapped =
+            transfer != nullptr
+                ? static_cast<unsigned char *>(
+                      SDL_MapGPUTransferBuffer(g_device, transfer, true))
+                : nullptr;
+        SDL_GPUCommandBuffer *cmd = nullptr;
+        if (mapped != nullptr)
+        {
+            for (int i = 0; i < piece_count; i++)
+            {
+                std::memcpy(mapped + offsets[i], pieces[i].data,
+                            pieces[i].bytes);
+            }
+            SDL_UnmapGPUTransferBuffer(g_device, transfer);
+            cmd = SDL_AcquireGPUCommandBuffer(g_device);
+        }
+        SDL_GPUCopyPass *copy =
+            cmd != nullptr ? SDL_BeginGPUCopyPass(cmd) : nullptr;
+        if (copy != nullptr)
+        {
+            for (int i = 0; i < piece_count; i++)
+            {
+                SDL_GPUTransferBufferLocation src{};
+                src.transfer_buffer = transfer;
+                src.offset = (Uint32)offsets[i];
+                SDL_GPUBufferRegion dst{};
+                dst.buffer = g_rt_gpu[pieces[i].slot].buffer;
+                dst.offset = 0;
+                dst.size = (Uint32)pieces[i].bytes;
+                /* Cycle: a frame still in flight keeps reading the old
+                 * contents. */
+                SDL_UploadToGPUBuffer(copy, &src, &dst, true);
+            }
+            SDL_EndGPUCopyPass(copy);
+            uploaded = SDL_SubmitGPUCommandBuffer(cmd);
+            if (!uploaded)
+            {
+                LogSdlError("SDL_SubmitGPUCommandBuffer(ray tracing)");
+            }
+        }
+        else
+        {
+            if (cmd != nullptr)
+            {
+                SDL_CancelGPUCommandBuffer(cmd);
+            }
+            LogSdlError("ray tracing upload");
+        }
+    }
+
+    /* Whatever did not make it to the GPU is published as empty, so the
+     * shader never walks a buffer that holds something else. */
+    if (g_rt_static_upload_pending)
+    {
+        g_rt_static_nodes_live = uploaded && static_ok
+            ? (Uint32)g_rt_static_bvh.nodes.size() : 0u;
+        g_rt_static_upload_pending = false;
+    }
+    if (g_rt_dynamic_upload_pending)
+    {
+        g_rt_dynamic_nodes_live = uploaded && dynamic_ok
+            ? (Uint32)g_rt_dynamic_bvh.nodes.size() : 0u;
+        std::memcpy(g_rt_player_sphere, g_rt_player_sphere_pending,
+                    sizeof(g_rt_player_sphere));
+        g_rt_dynamic_upload_pending = false;
+    }
+}
+
+/* Forget the scene: ray tracing was switched off, or the renderer is going. */
+void RtResetScene()
+{
+    if (g_rt_worker.joinable())
+    {
+        g_rt_worker.join();
+    }
+    g_rt_job.reset();
+    g_rt_instances.clear();
+    g_rt_static_dirty = false;
+    g_rt_static_bvh = MioPanRt::Bvh{};
+    g_rt_dynamic_bvh = MioPanRt::Bvh{};
+    g_rt_static_upload_pending = false;
+    g_rt_dynamic_upload_pending = false;
+    g_rt_dynamic_corners.clear();
+    g_rt_dynamic_flags.clear();
+    for (RtMaskLight &light : g_rt_mask_pending)
+    {
+        light = RtMaskLight{};
+    }
+    g_bounce_pending = BounceUniforms{};
+    for (BounceSlot &slot : g_bounce_slots)
+    {
+        slot = BounceSlot{};
+    }
+    {
+        PresentStateGuard guard;
+        g_bounce_live = BounceUniforms{};
+        g_rt_static_nodes_live = 0;
+        g_rt_dynamic_nodes_live = 0;
+        std::memset(g_rt_player_sphere, 0, sizeof(g_rt_player_sphere));
+        for (RtMaskLight &light : g_rt_mask_lights)
+        {
+            light = RtMaskLight{};
+        }
+    }
+    const int builds = g_rt_stats.static_builds;
+    g_rt_stats = MioPanRayTracingStats{};
+    g_rt_stats.static_builds = builds;
+}
+
+/* ------------------------------------------------------------------------
+ *  The flashlight's bounce light (MioPan_RendererSetFlashlightBounce()).
+ *
+ *  Where the beam lands, lit by the flashlight's own law, becomes a few small
+ *  area lights.  A fixed pattern of rays is cast across the beam -- fixed
+ *  relative to the beam, so it slides as the beam sways instead of
+ *  shimmering -- against both hierarchies, Mio's own triangles passed
+ *  through (the flashlight is hers).  The hits are pooled by which part of
+ *  the beam they came from: the core, and seven sectors of the bell around
+ *  it.  The spill halo gets no rays: six per cent in the GS's units is a
+ *  fraction of a per cent once decoded, nothing worth bouncing.  Each pool
+ *  becomes one light: the
+ *  energy-weighted centre and normal of its hits, their summed footprint as
+ *  its area and their reflected light as its colour.
+ *
+ *  Further bounces (MioPan_RendererSetFlashlightBounceCount()) carry the
+ *  light on: rays leave each bounce's hits in a diffuse spread, and where
+ *  they land is clustered into eight more lights.  See
+ *  TraceBounceGeneration() and ClusterBounceSamples().
+ *
+ *  The energy is worked out in LINEAR light.  The kernel's GS units are gamma
+ *  encoded -- the PS2 added light in display space -- so a hit's value is
+ *  decoded before it is spread over the patch's footprint.  Decoded, the
+ *  flashlight's bTimes/|L| law comes out close to inverse square, so the
+ *  bounce's total holds roughly steady as the beam reaches further, as a real
+ *  torch's does.  mesh_spot_frag.hlsli adds the result in linear light too.
+ *
+ *  A receiver sees each light as a disc: area * cos * cos / (pi d^2 + area),
+ *  the on-axis disc form factor, which stays finite right up against the
+ *  patch.  No visibility: the bounce is broad and dim, and the hit surface's
+ *  own facing already keeps it from leaking through the wall it lands on.
+ * --------------------------------------------------------------------- */
+constexpr int kBounceRays = 96;
+/* The core pool's radius, as a fraction of the bell's: about a fifth of the
+ * rays, the brightest. */
+constexpr float kBounceCoreFraction = 0.45f;
+/* Beyond this a ray is taken to have left the room (about 60 m). */
+constexpr float kBounceMaxDistance = 30000.0f;
+/* What strength 1 assumes a surface reflects: old dark wood and plaster. */
+constexpr float kBounceAlbedo = 0.4f;
+/* How far a light sits off its patch, so the patch's own plane is not lit
+ * at grazing angles by its own centre (about 6 cm). */
+constexpr float kBounceLift = 30.0f;
+/* This frame's pools against the running ones.  The pattern keeps the rays
+ * themselves steady; this covers what it cannot -- a pool's hits jumping
+ * between a near and a far surface as the beam crosses an edge. */
+constexpr float kBounceBlend = 0.5f;
+constexpr float kBounceGoldenAngle = 2.39996323f;
+/* Mio's own triangles (the flashlight is hers) and cut-outs, which are mostly
+ * holes. */
+constexpr unsigned char kBounceSkip =
+    MioPanRt::kTriPlayer | MioPanRt::kTriCutout;
+constexpr float kBouncePi = 3.14159265f;
+/* A further bounce's rays leave this far off the surface they bounce from
+ * (about 4 mm), clear of it whatever the rounding in where it was hit. */
+constexpr float kBounceOffset = 2.0f;
+/* What a turn in facing costs against distance, when a further bounce's hits
+ * are clustered: a right angle counts as about 3 m apart, which keeps a floor
+ * and the wall standing on it in lights of their own. */
+constexpr float kBounceFacingCost = 1500.0f;
+/* However strong the bounce is set, a further bounce passes on at most this
+ * much of what reached it, so the bounces still add up to something finite. */
+constexpr float kBounceMaxReflect = 0.9f;
+/* Steps through the cosine spiral, one per bounce, each coprime to
+ * kBounceRays: consecutive rays -- often from the same parent -- get
+ * directions far apart, and no bounce repeats the last one's pairing. */
+constexpr int kBounceStride[kBounceMaxCount] = {1, 37, 59, 85};
+constexpr int kBounceClusterRounds = 3;
+
+/* One ray's landing: where, the way the surface faces (back towards where
+ * the ray came from), the light arriving in LINEAR units times the area of
+ * the patch the ray stands for, and that area. */
+struct BounceSample
+{
+    float position[3];
+    float normal[3];
+    float flux[3];
+    float area;
+    /* flux as luminance. */
+    float weight;
+};
+
+/* What becomes one light. */
+struct BouncePool
+{
+    float area = 0.0f;
+    float flux[3] = {};
+    float position[3] = {};
+    float normal[3] = {};
+    float weight = 0.0f;
+};
+
+float BounceLuminance(const float rgb[3])
+{
+    return 0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2];
+}
+
+void BouncePoolAdd(BouncePool &pool, const BounceSample &sample)
+{
+    pool.area += sample.area;
+    pool.weight += sample.weight;
+    for (int a = 0; a < 3; a++)
+    {
+        pool.flux[a] += sample.flux[a];
+        pool.position[a] += sample.position[a] * sample.weight;
+        pool.normal[a] += sample.normal[a] * sample.weight;
+    }
+}
+
+/* Two axes across unit `n`.  Any vector off it would do; a fixed one keeps a
+ * pattern laid in the frame from spinning about `n` frame to frame. */
+void BounceFrame(const float n[3], float u[3], float v[3])
+{
+    const float up[3] = {std::fabs(n[1]) > 0.9f ? 1.0f : 0.0f,
+                         std::fabs(n[1]) > 0.9f ? 0.0f : 1.0f, 0.0f};
+    u[0] = up[1] * n[2] - up[2] * n[1];
+    u[1] = up[2] * n[0] - up[0] * n[2];
+    u[2] = up[0] * n[1] - up[1] * n[0];
+    const float u_len = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+    for (int a = 0; a < 3; a++)
+    {
+        u[a] /= u_len;
+    }
+    v[0] = n[1] * u[2] - n[2] * u[1];
+    v[1] = n[2] * u[0] - n[0] * u[2];
+    v[2] = n[0] * u[1] - n[1] * u[0];
+}
+
+/* The nearer hit of the two hierarchies. */
+bool BounceTrace(const float origin[3], const float dir[3], bool two_sided,
+                 MioPanRt::RayHit *hit)
+{
+    bool found = false;
+    float tmax = kBounceMaxDistance;
+    if (MioPanRt::TraceClosest(g_rt_static_bvh, origin, dir, tmax, kBounceSkip,
+                               two_sided, hit))
+    {
+        found = true;
+        tmax = hit->t;
+    }
+    MioPanRt::RayHit nearer{};
+    if (MioPanRt::TraceClosest(g_rt_dynamic_bvh, origin, dir, tmax,
+                               kBounceSkip, two_sided, &nearer))
+    {
+        found = true;
+        *hit = nearer;
+    }
+    return found;
+}
+
+float BounceSmoothstep(float edge0, float edge1, float v)
+{
+    const float t =
+        std::min(std::max((v - edge0) / (edge1 - edge0), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/* The flashlight's cone at cos^2 of the angle off its axis, shaped exactly as
+ * MioPanVu1Spot() and MioPanVu1SoftCone() shape it. */
+float BounceCone(float cos2, const float params[4])
+{
+    const float cone = std::max(cos2 - params[1], 0.0f) * params[2];
+    const float softness = std::min(std::max(g_flashlight_softness, 0.0f), 1.0f);
+    if (softness <= 0.0f && g_flashlight_spill <= 0.0f)
+    {
+        return cone;
+    }
+    const float x = std::sqrt(std::max(1.0f - cos2, 0.0f) * params[2]);
+    const float bell = 1.0f - BounceSmoothstep(0.0f, 1.0f + 0.5f * softness, x);
+    const float spill =
+        g_flashlight_spill *
+        (1.0f - BounceSmoothstep(0.0f, std::max(kFlashlightSpillReach, 1.0f), x));
+    const float k = std::min(softness * 2.0f, 1.0f);
+    return cone + (bell - cone) * k + spill;
+}
+
+/* The first bounce: the beam's own pattern of rays, pooled by where in the
+ * beam each came from.  Every hit is also kept in `samples` for the next
+ * bounce to leave from.  Returns how many were kept. */
+int TraceBeamBounce(const FlashlightSource &src, const float axis[3],
+                    bool two_sided, BouncePool *pools, BounceSample *samples,
+                    int *rays, int *hits)
+{
+    float u_axis[3];
+    float v_axis[3];
+    BounceFrame(axis, u_axis, v_axis);
+
+    /* Distances across the beam are in cone half-angles, as the soft cone
+     * measures them: x = sin(angle) / sin(half-angle). */
+    const float sin_half = 1.0f / std::sqrt(src.params[2]);
+    const float softness = std::min(std::max(g_flashlight_softness, 0.0f), 1.0f);
+    const bool shaped = softness > 0.0f || g_flashlight_spill > 0.0f;
+    const float x_core = shaped ? 1.0f + 0.5f * softness : 1.0f;
+
+    /* Spread evenly over the bell's disc on the plane across the beam (a
+     * Vogel spiral), so each ray stands for an equal share of it. */
+    const float share = kBouncePi * x_core * x_core * sin_half * sin_half /
+                        (float)kBounceRays;
+    int kept = 0;
+    for (int i = 0; i < kBounceRays; i++)
+    {
+        const float x = x_core * std::sqrt(((float)i + 0.5f) /
+                                           (float)kBounceRays);
+        const float phi = std::fmod((float)i * kBounceGoldenAngle,
+                                    2.0f * kBouncePi);
+        const float sin_t = x * sin_half;
+        if (sin_t >= 0.995f)
+        {
+            continue;
+        }
+        const float cos_t = std::sqrt(1.0f - sin_t * sin_t);
+        const float cp = std::cos(phi) * sin_t;
+        const float sp = std::sin(phi) * sin_t;
+        const float dir[3] = {
+            axis[0] * cos_t + u_axis[0] * cp + v_axis[0] * sp,
+            axis[1] * cos_t + u_axis[1] * cp + v_axis[1] * sp,
+            axis[2] * cos_t + u_axis[2] * cp + v_axis[2] * sp};
+        (*rays)++;
+
+        MioPanRt::RayHit hit{};
+        if (!BounceTrace(src.position, dir, two_sided, &hit))
+        {
+            continue;
+        }
+        (*hits)++;
+
+        const float cos_i = -(hit.normal[0] * dir[0] +
+                              hit.normal[1] * dir[1] +
+                              hit.normal[2] * dir[2]);
+        if (cos_i <= 0.0f)
+        {
+            continue;
+        }
+        /* The kernel's own numbers at the hit: coneDot^2/|L|^2 is cos^2 of
+         * the angle off the axis, and N.L/|L|^2 is cos_i/|L|. */
+        const float cone = BounceCone(cos_t * cos_t, src.params);
+        const float coefficient =
+            std::min(cos_i * src.params[0] / hit.t, 1.0f);
+        /* The patch this ray stands for: its solid angle (the share on the
+         * plane across the beam, opened back out by cos_t), at this
+         * distance, laid on a surface this tilted. */
+        const float area = share / cos_t * hit.t * hit.t /
+                           std::max(cos_i, 0.2f);
+        BounceSample &sample = samples[kept];
+        for (int c = 0; c < 3; c++)
+        {
+            const float lit =
+                std::min(src.colour[c] * coefficient * cone, 255.0f);
+            sample.flux[c] = std::pow(lit / 128.0f, 2.2f) * area;
+            sample.position[c] = src.position[c] + dir[c] * hit.t;
+            sample.normal[c] = hit.normal[c];
+        }
+        sample.area = area;
+        sample.weight = BounceLuminance(sample.flux);
+        if (!(sample.weight > 0.0f))
+        {
+            continue;
+        }
+
+        const int sectors = kBouncePools - 1;
+        const int pool =
+            x < kBounceCoreFraction * x_core
+                ? 0
+                : 1 + std::min((int)(phi / (2.0f * kBouncePi) *
+                                     (float)sectors),
+                               sectors - 1);
+        BouncePoolAdd(pools[pool], sample);
+        kept++;
+    }
+    return kept;
+}
+
+/* A further bounce: the light that reached `parents`, `reflect` of it sent
+ * on, traced to where it lands next.
+ *
+ * Each parent is a diffuse reflector, so its light leaves in a cosine-
+ * weighted spread about its normal.  The rays are dealt out by energy -- ray
+ * j leaves the parent whose share of the running total covers (j + 0.5) / N
+ * of it -- so every ray carries the same light, and a bright patch sends
+ * several where a dim one sends none.  A ray's direction in its parent's
+ * frame is a fixed point of a cosine-weighted spiral, as steady frame to
+ * frame as the beam's own pattern.  Evenly spread cosine-weighted rays each
+ * stand for pi / (N cos) of solid angle; laid on what a ray hits, that is
+ * its patch's area, as for the beam's rays. */
+int TraceBounceGeneration(const BounceSample *parents, int parent_count,
+                          float reflect, int generation, bool two_sided,
+                          BounceSample *children, int *rays, int *hits)
+{
+    double total = 0.0;
+    for (int p = 0; p < parent_count; p++)
+    {
+        total += parents[p].weight;
+    }
+    if (parent_count <= 0 || !(total > 0.0))
+    {
+        return 0;
+    }
+    const float carried = reflect * (float)(total / (double)kBounceRays);
+    const int stride = kBounceStride[generation % kBounceMaxCount];
+
+    int count = 0;
+    int p = 0;
+    double reached = parents[0].weight;
+    for (int j = 0; j < kBounceRays; j++)
+    {
+        const double due = ((double)j + 0.5) / (double)kBounceRays * total;
+        while (reached < due && p + 1 < parent_count)
+        {
+            p++;
+            reached += parents[p].weight;
+        }
+        const BounceSample &from = parents[p];
+        if (!(from.weight > 0.0f))
+        {
+            continue;
+        }
+
+        const int k = (j * stride) % kBounceRays;
+        const float r2 = ((float)k + 0.5f) / (float)kBounceRays;
+        const float r = std::sqrt(r2);
+        const float phi = std::fmod((float)k * kBounceGoldenAngle,
+                                    2.0f * kBouncePi);
+        const float cos_o = std::sqrt(std::max(1.0f - r2, 0.0f));
+        const float cp = std::cos(phi) * r;
+        const float sp = std::sin(phi) * r;
+        float u_axis[3];
+        float v_axis[3];
+        BounceFrame(from.normal, u_axis, v_axis);
+        float origin[3];
+        float dir[3];
+        for (int a = 0; a < 3; a++)
+        {
+            dir[a] = from.normal[a] * cos_o + u_axis[a] * cp + v_axis[a] * sp;
+            origin[a] = from.position[a] + from.normal[a] * kBounceOffset;
+        }
+        (*rays)++;
+
+        MioPanRt::RayHit hit{};
+        if (!BounceTrace(origin, dir, two_sided, &hit))
+        {
+            continue;
+        }
+        (*hits)++;
+        const float cos_i = -(hit.normal[0] * dir[0] +
+                              hit.normal[1] * dir[1] +
+                              hit.normal[2] * dir[2]);
+        if (cos_i <= 0.0f)
+        {
+            continue;
+        }
+
+        BounceSample &to = children[count];
+        const float scale = carried / from.weight;
+        for (int a = 0; a < 3; a++)
+        {
+            to.flux[a] = from.flux[a] * scale;
+            to.position[a] = origin[a] + dir[a] * hit.t;
+            to.normal[a] = hit.normal[a];
+        }
+        to.area = kBouncePi / ((float)kBounceRays * std::max(cos_o, 0.2f)) *
+                  hit.t * hit.t / std::max(cos_i, 0.2f);
+        to.weight = BounceLuminance(to.flux);
+        if (to.weight > 0.0f)
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* A further bounce's landings gathered into kBouncePools lights.  They have
+ * no pattern to pool by as the beam's do -- they land all over the room --
+ * so they are clustered: a few rounds of k-means, each light the
+ * energy-weighted middle of the landings nearest it, with a difference in
+ * facing counted as distance too.  The rounds start from where `slots` sat
+ * last frame, so a light keeps to its own stretch of wall rather than
+ * trading places with its neighbours; a slot that has gone dark is seeded
+ * afresh at the landing the others serve worst. */
+void ClusterBounceSamples(const BounceSample *samples, int count,
+                          const BounceSlot *slots, BouncePool *pools)
+{
+    if (count <= 0)
+    {
+        return;
+    }
+    float centre[kBouncePools][3] = {};
+    float facing[kBouncePools][3] = {};
+    bool seeded[kBouncePools] = {};
+    for (int k = 0; k < kBouncePools; k++)
+    {
+        if (!slots[k].live)
+        {
+            continue;
+        }
+        seeded[k] = true;
+        for (int a = 0; a < 3; a++)
+        {
+            facing[k][a] = slots[k].normal[a];
+            centre[k][a] = slots[k].position[a] - slots[k].normal[a] * kBounceLift;
+        }
+    }
+
+    const float facing_cost = kBounceFacingCost * kBounceFacingCost;
+    auto cost = [&](const BounceSample &sample, int k) {
+        float d2 = 0.0f;
+        float turn = 1.0f;
+        for (int a = 0; a < 3; a++)
+        {
+            const float d = sample.position[a] - centre[k][a];
+            d2 += d * d;
+            turn -= sample.normal[a] * facing[k][a];
+        }
+        return d2 + facing_cost * turn;
+    };
+
+    for (int k = 0; k < kBouncePools; k++)
+    {
+        if (seeded[k])
+        {
+            continue;
+        }
+        int best = -1;
+        float best_score = 0.0f;
+        for (int i = 0; i < count; i++)
+        {
+            float nearest = -1.0f;
+            for (int other = 0; other < kBouncePools; other++)
+            {
+                if (seeded[other])
+                {
+                    const float c = cost(samples[i], other);
+                    nearest = nearest < 0.0f ? c : std::min(nearest, c);
+                }
+            }
+            const float score =
+                (nearest < 0.0f ? 1.0f : nearest) * samples[i].weight;
+            if (score > best_score)
+            {
+                best_score = score;
+                best = i;
+            }
+        }
+        if (best < 0)
+        {
+            break;
+        }
+        seeded[k] = true;
+        for (int a = 0; a < 3; a++)
+        {
+            centre[k][a] = samples[best].position[a];
+            facing[k][a] = samples[best].normal[a];
+        }
+    }
+
+    int nearest_of[kBounceRays] = {};
+    for (int round = 0; round < kBounceClusterRounds; round++)
+    {
+        float weight[kBouncePools] = {};
+        float position[kBouncePools][3] = {};
+        float normal[kBouncePools][3] = {};
+        for (int i = 0; i < count; i++)
+        {
+            int nearest = -1;
+            float nearest_cost = 0.0f;
+            for (int k = 0; k < kBouncePools; k++)
+            {
+                if (!seeded[k])
+                {
+                    continue;
+                }
+                const float c = cost(samples[i], k);
+                if (nearest < 0 || c < nearest_cost)
+                {
+                    nearest = k;
+                    nearest_cost = c;
+                }
+            }
+            nearest_of[i] = nearest;
+            const float w = samples[i].weight;
+            weight[nearest] += w;
+            for (int a = 0; a < 3; a++)
+            {
+                position[nearest][a] += samples[i].position[a] * w;
+                normal[nearest][a] += samples[i].normal[a] * w;
+            }
+        }
+        for (int k = 0; k < kBouncePools; k++)
+        {
+            if (!(weight[k] > 0.0f))
+            {
+                continue;
+            }
+            const float n_len = std::sqrt(normal[k][0] * normal[k][0] +
+                                          normal[k][1] * normal[k][1] +
+                                          normal[k][2] * normal[k][2]);
+            for (int a = 0; a < 3; a++)
+            {
+                centre[k][a] = position[k][a] / weight[k];
+                if (n_len > 1e-6f)
+                {
+                    facing[k][a] = normal[k][a] / n_len;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < count; i++)
+    {
+        BouncePoolAdd(pools[nearest_of[i]], samples[i]);
+    }
+}
+
+/* Pools to lights, eased against what each slot held last frame. */
+void SettleBounceSlots(const BouncePool *pools, BounceSlot *slots,
+                       float albedo)
+{
+    for (int k = 0; k < kBouncePools; k++)
+    {
+        const BouncePool &pool = pools[k];
+        BounceSlot &slot = slots[k];
+        BounceSlot target;
+        if (pool.weight > 0.0f && pool.area > 0.0f)
+        {
+            float n[3] = {pool.normal[0], pool.normal[1], pool.normal[2]};
+            const float n_len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (n_len > 1e-6f)
+            {
+                target.live = true;
+                for (int a = 0; a < 3; a++)
+                {
+                    n[a] /= n_len;
+                    target.normal[a] = n[a];
+                    target.position[a] =
+                        pool.position[a] / pool.weight + n[a] * kBounceLift;
+                    target.colour[a] = albedo * pool.flux[a] / pool.area;
+                }
+                target.area = pool.area;
+            }
+        }
+
+        if (target.live && !slot.live)
+        {
+            slot = target;
+            for (float &c : slot.colour)
+            {
+                c *= kBounceBlend;
+            }
+        }
+        else if (target.live)
+        {
+            const float b = kBounceBlend;
+            for (int a = 0; a < 3; a++)
+            {
+                slot.position[a] += (target.position[a] - slot.position[a]) * b;
+                slot.normal[a] += (target.normal[a] - slot.normal[a]) * b;
+                slot.colour[a] += (target.colour[a] - slot.colour[a]) * b;
+            }
+            slot.area += (target.area - slot.area) * b;
+            const float n_len = std::sqrt(slot.normal[0] * slot.normal[0] +
+                                          slot.normal[1] * slot.normal[1] +
+                                          slot.normal[2] * slot.normal[2]);
+            if (n_len > 1e-6f)
+            {
+                for (float &a : slot.normal)
+                {
+                    a /= n_len;
+                }
+            }
+            else
+            {
+                slot = target;
+            }
+        }
+        else if (slot.live)
+        {
+            /* Nothing this frame: fade rather than vanish. */
+            float peak = 0.0f;
+            for (float &c : slot.colour)
+            {
+                c *= 1.0f - kBounceBlend;
+                peak = std::max(peak, c);
+            }
+            if (peak < 1e-4f)
+            {
+                slot = BounceSlot{};
+            }
+        }
+    }
+}
+
+/* EndFrame, game thread, after both hierarchies are current for this frame
+ * and before UploadRayTracingScene() publishes them. */
+void UpdateBounceLights()
+{
+    const Uint64 start = SDL_GetPerformanceCounter();
+    const FlashlightSource &src = g_flashlight_source;
+    const int bounces = std::min(std::max(g_bounce_count, 1), kBounceMaxCount);
+
+    /* Each bounce's landings, alternately: the one being traced from and the
+     * one being traced to. */
+    static BounceSample samples[2][kBounceRays];
+    int current = 0;
+    int count = 0;
+    int rays = 0;
+    int hits = 0;
+
+    float axis[3] = {src.direction[0], src.direction[1], src.direction[2]};
+    const float axis_len =
+        std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    const bool active = g_bounce_strength > 0.0f && src.valid &&
+                        src.frame == g_frame_index && src.params[2] > 0.0f &&
+                        axis_len > 1e-6f;
+    const bool two_sided = (g_rt_flags & MIOPAN_RT_TWO_SIDED) != 0;
+    const float albedo = kBounceAlbedo * g_bounce_strength;
+    const float reflect = std::min(albedo, kBounceMaxReflect);
+
+    for (int bounce = 0; bounce < kBounceMaxCount; bounce++)
+    {
+        BouncePool pools[kBouncePools];
+        BounceSlot *slots = g_bounce_slots + bounce * kBouncePools;
+        if (!active || bounce >= bounces)
+        {
+            count = 0;
+        }
+        else if (bounce == 0)
+        {
+            for (float &a : axis)
+            {
+                a /= axis_len;
+            }
+            count = TraceBeamBounce(src, axis, two_sided, pools,
+                                    samples[current], &rays, &hits);
+        }
+        else if (count > 0)
+        {
+            count = TraceBounceGeneration(samples[current], count, reflect,
+                                          bounce, two_sided,
+                                          samples[current ^ 1], &rays, &hits);
+            current ^= 1;
+            ClusterBounceSamples(samples[current], count, slots, pools);
+        }
+        /* A bounce with nothing this frame -- or no longer wanted -- fades. */
+        SettleBounceSlots(pools, slots, albedo);
+    }
+
+    BounceUniforms out{};
+    int live = 0;
+    for (const BounceSlot &slot : g_bounce_slots)
+    {
+        if (!slot.live)
+        {
+            continue;
+        }
+        for (int a = 0; a < 3; a++)
+        {
+            out.position[live][a] = slot.position[a];
+            out.normal[live][a] = slot.normal[a];
+            out.colour[live][a] = slot.colour[a];
+        }
+        out.position[live][3] = slot.area;
+        live++;
+    }
+    out.info[0] = (float)live;
+    g_bounce_pending = out;
+
+    g_rt_stats.bounce_rays = rays;
+    g_rt_stats.bounce_hits = hits;
+    g_rt_stats.bounce_lights = live;
+    g_rt_stats.bounce_ms =
+        (float)((double)(SDL_GetPerformanceCounter() - start) * 1000.0 /
+                (double)SDL_GetPerformanceFrequency());
+}
+
+/* EndFrame, game thread, after the last draw is queued: fold this frame's
+ * draws into the two hierarchies and upload what changed. */
+void UpdateRayTracingScene()
+{
+    RtPollStaticJob();
+    if (!g_rt_enabled || g_rt_shader_failed)
+    {
+        if (!g_rt_instances.empty() || g_rt_job != nullptr ||
+            g_rt_static_nodes_live != 0 || g_rt_dynamic_nodes_live != 0)
+        {
+            RtResetScene();
+        }
+        return;
+    }
+
+    const Uint64 update_start = SDL_GetPerformanceCounter();
+    const uint64_t frame = g_frame_index;
+    g_rt_dynamic_corners.clear();
+    g_rt_dynamic_flags.clear();
+    const float kHuge = std::numeric_limits<float>::max();
+    float player_min[3] = {kHuge, kHuge, kHuge};
+    float player_max[3] = {-kHuge, -kHuge, -kHuge};
+
+    try
+    {
+        for (const DrawCommand &draw : g_draws)
+        {
+            if (!RtDrawCasts(draw))
+            {
+                continue;
+            }
+            const size_t first_tri = g_rt_dynamic_flags.size();
+            /* Streamed geometry -- characters, mostly -- is never treated as
+             * a cut-out: it is rebuilt every frame, and telling it would cost
+             * as much again. */
+            const TextureOpacity *opacity = RtDrawOpacity(draw);
+            const unsigned char flag =
+                draw.rt_player ? MioPanRt::kTriPlayer : 0;
+            if (draw.resident_mesh)
+            {
+                ResidentMesh *mesh = draw.resident.get();
+                if (mesh == nullptr || mesh->rt_indices.empty())
+                {
+                    continue;
+                }
+                const Uint32 begin = draw.first_index;
+                const Uint32 end = draw.first_index + draw.index_count;
+                if (opacity != nullptr)
+                {
+                    RtMarkCutout(*mesh, begin, end, *opacity);
+                }
+                if (draw.rt_player)
+                {
+                    /* Mio is never static: she is always flagged, and she
+                     * moves. */
+                    RtAppendResident(g_rt_dynamic_corners, g_rt_dynamic_flags,
+                                     *mesh, draw.model, begin, end,
+                                     flag | MioPanRt::kTriTwoSided);
+                }
+                else
+                {
+                    const uint64_t key = RtInstanceKey(mesh, draw.model);
+                    auto inserted = g_rt_instances.try_emplace(key);
+                    RtInstance &instance = inserted.first->second;
+                    if (inserted.second)
+                    {
+                        instance.mesh = draw.resident;
+                        std::memcpy(instance.model, draw.model,
+                                    sizeof(instance.model));
+                    }
+                    if (instance.last_seen != frame)
+                    {
+                        instance.last_seen = frame;
+                        instance.frames_seen++;
+                    }
+                    const bool grew = RtSpansAdd(instance.spans, begin, end);
+                    if (!instance.promoted &&
+                        instance.frames_seen >= kRtPromoteFrames)
+                    {
+                        instance.promoted = true;
+                        g_rt_static_dirty = true;
+                    }
+                    else if (instance.promoted && grew)
+                    {
+                        g_rt_static_dirty = true;
+                    }
+                    /* Not in the static build yet: cast from the dynamic one
+                     * this frame. */
+                    if (!RtSpansContain(instance.static_spans, begin, end) &&
+                        g_rt_dynamic_flags.size() < kRtMaxDynamicTris)
+                    {
+                        RtAppendResident(g_rt_dynamic_corners,
+                                         g_rt_dynamic_flags, *mesh, draw.model,
+                                         begin, end, flag);
+                    }
+                }
+            }
+            else
+            {
+                RtAppendStreamed(draw, flag);
+            }
+            if (draw.rt_player)
+            {
+                for (size_t t = first_tri; t < g_rt_dynamic_flags.size(); t++)
+                {
+                    const float *v = &g_rt_dynamic_corners[t * 9u];
+                    for (int k = 0; k < 9; k++)
+                    {
+                        player_min[k % 3] = std::min(player_min[k % 3], v[k]);
+                        player_max[k % 3] = std::max(player_max[k % 3], v[k]);
+                    }
+                }
+            }
+        }
+    }
+    catch (const std::bad_alloc &)
+    {
+        g_rt_dynamic_corners.clear();
+        g_rt_dynamic_flags.clear();
+    }
+
+    /* Forget pairs that stopped being drawn: promoted ones after a long
+     * absence (the camera may only have turned away), the rest at once
+     * (they were moving).  A released mesh goes immediately. */
+    for (auto it = g_rt_instances.begin(); it != g_rt_instances.end();)
+    {
+        const RtInstance &instance = it->second;
+        const uint64_t age = frame - instance.last_seen;
+        const bool expire = instance.mesh.expired() ||
+                            (instance.promoted ? age > kRtExpireFrames
+                                               : age > 2u);
+        if (expire)
+        {
+            if (instance.promoted)
+            {
+                g_rt_static_dirty = true;
+            }
+            it = g_rt_instances.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    if (g_rt_static_dirty && g_rt_job == nullptr &&
+        frame - g_rt_last_static_launch >= kRtStaticRebuildFrames)
+    {
+        RtLaunchStaticBuild();
+    }
+
+    if (player_min[0] <= player_max[0])
+    {
+        float half[3];
+        for (int a = 0; a < 3; a++)
+        {
+            g_rt_player_sphere_pending[a] = (player_min[a] + player_max[a]) * 0.5f;
+            half[a] = (player_max[a] - player_min[a]) * 0.5f;
+        }
+        g_rt_player_sphere_pending[3] =
+            std::sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]) +
+            kRtPlayerLightMargin;
+    }
+    else
+    {
+        std::memset(g_rt_player_sphere_pending, 0,
+                    sizeof(g_rt_player_sphere_pending));
+    }
+
+    /* The mask's four lights, now that Mio's sphere says which light is hers. */
+    RtSelectMaskLights();
+
+    /* Dynamic: the same characters draw the same triangles frame after frame
+     * and only their vertices move, so the tree is kept and refitted -- one
+     * linear pass -- and only rebuilt when the triangle count changes or
+     * every kRtDynamicRebuildFrames, before refitting has loosened it much.
+     * A rebuild bins the longest axis only; it is small and short lived. */
+    const bool refitted =
+        frame - g_rt_dynamic_built_frame < kRtDynamicRebuildFrames &&
+        MioPanRt::RefitBvh(g_rt_dynamic_corners.data(),
+                           g_rt_dynamic_flags.data(),
+                           g_rt_dynamic_flags.size(), &g_rt_dynamic_bvh);
+    if (!refitted)
+    {
+        MioPanRt::BuildBvh(g_rt_dynamic_corners.data(),
+                           g_rt_dynamic_flags.data(),
+                           g_rt_dynamic_flags.size(), 8, false,
+                           &g_rt_dynamic_bvh);
+        g_rt_dynamic_built_frame = frame;
+    }
+    g_rt_dynamic_upload_pending = true;
+
+    g_rt_stats.dynamic_tris = (int)g_rt_dynamic_bvh.tris.size();
+    g_rt_stats.dynamic_nodes = (int)g_rt_dynamic_bvh.nodes.size();
+    g_rt_stats.dynamic_build_ms = (float)g_rt_dynamic_bvh.build_ms;
+    g_rt_stats.instances = (int)g_rt_instances.size();
+    g_rt_stats.depth = std::max(g_rt_dynamic_bvh.depth, g_rt_static_depth);
+    g_rt_stats.building = g_rt_job != nullptr ? 1 : 0;
+
+    UpdateBounceLights();
+    UploadRayTracingScene();
+    g_rt_stats.update_ms =
+        (float)((double)(SDL_GetPerformanceCounter() - update_start) * 1000.0 /
+                (double)SDL_GetPerformanceFrequency());
+}
+
+void ReleaseRayTracingResources()
+{
+    RtResetScene();
+    ReleaseRtMaskResources();
+    if (g_device != nullptr && g_rt_transfer != nullptr)
+    {
+        SDL_ReleaseGPUTransferBuffer(g_device, g_rt_transfer);
+    }
+    g_rt_transfer = nullptr;
+    g_rt_transfer_size = 0;
+    for (RtGpuBuffer &buffer : g_rt_gpu)
+    {
+        if (g_device != nullptr && buffer.buffer != nullptr)
+        {
+            SDL_ReleaseGPUBuffer(g_device, buffer.buffer);
+        }
+        buffer = RtGpuBuffer{};
+    }
+}
 
 void NotePresenterHold(bool held)
 {
@@ -14272,6 +16993,176 @@ void MioPan_RendererSetLightingMode(int mode)
         ? mode : MIOPAN_LIGHTING_VERTEX;
 }
 
+void MioPan_RendererSetRayTracing(int enable)
+{
+    g_rt_enabled = enable != 0;
+    /* Give a shader that failed another chance on an explicit switch-on. */
+    if (g_rt_enabled)
+    {
+        g_rt_shader_failed = false;
+    }
+}
+
+int MioPan_RendererGetRayTracing(void)
+{
+    return g_rt_enabled && !g_rt_shader_failed ? 1 : 0;
+}
+
+void MioPan_RendererSetRayTracingFlags(unsigned int flags)
+{
+    g_rt_flags = flags & (MIOPAN_RT_SPOT | MIOPAN_RT_POINT |
+                          MIOPAN_RT_DIRECTIONAL | MIOPAN_RT_DEBUG_LIGHT |
+                          MIOPAN_RT_DEBUG_RAYS | MIOPAN_RT_TWO_SIDED |
+                          MIOPAN_RT_DEBUG_BOUNCE | MIOPAN_RT_DEBUG_AO);
+}
+
+unsigned int MioPan_RendererGetRayTracingFlags(void)
+{
+    return g_rt_flags;
+}
+
+void MioPan_RendererSetRayTracingSettings(const MioPanRayTracingSettings *settings)
+{
+    if (settings == nullptr)
+    {
+        return;
+    }
+    MioPanRayTracingSettings s = *settings;
+    s.bias = std::min(std::max(s.bias, 0.0f), 200.0f);
+    s.light_offset = std::min(std::max(s.light_offset, 0.0f), 2000.0f);
+    s.light_radius = std::min(std::max(s.light_radius, 0.0f), 2000.0f);
+    s.samples = std::min(std::max(s.samples, 1), 16);
+    s.min_contribution = std::min(std::max(s.min_contribution, 0.0f), 64.0f);
+    g_rt_settings = s;
+}
+
+void MioPan_RendererGetRayTracingSettings(MioPanRayTracingSettings *settings)
+{
+    if (settings != nullptr)
+    {
+        *settings = g_rt_settings;
+    }
+}
+
+void MioPan_RendererGetRayTracingStats(MioPanRayTracingStats *stats)
+{
+    if (stats != nullptr)
+    {
+        *stats = g_rt_stats;
+        stats->mask_lights = 0;
+        for (const RtMaskLight &light : g_rt_mask_pending)
+        {
+            stats->mask_lights += light.valid ? 1 : 0;
+        }
+        stats->mask_live = g_rt_mask_live ? 1 : 0;
+        stats->mask_draws = g_rt_mask_stat_draws;
+    }
+}
+
+void MioPan_RendererSetFlashlightBeam(float softness, float spill)
+{
+    g_flashlight_softness = std::min(std::max(softness, 0.0f), 1.0f);
+    g_flashlight_spill = std::min(std::max(spill, 0.0f), 0.5f);
+}
+
+void MioPan_RendererGetFlashlightBeam(float *softness, float *spill)
+{
+    if (softness != nullptr)
+    {
+        *softness = g_flashlight_softness;
+    }
+    if (spill != nullptr)
+    {
+        *spill = g_flashlight_spill;
+    }
+}
+
+void MioPan_RendererSetAmbientOcclusion(float strength, float radius)
+{
+    g_rt_ao_strength = std::min(std::max(strength, 0.0f), 4.0f);
+    g_rt_ao_radius = std::min(std::max(radius, 0.0f), 4000.0f);
+}
+
+void MioPan_RendererGetAmbientOcclusion(float *strength, float *radius)
+{
+    if (strength != nullptr)
+    {
+        *strength = g_rt_ao_strength;
+    }
+    if (radius != nullptr)
+    {
+        *radius = g_rt_ao_radius;
+    }
+}
+
+void MioPan_RendererSetFlashlightBounce(float strength)
+{
+    g_bounce_strength = std::min(std::max(strength, 0.0f), 4.0f);
+}
+
+float MioPan_RendererGetFlashlightBounce(void)
+{
+    return g_bounce_strength;
+}
+
+void MioPan_RendererSetFlashlightBounceCount(int count)
+{
+    g_bounce_count = std::min(std::max(count, 1), kBounceMaxCount);
+}
+
+int MioPan_RendererGetFlashlightBounceCount(void)
+{
+    return g_bounce_count;
+}
+
+void MioPan_RendererSetFlashlightSource(const float *position,
+                                        const float *direction,
+                                        const float *colour,
+                                        const float *params)
+{
+    FlashlightSource &src = g_flashlight_source;
+    if (position == nullptr || direction == nullptr || colour == nullptr ||
+        params == nullptr)
+    {
+        src.valid = false;
+        return;
+    }
+    std::memcpy(src.position, position, sizeof(src.position));
+    std::memcpy(src.direction, direction, sizeof(src.direction));
+    std::memcpy(src.colour, colour, sizeof(src.colour));
+    std::memcpy(src.params, params, sizeof(src.params));
+    src.frame = g_frame_index;
+    src.valid = true;
+}
+
+void MioPan_RendererSetRayTracingMask(int enable)
+{
+    g_rt_mask_enabled = enable != 0;
+    /* A pass that failed gets another try on an explicit switch-on. */
+    if (g_rt_mask_enabled)
+    {
+        g_rt_mask_failed = false;
+    }
+}
+
+int MioPan_RendererGetRayTracingMask(void)
+{
+    return g_rt_mask_enabled ? 1 : 0;
+}
+
+void MioPan_RendererRtBeginPlayer(void)
+{
+    g_rt_player_scope++;
+}
+
+void MioPan_RendererRtEndPlayer(void)
+{
+    if (g_rt_player_scope > 0)
+    {
+        g_rt_player_scope--;
+    }
+}
+
 unsigned int MioPan_RendererGetDebugViewFlags(void)
 {
     unsigned int flags = 0;
@@ -14372,6 +17263,9 @@ void MioPan_RendererBeginFrame(void)
     }
     AbortActiveMeshStream();
     g_quad_anchor_armed = false;
+    /* A DrawGirl() that returned early without closing its bracket must not
+     * tag the next frame. */
+    g_rt_player_scope = 0;
     g_sky_camera.valid = false;
     g_sky_layer_armed = -1;
     for (SkyFollow &sky : g_sky_follow)
@@ -14512,6 +17406,9 @@ void MioPan_RendererEndFrame(void)
     {
         // Visibility and presentation must consume the same once-scaled vertices.
         ApplyOriginalAspectToVertices();
+        /* Before anything records: every present of this frame binds the
+         * hierarchy built here. */
+        UpdateRayTracingScene();
         RecordLogicalVisibility();
     }
     presented = false;
@@ -17988,6 +20885,7 @@ static unsigned int OpenMeshStream(const sceGsTex0 *tex0,
     pending.command.mag_linear = true;
     pending.command.preserve_original_aspect = false;
     pending.command.transform_mesh = true;
+    pending.command.rt_player = g_rt_player_scope > 0;
     TagShadowPass(pending.command);
     SnapshotFragmentLights(pending.command, fragment_lights);
     ApplyGsDrawEnv(pending.command);
@@ -18265,6 +21163,7 @@ static bool IndexedStreamDrawContinues(const DrawCommand &previous,
            previous.shadow_caster == next.shadow_caster &&
            previous.shadow_receiver == next.shadow_receiver &&
            previous.shadow_episode == next.shadow_episode &&
+           previous.rt_player == next.rt_player &&
            !previous.finder_mask && !next.finder_mask;
 }
 
@@ -18434,6 +21333,66 @@ unsigned int MioPan_RendererCreateResidentMesh(
     mesh->vertex_count = vertex_count;
     mesh->index_count = index_count;
     mesh->bytes = vertex_bytes + index_bytes;
+    try
+    {
+        mesh->rt_positions.resize((size_t)vertex_count * 3u);
+        for (unsigned int i = 0; i < vertex_count; i++)
+        {
+            mesh->rt_positions[(size_t)i * 3u + 0] = vertices[i].position[0];
+            mesh->rt_positions[(size_t)i * 3u + 1] = vertices[i].position[1];
+            mesh->rt_positions[(size_t)i * 3u + 2] = vertices[i].position[2];
+        }
+        mesh->rt_indices.assign(indices, indices + index_count);
+        mesh->rt_tri_flags.assign(index_count / 3u, 0);
+        mesh->rt_uvs.resize((size_t)vertex_count * 2u);
+        for (unsigned int i = 0; i < vertex_count; i++)
+        {
+            mesh->rt_uvs[(size_t)i * 2u + 0] = vertices[i].uv[0];
+            mesh->rt_uvs[(size_t)i * 2u + 1] = vertices[i].uv[1];
+        }
+        /* Orient each triangle by its vertex normals, so the front face is
+         * known without depending on how the camera's projection winds. */
+        for (unsigned int t = 0; t + 2 < index_count; t += 3)
+        {
+            const MioPanResidentVertex &a = vertices[indices[t]];
+            const MioPanResidentVertex &b = vertices[indices[t + 1]];
+            const MioPanResidentVertex &c = vertices[indices[t + 2]];
+            const float e1[3] = {b.position[0] - a.position[0],
+                                 b.position[1] - a.position[1],
+                                 b.position[2] - a.position[2]};
+            const float e2[3] = {c.position[0] - a.position[0],
+                                 c.position[1] - a.position[1],
+                                 c.position[2] - a.position[2]};
+            const float geo[3] = {e1[1] * e2[2] - e1[2] * e2[1],
+                                  e1[2] * e2[0] - e1[0] * e2[2],
+                                  e1[0] * e2[1] - e1[1] * e2[0]};
+            const float n[3] = {a.normal[0] + b.normal[0] + c.normal[0],
+                                a.normal[1] + b.normal[1] + c.normal[1],
+                                a.normal[2] + b.normal[2] + c.normal[2]};
+            const float d = geo[0] * n[0] + geo[1] * n[1] + geo[2] * n[2];
+            const float lg = std::sqrt(geo[0] * geo[0] + geo[1] * geo[1] +
+                                       geo[2] * geo[2]);
+            const float ln = std::sqrt(n[0] * n[0] + n[1] * n[1] +
+                                       n[2] * n[2]);
+            if (!(std::fabs(d) > 0.2f * lg * ln))
+            {
+                /* Missing, or nearly edge-on to the face: can't tell. */
+                mesh->rt_tri_flags[t / 3u] = MioPanRt::kTriTwoSided;
+            }
+            else if (d < 0.0f)
+            {
+                std::swap(mesh->rt_indices[t + 1], mesh->rt_indices[t + 2]);
+            }
+        }
+    }
+    catch (const std::bad_alloc &)
+    {
+        /* The mesh still draws; it just never casts a ray-traced shadow. */
+        mesh->rt_positions.clear();
+        mesh->rt_indices.clear();
+        mesh->rt_tri_flags.clear();
+        mesh->rt_uvs.clear();
+    }
     g_resident_mesh_bytes += mesh->bytes;
     if (mesh->vertex_buffer == nullptr || mesh->index_buffer == nullptr)
     {
@@ -18589,6 +21548,7 @@ int MioPan_RendererDrawResidentMesh(unsigned int mesh_id,
     command.mag_linear = true;
     command.preserve_original_aspect = false;
     command.transform_mesh = true;
+    command.rt_player = g_rt_player_scope > 0;
     TagShadowPass(command);
     SnapshotFragmentLights(command, fragment_lights);
     ApplyGsDrawEnv(command);

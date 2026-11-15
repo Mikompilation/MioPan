@@ -29,6 +29,7 @@
 #include "../../graphics/graph3d/g3dBoundingVolume.h"
 #include "../../graphics/graph3d/g3dGeom.h"
 #include "../camera/first_person_camera.h"      /* PORT: FirstPersonViewActive */
+#include "../../miopan/rendering/miopan_renderer.h" /* PORT: MioPan_RendererRt* */
 #include "../../graphics/graph3d/g3dLight.h"
 #include "../../graphics/graph3d/g3ddbg.h"
 #include "../../graphics/graph3d/g3dxVu0.h"
@@ -780,6 +781,9 @@ void DrawGirl(void)
     }
 
     gra3dLightEnablePush();
+    /* PORT: tag her meshes for the ray-traced shadows, so the lights she
+     * carries are not eclipsed by her own body. */
+    MioPan_RendererRtBeginPlayer();
 
     float work_amb[4];
     g3dxVu0CopyVector(work_amb, gra3dGetAmbientRef());
@@ -842,6 +846,7 @@ void DrawGirl(void)
         _SetPREVIOUSTRI2PRIM(nullptr);
     }
 
+    MioPan_RendererRtEndPlayer();
     gra3dSetAmbient(work_amb);
     gra3dLightEnablePop();
     gra3dApplyLight();

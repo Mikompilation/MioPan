@@ -815,7 +815,11 @@ int BuildFragmentLightState(MioPanLightState *state,
         return 0;
     }
 
-    const int mode = MioPan_RendererGetLightingMode();
+    /* Ray-traced shadows can only darken a light the shader evaluates, so
+     * while they are on every term goes per pixel, whatever the mode says. */
+    const int mode = MioPan_RendererGetRayTracing() != 0
+        ? MIOPAN_LIGHTING_FRAGMENT_ALL
+        : MioPan_RendererGetLightingMode();
     if (mode != MIOPAN_LIGHTING_FRAGMENT &&
         mode != MIOPAN_LIGHTING_FRAGMENT_ALL)
     {

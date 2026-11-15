@@ -85,6 +85,9 @@ void  gra3dSnapshotVu1Lighting(GRA3DVU1LIGHTSNAPSHOT *out);
  * See the long note on the definition in gra3d.c. */
 int   gra3dCalcVu1WideLanes(GRA3DVU1LANE *aLanes, int iMaxLanes,
                             G3DLIGHTTYPE type, const float *vRefPos);
+/* PORT ADDITION -- Mio's spot flashlight to the renderer's bounce light, once
+ * a frame before MioPan_RendererEndFrame(). */
+void  gra3dPublishFlashlight(void);
 unsigned int gra3dGetMaterialPrimType(void);
 
 void  gra3dCalcVu1VertexColor(float *vDest, const GRA3DVU1LIGHTSNAPSHOT *snap,

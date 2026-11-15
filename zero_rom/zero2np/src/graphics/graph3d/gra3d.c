@@ -2820,7 +2820,10 @@ int gra3dCalcVu1WideLanes(GRA3DVU1LANE *aLanes, int iMaxLanes,
         /* bTimes carries fDiv back, which is what cancels the colour's
          * normalisation inside the kernel -- see the note on Vu1Coefficient. */
         pLane->vParams[0] = pL->fMaxRange * fDiv;
-        pLane->vParams[3] = 0.0f;
+        /* PORT: tag Mio's flashlight -- always the dedicated spot slot -- so
+         * the per-pixel shader can give its beam a soft edge and spill
+         * (MioPan_RendererSetFlashlightBeam).  Nothing reads w otherwise. */
+        pLane->vParams[3] = iId == LID_SPOT_FLASHLIGHT ? 1.0f : 0.0f;
 
         /* DIRCOLDIF[0].w is the vertex alpha and comes from the directional
          * block, not from here; leave the w lanes of the colours alone. */
@@ -2834,6 +2837,52 @@ int gra3dCalcVu1WideLanes(GRA3DVU1LANE *aLanes, int iMaxLanes,
     }
 
     return iCount;
+}
+
+/* --------------------------------------------------------------------------
+ *  gra3dPublishFlashlight                                    [PORT ADDITION]
+ *
+ *  Hand Mio's spot flashlight to the renderer once a frame, for its bounce
+ *  light (MioPan_RendererSetFlashlightBounce).  The same derivation as the
+ *  flashlight's lane in gra3dCalcVu1WideLanes() above, but against a plain
+ *  white material instead of whichever one happens to be current: the
+ *  bounce wants what the light itself delivers to a surface, and the
+ *  surfaces it lands on are not the ones being drawn.
+ *
+ *  Called just before MioPan_RendererEndFrame(), when the bank still holds
+ *  what this frame was drawn with.  Only the spot flashlight: the point
+ *  variant (LID_POINT_FLASHLIGHT_0) lights all round and has no beam to
+ *  follow.
+ * ------------------------------------------------------------------------ */
+void gra3dPublishFlashlight(void)
+{
+    G3DLIGHT *pL;
+    float     vWork[4];
+    float     vColour[4];
+    float     vParams[4];
+    float     fDiv;
+
+    if (gra3dIsLightEnable(LID_SPOT_FLASHLIGHT) == 0)
+    {
+        MioPan_RendererSetFlashlightSource(NULL, NULL, NULL, NULL);
+        return;
+    }
+    pL = &gra3dGetLightRef(LID_SPOT_FLASHLIGHT);
+
+    /* A white, non-SGD material: diffuse 1 and the 255 scale. */
+    g3dxVu0CopyVector(vWork, pL->vDiffuse);
+    _MakeColorToMonotone(vWork);
+    sceVu0ScaleVector(vWork, vWork, 255.0f);
+    fDiv = SetMaxColor255(vColour, vWork);
+    vColour[3] = 0.0f;
+
+    vParams[0] = pL->fMaxRange * fDiv;
+    vParams[1] = pL->afPad0[0];
+    vParams[2] = 1.0f / (1.0f - pL->afPad0[0]);
+    vParams[3] = 1.0f;
+
+    MioPan_RendererSetFlashlightSource(pL->vPosition, pL->vDirection, vColour,
+                                       vParams);
 }
 
 /* --------------------------------------------------------------------------
