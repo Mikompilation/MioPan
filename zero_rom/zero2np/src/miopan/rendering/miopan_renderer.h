@@ -202,6 +202,41 @@ void MioPan_RendererSetVsync(int mode);
 int  MioPan_RendererGetVsync(void);
 int  MioPan_RendererGetVsyncActive(void);
 
+/* The graphics API SDL_GPU drives the GPU through.
+ *
+ *   AUTO     SDL's own choice, in its order: Metal, then Direct3D 12, then
+ *            Vulkan, whichever this build has and this machine starts first.
+ *   VULKAN, D3D12, METAL
+ *            that one, where it starts; AUTO, with a line in the log, where
+ *            it does not, so a choice that stops working never leaves the
+ *            game without a window.
+ *
+ * Taken once, when the device is created -- every pipeline, texture and the
+ * swapchain belong to the device -- so a change applies the next time MioPan
+ * starts.  Get returns what was asked for; GetActive the backend the running
+ * device uses, or AUTO before there is one.  Available is non-zero when this
+ * build has the backend and this machine can start it: probed once per
+ * backend, on first ask, and always true for AUTO and for the one running.
+ * RestartPending is non-zero when the choice differs from the one this session
+ * started with.
+ *
+ * SDL_GPU_DRIVER in the environment overrides all of it, as SDL documents. */
+enum
+{
+    MIOPAN_GPU_BACKEND_AUTO = 0,
+    MIOPAN_GPU_BACKEND_VULKAN = 1,
+    MIOPAN_GPU_BACKEND_D3D12 = 2,
+    MIOPAN_GPU_BACKEND_METAL = 3,
+    MIOPAN_GPU_BACKEND_COUNT = 4
+};
+void        MioPan_RendererSetGpuBackend(int backend);
+int         MioPan_RendererGetGpuBackend(void);
+int         MioPan_RendererGetGpuBackendActive(void);
+int         MioPan_RendererGpuBackendAvailable(int backend);
+int         MioPan_RendererGpuBackendRestartPending(void);
+/* "Auto", "Vulkan", "Direct3D 12", "Metal". */
+const char *MioPan_RendererGpuBackendName(int backend);
+
 /* What the game does while its window is in the background -- minimised, or
  * not holding the keyboard focus.  Separate settings, because they answer
  * different complaints: mute is for the player alt-tabbing to read something,

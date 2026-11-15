@@ -1444,6 +1444,50 @@ void DrawVsyncMenu()
     ImGui::TextDisabled("  game speed is its own timer either way");
 }
 
+/*
+ * The graphics API.  Inline like the vsync rows, but a choice here waits for
+ * the next start, so the read-out says what is running and whether a restart
+ * is due.  A backend that will not start on this machine is listed only while
+ * it is the one chosen -- greyed, so the menu says why the log shows a
+ * fallback.
+ */
+void DrawGpuBackendMenu()
+{
+    ImGui::TextDisabled("Graphics backend");
+    const int chosen = MioPan_RendererGetGpuBackend();
+    for (int backend = 0; backend < MIOPAN_GPU_BACKEND_COUNT; backend++)
+    {
+        const bool available = MioPan_RendererGpuBackendAvailable(backend) != 0;
+        if (!available && backend != chosen)
+        {
+            continue;
+        }
+        if (ImGui::MenuItem(MioPan_RendererGpuBackendName(backend), nullptr,
+                            backend == chosen, available))
+        {
+            MioPan_ConfigSetGpuBackend(backend);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("%s",
+                              backend == MIOPAN_GPU_BACKEND_AUTO
+                                  ? "SDL's choice: Metal, then Direct3D 12, then\n"
+                                    "Vulkan, whichever starts first here."
+                              : available
+                                  ? "Applies the next time MioPan starts."
+                                  : "Will not start on this machine; MioPan\n"
+                                    "falls back to Auto.");
+        }
+    }
+
+    ImGui::TextDisabled("  running %s", MioPan_RendererGpuBackendName(
+                                            MioPan_RendererGetGpuBackendActive()));
+    if (MioPan_RendererGpuBackendRestartPending() != 0)
+    {
+        ImGui::TextDisabled("  restart MioPan to switch");
+    }
+}
+
 /* The Audio menu: the one level the port adds, and the background mute. */
 void DrawAudioMenu()
 {
@@ -1557,7 +1601,7 @@ void PersistSettingsIfChanged()
     /* Every field is 4 bytes, so the struct has no padding and memcmp is a
      * valid comparison.  The assert is here to fail loudly if a future field
      * breaks that rather than letting the compare read indeterminate bytes. */
-    static_assert(sizeof(MioPan_ConfigRenderer) == 41 * sizeof(int),
+    static_assert(sizeof(MioPan_ConfigRenderer) == 42 * sizeof(int),
                   "MioPan_ConfigRenderer gained padding; compare by field");
     static_assert(sizeof(MioPan_ConfigAudio) == 3 * sizeof(int),
                   "MioPan_ConfigAudio gained padding; compare by field");
@@ -2801,6 +2845,9 @@ void DrawDisplaySettingsMenu()
     ImGui::Separator();
 
     DrawVsyncMenu();
+    ImGui::Separator();
+
+    DrawGpuBackendMenu();
     ImGui::Separator();
 
     ImGui::TextDisabled("Aspect ratio");
