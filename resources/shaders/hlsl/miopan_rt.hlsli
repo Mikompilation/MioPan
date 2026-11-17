@@ -22,7 +22,13 @@
 //   node  = two float4s: (bmin, asuint left_first), (bmax, asuint count);
 //           count > 0 is a leaf over triangles [left_first, +count), otherwise
 //           the children are left_first and left_first + 1.
-//   tri   = three float4s: v0, v1 - v0, v2 - v0.
+//   tri   = three float4s: v0, v1 - v0, v2 - v0.  v0.w is the flag byte
+//           (MIOPAN_RT_TRI_*); e1.w, read with asuint, is 1 + the index of
+//           the triangle's alpha-test record, or 0 for a solid triangle.
+//   cutout = two float4s, MioPanRt::GpuCutout: (uv0, duv1), (duv2,
+//           asuint mask offset, asuint width | height << 16).
+//   mask  = one bit per texel, row-major, 1 = solid; a texture's mask starts
+//           at its record's word offset.
 
 // Two includers, two places in SDL_GPU's binding model:
 //
@@ -33,7 +39,8 @@
 //   rt_shadow_mask.comp read-only storage buffers follow the read-only storage
 //                       textures in space 0 (five of them, t0..t4).
 //
-// Either way the four hierarchy buffers are t5..t8, in this order.  The
+// Either way the seven ray tracing buffers are t5..t11, in this order (the
+// renderer's RtBufferSlot).  The
 // includer provides uRtFlags / uRtParams / uRtPlayer (mikupan_common.hlsli's
 // MikuPanUniforms for the fragment stage, the mask's own block for compute).
 #ifdef MIOPAN_RT_COMPUTE
@@ -45,6 +52,9 @@ StructuredBuffer<float4> uRtStaticNodes  : register(t5, MIOPAN_RT_SPACE);
 StructuredBuffer<float4> uRtStaticTris   : register(t6, MIOPAN_RT_SPACE);
 StructuredBuffer<float4> uRtDynamicNodes : register(t7, MIOPAN_RT_SPACE);
 StructuredBuffer<float4> uRtDynamicTris  : register(t8, MIOPAN_RT_SPACE);
+StructuredBuffer<float4> uRtStaticCutouts  : register(t9, MIOPAN_RT_SPACE);
+StructuredBuffer<float4> uRtDynamicCutouts : register(t10, MIOPAN_RT_SPACE);
+StructuredBuffer<uint>   uRtMasks          : register(t11, MIOPAN_RT_SPACE);
 
 #ifndef MIOPAN_RT_COMPUTE
 // The screen-space shadow mask (rt_shadow_mask.comp): visibility of up to four
@@ -119,6 +129,38 @@ float4 MioPanRtTri(uint which, uint index)
     return uRtDynamicTris[index];
 }
 
+float4 MioPanRtCutout(uint which, uint index)
+{
+    [branch] if (which == 0)
+    {
+        return uRtStaticCutouts[index];
+    }
+    return uRtDynamicCutouts[index];
+}
+
+// Whether a hit at barycentrics `bary` -- the weights of v1 and v2 -- on the
+// triangle whose alpha-test record is `record` landed on a solid texel: the
+// texture coordinates there, wrapped as the sampler repeats them, looked up
+// in the texture's opacity bitmask.
+bool MioPanRtCutoutSolid(uint which, uint record, float2 bary)
+{
+    float4 a = MioPanRtCutout(which, record * 2);
+    float4 b = MioPanRtCutout(which, record * 2 + 1);
+    uint size = asuint(b.w);
+    uint w = size & 0xFFFF;
+    uint h = size >> 16;
+    if (w == 0 || h == 0)
+    {
+        return true;
+    }
+    float2 uv = a.xy + bary.x * a.zw + bary.y * b.xy;
+    uv -= floor(uv);
+    uint x = min((uint)(uv.x * (float)w), w - 1);
+    uint y = min((uint)(uv.y * (float)h), h - 1);
+    uint bit = y * w + x;
+    return ((uRtMasks[asuint(b.z) + (bit >> 5)] >> (bit & 31)) & 1) != 0;
+}
+
 bool MioPanRtBoxHit(float3 bmin, float3 bmax, float3 origin, float3 invDir,
                     float tmax)
 {
@@ -137,8 +179,9 @@ bool MioPanRtBoxHit(float3 bmin, float3 bmax, float3 origin, float3 invDir,
 // the shadow-map rule, and the one the PS2's lighting rigs need -- see
 // MioPanRt::kTriTwoSided.
 bool MioPanRtTriHit(float3 origin, float3 dir, float3 v0, float3 e1, float3 e2,
-                    float tmax, bool twoSided)
+                    float tmax, bool twoSided, out float2 bary)
 {
+    bary = float2(0.0, 0.0);
     float3 p = cross(dir, e2);
     float det = dot(e1, p);
     if (twoSided ? abs(det) < 1e-12 : det > -1e-12)
@@ -159,6 +202,7 @@ bool MioPanRtTriHit(float3 origin, float3 dir, float3 v0, float3 e1, float3 e2,
         return false;
     }
     float t = dot(e2, q) * inv;
+    bary = float2(u, v);
     return t > 0.0 && t < tmax;
 }
 
@@ -168,10 +212,15 @@ bool MioPanRtTriHit(float3 origin, float3 dir, float3 v0, float3 e1, float3 e2,
 // ambient occlusion, whose rays leave the surface rather than arrive at a
 // light: there the faces that matter are the ones turned TOWARDS the ray --
 // the wall beside a floor, the underside of a shelf -- which the one-sided
-// shadow rule lets through.  It also lets a ray through a part see-through
-// triangle (MIOPAN_RT_TRI_CUTOUT) with the odds of meeting a hole, so a
-// lattice darkens what is behind it by how much of it is lattice instead of
-// blacking out whatever shows through its holes.
+// shadow rule lets through.
+//
+// A triangle drawn through a texture with holes -- grass, leaves, a lattice
+// -- has an alpha-test record, and a hit on it only counts on a solid texel
+// (MioPanRtCutoutSolid()), so its shadow has the texture's shape rather than
+// the triangle's.  One flagged part see-through (MIOPAN_RT_TRI_CUTOUT) with
+// no record, which happens only once the mask table is full, falls back to
+// counting as solid for a shadow ray and, for an occlusion ray, to letting it
+// through with the odds of meeting a hole.
 bool MioPanRtOccludedIn(uint which, float3 origin, float3 dir, float3 invDir,
                         float tmax, bool skipPlayer, bool bothSides)
 {
@@ -206,7 +255,10 @@ bool MioPanRtOccludedIn(uint which, float3 origin, float3 dir, float3 invDir,
                 {
                     continue;
                 }
-                if (bothSides && (triFlags & MIOPAN_RT_TRI_CUTOUT) != 0)
+                float4 e1 = MioPanRtTri(which, t + 1);
+                uint cutout = asuint(e1.w);
+                if (cutout == 0 && bothSides &&
+                    (triFlags & MIOPAN_RT_TRI_CUTOUT) != 0)
                 {
                     // Opacity 0..15 in the top bits; the dice are this ray
                     // and this triangle, so the mask's average over frames
@@ -223,12 +275,21 @@ bool MioPanRtOccludedIn(uint which, float3 origin, float3 dir, float3 invDir,
                 bool twoSided = bothSides ||
                                 (triFlags & MIOPAN_RT_TRI_TWO_SIDED) != 0 ||
                                 (uRtFlags.x & MIOPAN_RT_TWO_SIDED) != 0;
-                if (MioPanRtTriHit(origin, dir, v0.xyz,
-                                   MioPanRtTri(which, t + 1).xyz,
+                float2 bary;
+                if (MioPanRtTriHit(origin, dir, v0.xyz, e1.xyz,
                                    MioPanRtTri(which, t + 2).xyz, tmax,
-                                   twoSided))
+                                   twoSided, bary))
                 {
-                    return true;
+                    // Nested rather than &&: the record index must not be
+                    // used when there is none.
+                    if (cutout == 0)
+                    {
+                        return true;
+                    }
+                    if (MioPanRtCutoutSolid(which, cutout - 1, bary))
+                    {
+                        return true;
+                    }
                 }
             }
         }

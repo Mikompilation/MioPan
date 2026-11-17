@@ -4,6 +4,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <utility>
 
 namespace MioPanRt
@@ -309,7 +310,8 @@ bool IsFinite3(const float *p)
     return std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
 }
 
-void WriteTri(GpuTri &tri, const float *v, unsigned char flags)
+void WriteTri(GpuTri &tri, const float *v, unsigned char flags,
+              uint32_t cutout)
 {
     for (int a = 0; a < 3; a++)
     {
@@ -318,13 +320,16 @@ void WriteTri(GpuTri &tri, const float *v, unsigned char flags)
         tri.e2[a] = v[6 + a] - v[a];
     }
     tri.v0[3] = (float)flags;
-    tri.e1[3] = tri.e2[3] = 0.0f;
+    /* Bits, not a value: the shader reads it back with asuint. */
+    std::memcpy(&tri.e1[3], &cutout, sizeof(cutout));
+    tri.e2[3] = 0.0f;
 }
 
 } // namespace
 
 void BuildBvh(const float *corners, const unsigned char *tri_flags,
-              size_t tri_count, int bins, bool all_axes, Bvh *out)
+              const uint32_t *tri_cutout, size_t tri_count, int bins,
+              bool all_axes, Bvh *out)
 {
     const auto start = std::chrono::steady_clock::now();
     out->depth = 0;
@@ -389,7 +394,8 @@ void BuildBvh(const float *corners, const unsigned char *tri_flags,
             const uint32_t source = builder.tris[i].source;
             out->order[i] = source;
             WriteTri(out->tris[i], corners + (size_t)source * 9,
-                     tri_flags != nullptr ? tri_flags[source] : 0);
+                     tri_flags != nullptr ? tri_flags[source] : 0,
+                     tri_cutout != nullptr ? tri_cutout[source] : 0u);
         }
         out->depth = builder.depth;
     }
@@ -406,7 +412,7 @@ void BuildBvh(const float *corners, const unsigned char *tri_flags,
 }
 
 bool RefitBvh(const float *corners, const unsigned char *tri_flags,
-              size_t tri_count, Bvh *bvh)
+              const uint32_t *tri_cutout, size_t tri_count, Bvh *bvh)
 {
     const auto start = std::chrono::steady_clock::now();
     if (tri_count != bvh->input_count || bvh->nodes.empty() ||
@@ -427,7 +433,8 @@ bool RefitBvh(const float *corners, const unsigned char *tri_flags,
     {
         const uint32_t source = bvh->order[i];
         WriteTri(bvh->tris[i], corners + (size_t)source * 9,
-                 tri_flags != nullptr ? tri_flags[source] : 0);
+                 tri_flags != nullptr ? tri_flags[source] : 0,
+                 tri_cutout != nullptr ? tri_cutout[source] : 0u);
     }
 
     /* Children are always appended after their parent, so walking the array

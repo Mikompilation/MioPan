@@ -645,6 +645,11 @@ typedef struct MioPanRayTracingStats
     int bounce_hits;
     int bounce_lights;
     float bounce_ms;
+    /* Cut-outs: triangles the rays alpha-test, in both hierarchies, and the
+     * texture bitmasks they are tested against. */
+    int alpha_tris;
+    int alpha_masks;
+    int alpha_mask_kb;
 } MioPanRayTracingStats;
 void MioPan_RendererSetRayTracing(int enable);
 int  MioPan_RendererGetRayTracing(void);

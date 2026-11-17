@@ -180,6 +180,10 @@ struct ResidentMesh
      * (RtMarkCutout()); and the index ranges already told. */
     std::vector<float> rt_uvs;
     std::vector<uint64_t> rt_cutout_checked;
+    /* Per triangle, the opacity bitmask of the texture it was drawn through
+     * when that has holes: 1 + its slot in g_rt_mask_slots, 0 for none.  The
+     * shaders then alpha-test a ray's hit on it (MioPanRt::GpuCutout). */
+    std::vector<uint32_t> rt_tri_mask;
 
     ResidentMesh() = default;
     ResidentMesh(const ResidentMesh &) = delete;
@@ -766,9 +770,10 @@ CachedShaderInfo g_cached_shaders[] = {
     {"mesh_spot.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 2, nullptr, 0, 4},
     /* mesh_spot.frag with ray-traced shadows: three more sampled textures (the
      * shadow mask, the G-buffer position it is checked against and the
-     * ambient occlusion), then the four BVH storage buffers (static
-     * nodes/triangles, dynamic nodes/triangles). */
-    {"mesh_spot_rt.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 5, nullptr, 4, 4},
+     * ambient occlusion), then the seven storage buffers of RtBufferSlot
+     * (static nodes/triangles, dynamic nodes/triangles, each one's
+     * alpha-test records, and the opacity masks). */
+    {"mesh_spot_rt.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, 5, nullptr, 7, 4},
     /* The shadow mask's G-buffer prepass, one vertex shader per layout. */
     {"rt_gbuffer.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, nullptr},
     {"rt_gbuffer_streamed.vert", SDL_GPU_SHADERSTAGE_VERTEX, 0, nullptr},
@@ -1495,20 +1500,31 @@ size_t g_mesh_cache_build_bytes;
 Uint64 g_mesh_cache_build_start;
 
 std::unordered_map<uint64_t, TextureEntry> g_texture_cache;
-/* Where a texture is see-through, for the ray-traced scene's cut-outs
- * (MioPanRt::kTriCutout): a coarse grid, each cell the fraction of its texels
- * that are solid (0..255).  Measured once as the pixels are staged
- * (CreatePendingTexture()), and only kept for textures that have holes at
- * all.  The GS alpha test cannot tell a cut-out apart: nearly every draw in
- * the game has it on, just to drop empty texels. */
+/* Where a texture is see-through, for the ray-traced scene's cut-outs: a
+ * coarse grid, each cell the fraction of its texels that are solid (0..255),
+ * which says how much of a triangle is hole (MioPanRt::kTriCutout); and a
+ * bitmask, one bit per texel (1 = solid), which the shaders alpha-test a
+ * ray's hit against (MioPanRt::GpuCutout).  Measured once as the pixels are
+ * staged (CreatePendingTexture()), and only kept for textures that have holes
+ * at all.  The GS alpha test cannot tell a cut-out apart: nearly every draw
+ * in the game has it on, just to drop empty texels. */
 struct TextureOpacity
 {
     int width = 0;
     int height = 0;
     std::vector<unsigned char> cells;
+    /* Row-major, at most kTextureMaskTexels a side: a larger texture is
+     * averaged down, each bit solid when most of its block is. */
+    int mask_width = 0;
+    int mask_height = 0;
+    std::vector<uint32_t> mask_bits;
+    /* The texture's content hash: one mask slot per content, however many
+     * times it is reloaded (RtMaskFor()). */
+    uint64_t hash = 0;
 };
 std::unordered_map<const SDL_GPUTexture *, TextureOpacity> g_texture_opacity;
 constexpr int kTextureOpacityCells = 64;
+constexpr int kTextureMaskTexels = 256;
 
 /* A texel is a hole when under half the alpha of the most opaque one -- both
  * scales the game's textures arrive in (0x80 or 0xFF for opaque) agree on
@@ -1550,6 +1566,49 @@ bool MeasureTextureOpacity(const std::vector<unsigned char> &rgba, int width,
         out->cells[i] = (unsigned char)(total[i] != 0
                                             ? solid[i] * 255u / total[i]
                                             : 255u);
+    }
+
+    /* The bitmask: texel for texel where the texture fits, else by the
+     * majority of each block. */
+    const int mw = std::min(width, kTextureMaskTexels);
+    const int mh = std::min(height, kTextureMaskTexels);
+    out->mask_width = mw;
+    out->mask_height = mh;
+    out->mask_bits.assign(((size_t)mw * (size_t)mh + 31u) / 32u, 0u);
+    auto set_bit = [out](size_t bit) {
+        out->mask_bits[bit >> 5] |= 1u << (bit & 31u);
+    };
+    if (mw == width && mh == height)
+    {
+        for (size_t i = 0; i < (size_t)width * (size_t)height; i++)
+        {
+            if ((unsigned)rgba[i * 4u + 3u] * 2u >= (unsigned)hi)
+            {
+                set_bit(i);
+            }
+        }
+        return true;
+    }
+    std::vector<uint16_t> block_solid((size_t)mw * (size_t)mh, 0u);
+    std::vector<uint16_t> block_total((size_t)mw * (size_t)mh, 0u);
+    for (int y = 0; y < height; y++)
+    {
+        const size_t row = (size_t)(y * mh / height) * (size_t)mw;
+        for (int x = 0; x < width; x++)
+        {
+            const size_t cell = row + (size_t)(x * mw / width);
+            const unsigned char a = rgba[((size_t)y * (size_t)width + x) * 4u + 3u];
+            block_total[cell]++;
+            block_solid[cell] += (unsigned)a * 2u >= (unsigned)hi ? 1u : 0u;
+        }
+    }
+    for (size_t i = 0; i < block_total.size(); i++)
+    {
+        if (block_total[i] != 0 &&
+            (unsigned)block_solid[i] * 2u >= (unsigned)block_total[i])
+        {
+            set_bit(i);
+        }
     }
     return true;
 }
@@ -6167,6 +6226,7 @@ TextureEntry *CreatePendingTexture(uint64_t hash, int width, int height,
         TextureOpacity opacity;
         if (MeasureTextureOpacity(pending.rgba, width, height, &opacity))
         {
+            opacity.hash = hash;
             g_texture_opacity[pending.texture] = std::move(opacity);
         }
         else
@@ -10513,11 +10573,14 @@ bool ResidentDrawContinues(const DrawCommand &previous, const DrawCommand &next)
  *  the lights she carries -- the flashlight is mounted behind her chest -- are
  *  not eclipsed by her own body; other lights still cast her shadow.
  *
- *  Known limits, acceptable for a proof of concept: cut-outs (textures with
- *  holes) cast shadows as solid quads -- ambient occlusion and the bounce see
- *  through them by how much of each triangle is hole (MioPanRt::kTriCutout),
- *  but only on resident meshes; geometry never drawn since the room loaded casts
- *  nothing; a resident object that moves leaves its old pose casting until it
+ *  Cut-outs -- grass, leaves, lattices: textures with holes -- are
+ *  alpha-tested: a ray that hits one looks up the texel it hit in a bitmask
+ *  of the texture (MioPanRt::GpuCutout) and carries on through a hole.
+ *
+ *  Known limits, acceptable for a proof of concept: the flashlight's bounce,
+ *  traced on the CPU, sees through cut-outs by how much of each triangle is
+ *  hole (MioPanRt::kTriCutout), and only on resident meshes; geometry never
+ *  drawn since the room loaded casts nothing; a resident object that moves leaves its old pose casting until it
  *  expires (kRtExpireFrames); display-rate presentation binds the newest
  *  tick's hierarchy even while still showing an older tick.
  * --------------------------------------------------------------------- */
@@ -10535,14 +10598,23 @@ constexpr size_t kRtMaxDynamicTris = 400000;
 /* How far past Mio's own bounds a light still counts as one she carries. */
 constexpr float kRtPlayerLightMargin = 250.0f;
 
+/* Bound in this order, t5 onwards, by both the fragment and the compute
+ * shaders (miopan_rt.hlsli). */
 enum RtBufferSlot
 {
     RT_STATIC_NODES = 0,
     RT_STATIC_TRIS,
     RT_DYNAMIC_NODES,
     RT_DYNAMIC_TRIS,
+    /* Each hierarchy's alpha-test records (MioPanRt::GpuCutout), and the
+     * opacity bitmasks they point into, shared by both. */
+    RT_STATIC_CUTOUTS,
+    RT_DYNAMIC_CUTOUTS,
+    RT_MASKS,
     RT_BUFFER_COUNT
 };
+static_assert(RT_BUFFER_COUNT == 7,
+              "mesh_spot_rt.frag's entry in g_cached_shaders counts these");
 
 struct RtSpan
 {
@@ -10568,6 +10640,8 @@ struct RtStaticJob
 {
     std::vector<float> corners;
     std::vector<unsigned char> flags;
+    std::vector<uint32_t> cutout_ids;
+    std::vector<MioPanRt::GpuCutout> cutouts;
     std::vector<std::pair<uint64_t, std::vector<RtSpan>>> spans;
     MioPanRt::Bvh bvh;
     std::atomic<bool> done{false};
@@ -10687,6 +10761,7 @@ RtWorkerThread g_rt_worker;
 /* CPU results waiting for UploadRayTracingScene().  The static one is kept
  * after it is uploaded: the flashlight's bounce rays walk it on the CPU. */
 MioPanRt::Bvh g_rt_static_bvh;
+std::vector<MioPanRt::GpuCutout> g_rt_static_cutouts;
 bool g_rt_static_upload_pending = false;
 MioPanRt::Bvh g_rt_dynamic_bvh;
 bool g_rt_dynamic_upload_pending = false;
@@ -10696,7 +10771,27 @@ SDL_GPUTransferBuffer *g_rt_transfer = nullptr;
 Uint32 g_rt_transfer_size = 0;
 std::vector<float> g_rt_dynamic_corners;
 std::vector<unsigned char> g_rt_dynamic_flags;
+std::vector<uint32_t> g_rt_dynamic_cutout_ids;
+std::vector<MioPanRt::GpuCutout> g_rt_dynamic_cutouts;
 float g_rt_player_sphere_pending[4];
+
+/* Every cut-out texture's opacity bitmask the scene has used, end to end, for
+ * the shaders' exact alpha test (MioPanRt::GpuCutout::mask_offset).
+ * Append-only, with one slot per texture content however often it is
+ * reloaded, so a record never points at a mask that changed under it.
+ * Capped; past that, a new cut-out keeps the coarse treatment
+ * (MioPanRt::kTriCutout). */
+struct RtMaskSlot
+{
+    uint32_t offset;
+    uint32_t size;
+};
+std::vector<uint32_t> g_rt_mask_words;
+std::vector<RtMaskSlot> g_rt_mask_slots;
+std::unordered_map<uint64_t, uint32_t> g_rt_mask_by_hash;
+/* The GPU's copy is missing or older than g_rt_mask_words. */
+bool g_rt_masks_dirty = false;
+constexpr size_t kRtMaxMaskWords = 8u * 1024u * 1024u;
 
 /* What the GPU holds.  Written under PresentStateGuard, read by
  * DrawQueuedSprites() on whichever thread records. */
@@ -10715,6 +10810,74 @@ const TextureOpacity *RtDrawOpacity(const DrawCommand &draw)
 {
     const auto found = g_texture_opacity.find(draw.texture);
     return found != g_texture_opacity.end() ? &found->second : nullptr;
+}
+
+/* `opacity`'s slot in the mask table, 1-based, taken the first time its
+ * texture content is seen; 0 when it has no bitmask or the table is full. */
+uint32_t RtMaskFor(const TextureOpacity &opacity)
+{
+    if (opacity.mask_bits.empty() || opacity.hash == 0 ||
+        opacity.mask_width <= 0 || opacity.mask_height <= 0)
+    {
+        return 0;
+    }
+    const auto found = g_rt_mask_by_hash.find(opacity.hash);
+    if (found != g_rt_mask_by_hash.end())
+    {
+        return found->second;
+    }
+    if (g_rt_mask_words.size() + opacity.mask_bits.size() > kRtMaxMaskWords)
+    {
+        return 0;
+    }
+    RtMaskSlot slot;
+    slot.offset = (uint32_t)g_rt_mask_words.size();
+    slot.size = (uint32_t)opacity.mask_width |
+                ((uint32_t)opacity.mask_height << 16);
+    g_rt_mask_words.insert(g_rt_mask_words.end(), opacity.mask_bits.begin(),
+                           opacity.mask_bits.end());
+    g_rt_mask_slots.push_back(slot);
+    const uint32_t id = (uint32_t)g_rt_mask_slots.size();
+    g_rt_mask_by_hash.emplace(opacity.hash, id);
+    g_rt_masks_dirty = true;
+    return id;
+}
+
+/* Append the alpha-test record of a triangle drawn through mask `mask`
+ * (1-based, 0 = none) with texture coordinates `a`, `b`, `c` at its three
+ * corners -- in the order its corners went into the hierarchy -- and return
+ * what the triangle carries for it (MioPanRt::BuildBvh()'s tri_cutout). */
+uint32_t RtAddCutout(std::vector<MioPanRt::GpuCutout> &cutouts, uint32_t mask,
+                     const float *a, const float *b, const float *c)
+{
+    if (mask == 0 || mask > g_rt_mask_slots.size())
+    {
+        return 0;
+    }
+    MioPanRt::GpuCutout cut;
+    /* Wrapped at the first corner, so tiled coordinates keep their
+     * precision in the shader's float maths. */
+    const float base_s = std::floor(a[0]);
+    const float base_t = std::floor(a[1]);
+    cut.uv0[0] = a[0] - base_s;
+    cut.uv0[1] = a[1] - base_t;
+    cut.duv1[0] = b[0] - a[0];
+    cut.duv1[1] = b[1] - a[1];
+    cut.duv2[0] = c[0] - a[0];
+    cut.duv2[1] = c[1] - a[1];
+    for (float value : {cut.uv0[0], cut.uv0[1], cut.duv1[0], cut.duv1[1],
+                        cut.duv2[0], cut.duv2[1]})
+    {
+        if (!std::isfinite(value))
+        {
+            return 0;
+        }
+    }
+    const RtMaskSlot &slot = g_rt_mask_slots[mask - 1u];
+    cut.mask_offset = slot.offset;
+    cut.mask_size = slot.size;
+    cutouts.push_back(cut);
+    return (uint32_t)cutouts.size();
 }
 
 /* How solid the texture is at (s, t), 0..1, wrapping as the sampler repeats. */
@@ -10750,12 +10913,23 @@ void RtMarkCutout(ResidentMesh &mesh, Uint32 begin, Uint32 end,
     {
         mesh.rt_tri_flags.resize(tris, 0);
     }
+    const uint32_t mask = RtMaskFor(opacity);
+    if (mask != 0 && mesh.rt_tri_mask.size() < tris)
+    {
+        mesh.rt_tri_mask.resize(tris, 0u);
+    }
     for (size_t t = begin / 3u; t < std::min<size_t>(end / 3u, tris); t++)
     {
         const Uint32 *idx = &mesh.rt_indices[t * 3u];
         if (idx[0] >= verts || idx[1] >= verts || idx[2] >= verts)
         {
             continue;
+        }
+        /* Every triangle of the range gets the exact test, mostly solid or
+         * not: it only costs anything when a ray actually hits it. */
+        if (mask != 0)
+        {
+            mesh.rt_tri_mask[t] = mask;
         }
         const float *a = &mesh.rt_uvs[(size_t)idx[0] * 2u];
         const float *b = &mesh.rt_uvs[(size_t)idx[1] * 2u];
@@ -10867,10 +11041,13 @@ bool RtMatrixMirrors(const float *m)
 
 void RtAppendResident(std::vector<float> &corners,
                       std::vector<unsigned char> &flags,
+                      std::vector<uint32_t> &cutout_ids,
+                      std::vector<MioPanRt::GpuCutout> &cutouts,
                       const ResidentMesh &mesh, const float *model,
                       Uint32 begin, Uint32 end, unsigned char extra_flags)
 {
     const size_t vertex_count = mesh.rt_positions.size() / 3u;
+    const size_t uv_count = mesh.rt_uvs.size() / 2u;
     const bool mirror = RtMatrixMirrors(model);
     end = std::min<Uint32>(end, (Uint32)mesh.rt_indices.size());
     for (Uint32 i = begin; i + 2 < end; i += 3)
@@ -10893,12 +11070,22 @@ void RtAppendResident(std::vector<float> &corners,
         flags.push_back((tri < mesh.rt_tri_flags.size() ? mesh.rt_tri_flags[tri]
                                                         : MioPanRt::kTriTwoSided) |
                         extra_flags);
+        const uint32_t mask =
+            tri < mesh.rt_tri_mask.size() ? mesh.rt_tri_mask[tri] : 0u;
+        cutout_ids.push_back(
+            mask != 0 && a < uv_count && b < uv_count && c < uv_count
+                ? RtAddCutout(cutouts, mask, &mesh.rt_uvs[(size_t)a * 2u],
+                              &mesh.rt_uvs[(size_t)b * 2u],
+                              &mesh.rt_uvs[(size_t)c * 2u])
+                : 0u);
     }
 }
 
-void RtAppendStreamed(const DrawCommand &draw, unsigned char flag)
+void RtAppendStreamed(const DrawCommand &draw, unsigned char flag,
+                      const TextureOpacity *opacity)
 {
     const size_t vertex_count = g_vertices.size();
+    const uint32_t mask = opacity != nullptr ? RtMaskFor(*opacity) : 0u;
     auto emit = [&](Uint32 a, Uint32 b, Uint32 c) {
         if (a >= vertex_count || b >= vertex_count || c >= vertex_count ||
             g_rt_dynamic_flags.size() >= kRtMaxDynamicTris)
@@ -10916,6 +11103,10 @@ void RtAppendStreamed(const DrawCommand &draw, unsigned char flag)
         /* Streamed meshes are characters and other moving things: closed
          * enough that either side may face the light. */
         g_rt_dynamic_flags.push_back(flag | MioPanRt::kTriTwoSided);
+        g_rt_dynamic_cutout_ids.push_back(
+            mask != 0 ? RtAddCutout(g_rt_dynamic_cutouts, mask, g_vertices[a].uv,
+                                    g_vertices[b].uv, g_vertices[c].uv)
+                      : 0u);
     };
     if (draw.stream_indexed)
     {
@@ -14140,6 +14331,7 @@ void RtPollStaticJob()
         }
     }
     g_rt_static_bvh = std::move(job->bvh);
+    g_rt_static_cutouts = std::move(job->cutouts);
     g_rt_static_upload_pending = true;
 
     g_rt_stats.static_tris = (int)g_rt_static_bvh.tris.size();
@@ -14182,8 +14374,9 @@ void RtLaunchStaticBuild()
             }
             for (const RtSpan &span : instance.spans)
             {
-                RtAppendResident(job->corners, job->flags, *mesh,
-                                 instance.model, span.begin, span.end, 0);
+                RtAppendResident(job->corners, job->flags, job->cutout_ids,
+                                 job->cutouts, *mesh, instance.model,
+                                 span.begin, span.end, 0);
             }
             job->spans.emplace_back(entry.first, instance.spans);
         }
@@ -14200,7 +14393,8 @@ void RtLaunchStaticBuild()
     {
         g_rt_worker = std::thread([job]() {
             MioPanRt::BuildBvh(job->corners.data(), job->flags.data(),
-                               job->flags.size(), 12, true, &job->bvh);
+                               job->cutout_ids.data(), job->flags.size(), 12,
+                               true, &job->bvh);
             job->done.store(true, std::memory_order_release);
         });
     }
@@ -14208,7 +14402,8 @@ void RtLaunchStaticBuild()
     {
         /* No thread: build here instead, once. */
         MioPanRt::BuildBvh(job->corners.data(), job->flags.data(),
-                           job->flags.size(), 12, true, &job->bvh);
+                           job->cutout_ids.data(), job->flags.size(), 12, true,
+                           &job->bvh);
         job->done.store(true, std::memory_order_release);
     }
 }
@@ -14296,13 +14491,26 @@ void UploadRayTracingScene()
         pieces[piece_count++] = Piece{slot, data, bytes};
         return true;
     };
+    /* The masks go first and whole: a hierarchy whose records point into
+     * masks the GPU does not have yet is not published. */
+    const bool masks_ok =
+        !g_rt_masks_dirty ||
+        add(RT_MASKS, g_rt_mask_words.data(),
+            g_rt_mask_words.size() * sizeof(uint32_t));
+    if (!masks_ok)
+    {
+        static_ok = false;
+        dynamic_ok = false;
+    }
     if (static_ok)
     {
         static_ok =
             add(RT_STATIC_NODES, g_rt_static_bvh.nodes.data(),
                 g_rt_static_bvh.nodes.size() * sizeof(MioPanRt::GpuNode)) &&
             add(RT_STATIC_TRIS, g_rt_static_bvh.tris.data(),
-                g_rt_static_bvh.tris.size() * sizeof(MioPanRt::GpuTri));
+                g_rt_static_bvh.tris.size() * sizeof(MioPanRt::GpuTri)) &&
+            add(RT_STATIC_CUTOUTS, g_rt_static_cutouts.data(),
+                g_rt_static_cutouts.size() * sizeof(MioPanRt::GpuCutout));
     }
     if (dynamic_ok)
     {
@@ -14310,7 +14518,9 @@ void UploadRayTracingScene()
             add(RT_DYNAMIC_NODES, g_rt_dynamic_bvh.nodes.data(),
                 g_rt_dynamic_bvh.nodes.size() * sizeof(MioPanRt::GpuNode)) &&
             add(RT_DYNAMIC_TRIS, g_rt_dynamic_bvh.tris.data(),
-                g_rt_dynamic_bvh.tris.size() * sizeof(MioPanRt::GpuTri));
+                g_rt_dynamic_bvh.tris.size() * sizeof(MioPanRt::GpuTri)) &&
+            add(RT_DYNAMIC_CUTOUTS, g_rt_dynamic_cutouts.data(),
+                g_rt_dynamic_cutouts.size() * sizeof(MioPanRt::GpuCutout));
     }
 
     bool uploaded = piece_count == 0;
@@ -14393,6 +14603,10 @@ void UploadRayTracingScene()
         }
     }
 
+    if (g_rt_masks_dirty && masks_ok && uploaded)
+    {
+        g_rt_masks_dirty = false;
+    }
     /* Whatever did not make it to the GPU is published as empty, so the
      * shader never walks a buffer that holds something else. */
     if (g_rt_static_upload_pending)
@@ -14422,11 +14636,14 @@ void RtResetScene()
     g_rt_instances.clear();
     g_rt_static_dirty = false;
     g_rt_static_bvh = MioPanRt::Bvh{};
+    g_rt_static_cutouts.clear();
     g_rt_dynamic_bvh = MioPanRt::Bvh{};
     g_rt_static_upload_pending = false;
     g_rt_dynamic_upload_pending = false;
     g_rt_dynamic_corners.clear();
     g_rt_dynamic_flags.clear();
+    g_rt_dynamic_cutout_ids.clear();
+    g_rt_dynamic_cutouts.clear();
     for (RtMaskLight &light : g_rt_mask_pending)
     {
         light = RtMaskLight{};
@@ -15143,6 +15360,8 @@ void UpdateRayTracingScene()
     const uint64_t frame = g_frame_index;
     g_rt_dynamic_corners.clear();
     g_rt_dynamic_flags.clear();
+    g_rt_dynamic_cutout_ids.clear();
+    g_rt_dynamic_cutouts.clear();
     const float kHuge = std::numeric_limits<float>::max();
     float player_min[3] = {kHuge, kHuge, kHuge};
     float player_max[3] = {-kHuge, -kHuge, -kHuge};
@@ -15156,9 +15375,10 @@ void UpdateRayTracingScene()
                 continue;
             }
             const size_t first_tri = g_rt_dynamic_flags.size();
-            /* Streamed geometry -- characters, mostly -- is never treated as
-             * a cut-out: it is rebuilt every frame, and telling it would cost
-             * as much again. */
+            /* Streamed geometry -- characters, mostly -- is alpha-tested like
+             * the rest, but never given the coarse kTriCutout fraction: that
+             * is measured once per resident range, and streamed triangles are
+             * new every frame. */
             const TextureOpacity *opacity = RtDrawOpacity(draw);
             const unsigned char flag =
                 draw.rt_player ? MioPanRt::kTriPlayer : 0;
@@ -15180,8 +15400,9 @@ void UpdateRayTracingScene()
                     /* Mio is never static: she is always flagged, and she
                      * moves. */
                     RtAppendResident(g_rt_dynamic_corners, g_rt_dynamic_flags,
-                                     *mesh, draw.model, begin, end,
-                                     flag | MioPanRt::kTriTwoSided);
+                                     g_rt_dynamic_cutout_ids,
+                                     g_rt_dynamic_cutouts, *mesh, draw.model,
+                                     begin, end, flag | MioPanRt::kTriTwoSided);
                 }
                 else
                 {
@@ -15216,14 +15437,16 @@ void UpdateRayTracingScene()
                         g_rt_dynamic_flags.size() < kRtMaxDynamicTris)
                     {
                         RtAppendResident(g_rt_dynamic_corners,
-                                         g_rt_dynamic_flags, *mesh, draw.model,
-                                         begin, end, flag);
+                                         g_rt_dynamic_flags,
+                                         g_rt_dynamic_cutout_ids,
+                                         g_rt_dynamic_cutouts, *mesh,
+                                         draw.model, begin, end, flag);
                     }
                 }
             }
             else
             {
-                RtAppendStreamed(draw, flag);
+                RtAppendStreamed(draw, flag, opacity);
             }
             if (draw.rt_player)
             {
@@ -15243,6 +15466,8 @@ void UpdateRayTracingScene()
     {
         g_rt_dynamic_corners.clear();
         g_rt_dynamic_flags.clear();
+        g_rt_dynamic_cutout_ids.clear();
+        g_rt_dynamic_cutouts.clear();
     }
 
     /* Forget pairs that stopped being drawn: promoted ones after a long
@@ -15305,11 +15530,13 @@ void UpdateRayTracingScene()
         frame - g_rt_dynamic_built_frame < kRtDynamicRebuildFrames &&
         MioPanRt::RefitBvh(g_rt_dynamic_corners.data(),
                            g_rt_dynamic_flags.data(),
+                           g_rt_dynamic_cutout_ids.data(),
                            g_rt_dynamic_flags.size(), &g_rt_dynamic_bvh);
     if (!refitted)
     {
         MioPanRt::BuildBvh(g_rt_dynamic_corners.data(),
                            g_rt_dynamic_flags.data(),
+                           g_rt_dynamic_cutout_ids.data(),
                            g_rt_dynamic_flags.size(), 8, false,
                            &g_rt_dynamic_bvh);
         g_rt_dynamic_built_frame = frame;
@@ -15321,6 +15548,11 @@ void UpdateRayTracingScene()
     g_rt_stats.dynamic_build_ms = (float)g_rt_dynamic_bvh.build_ms;
     g_rt_stats.instances = (int)g_rt_instances.size();
     g_rt_stats.depth = std::max(g_rt_dynamic_bvh.depth, g_rt_static_depth);
+    g_rt_stats.alpha_tris =
+        (int)(g_rt_static_cutouts.size() + g_rt_dynamic_cutouts.size());
+    g_rt_stats.alpha_masks = (int)g_rt_mask_slots.size();
+    g_rt_stats.alpha_mask_kb =
+        (int)(g_rt_mask_words.size() * sizeof(uint32_t) / 1024u);
     g_rt_stats.building = g_rt_job != nullptr ? 1 : 0;
 
     UpdateBounceLights();
@@ -15348,6 +15580,8 @@ void ReleaseRayTracingResources()
         }
         buffer = RtGpuBuffer{};
     }
+    /* The table outlives the buffers; the next upload sends it again. */
+    g_rt_masks_dirty = !g_rt_mask_words.empty();
 }
 
 void NotePresenterHold(bool held)

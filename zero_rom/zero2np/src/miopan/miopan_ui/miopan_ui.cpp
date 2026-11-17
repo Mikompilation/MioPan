@@ -1063,6 +1063,9 @@ void DrawRayTracingMenu()
     ImGui::TextDisabled("Bounce: %d lights, %d of %d rays hit (%.2f ms)",
                         stats.bounce_lights, stats.bounce_hits,
                         stats.bounce_rays, stats.bounce_ms);
+    ImGui::TextDisabled("Cut-outs: %d alpha-tested tris, %d masks (%d KB)",
+                        stats.alpha_tris, stats.alpha_masks,
+                        stats.alpha_mask_kb);
     ImGui::TextDisabled("Instances: %d, depth %d", stats.instances,
                         stats.depth);
 
