@@ -10675,11 +10675,14 @@ void FillFlashlightUniforms()
  * once per pass as the per-pixel mesh shaders' fourth uniform block.
  * Mirrors `MioPanBounceBlock` in mesh_spot_frag.hlsli. */
 /* Lights per bounce, and the most bounces
- * MioPan_RendererSetFlashlightBounceCount() takes.  The block holds every
- * bounce's lights, the beam's own first. */
+ * MioPan_RendererSetFlashlightBounceCount() takes; and the lamps' first
+ * bounce, which has lights of its own (MioPan_RendererSetLampBounce()).  The
+ * block holds every bounce's lights: the beam's own first, then the lamps',
+ * then each further bounce's -- see BounceSlotsOf(). */
 constexpr int kBouncePools = 8;
 constexpr int kBounceMaxCount = 4;
-constexpr int kBounceLights = kBouncePools * kBounceMaxCount;
+constexpr int kLampPools = 16;
+constexpr int kBounceLights = kBouncePools * kBounceMaxCount + kLampPools;
 struct BounceUniforms
 {
     /* x = live lights. */
@@ -10723,10 +10726,61 @@ struct BounceSlot
     float area = 0.0f;
     float colour[3] = {};
 };
-/* One running light per pool, kBouncePools per bounce; see
- * UpdateBounceLights(). */
+/* One running light per pool; see UpdateBounceLights() and
+ * BounceSlotsOf(). */
 BounceSlot g_bounce_slots[kBounceLights];
 BounceUniforms g_bounce_pending{};
+
+/* Every lamp that lit a per-pixel draw this frame, as
+ * MioPan_RendererNoteLightSource() hands them over, kept once each; read and
+ * cleared at EndFrame by UpdateBounceLights(). */
+struct LightSource
+{
+    int type = 0; /* 1 spot, 2 point */
+    float position[3] = {};
+    float direction[3] = {};
+    float colour[3] = {};
+    float params[4] = {};
+};
+std::vector<LightSource> g_light_sources;
+constexpr size_t kMaxLightSources = 64;
+/* Changes every EndFrame, so gra3dNoteLightSources() hands a lamp over again
+ * each frame; never 0, which means "not wanted". */
+unsigned int g_light_source_epoch = 1;
+/* MioPan_RendererSetLampBounce(): 1 = as strong as the flashlight's, 0 = off. */
+float g_lamp_bounce = 1.0f;
+
+/* A lamp's first bounce, traced once and kept (UpdateLampSamples()).  What
+ * a ray found that does not depend on the lamp's colour or brightness, so a
+ * flicker costs no rays: where it landed, the facing there, cos_i / |L|
+ * (the kernel's coefficient before bTimes scales and caps it), the cone's
+ * factor (1 for a point light) and the patch it stands for. */
+struct LampSample
+{
+    float position[3];
+    float normal[3];
+    float reach;
+    float cone;
+    float area;
+};
+
+struct LampCache
+{
+    int type = 0;
+    /* Where the lamp was when its rays were traced. */
+    float position[3] = {};
+    float direction[3] = {};
+    float params[4] = {};
+    std::vector<LampSample> samples;
+    bool traced = false;
+    uint64_t traced_frame = 0;
+    /* g_rt_stats.static_builds when traced: a new room hierarchy retraces. */
+    int traced_build = -1;
+    uint64_t seen_frame = 0;
+    /* This frame's g_light_sources entry, or -1. */
+    int source = -1;
+};
+std::vector<LampCache> g_lamps;
 
 bool g_rt_enabled = false;
 unsigned int g_rt_flags = MIOPAN_RT_SPOT | MIOPAN_RT_POINT;
@@ -14653,6 +14707,8 @@ void RtResetScene()
     {
         slot = BounceSlot{};
     }
+    g_light_sources.clear();
+    g_lamps.clear();
     {
         PresentStateGuard guard;
         g_bounce_live = BounceUniforms{};
@@ -14688,6 +14744,9 @@ void RtResetScene()
  *  light on: rays leave each bounce's hits in a diffuse spread, and where
  *  they land is clustered into eight more lights.  See
  *  TraceBounceGeneration() and ClusterBounceSamples().
+ *
+ *  Every other lamp bounces too (MioPan_RendererSetLampBounce()): the room's
+ *  point and spot lights, candles, lanterns.  See UpdateLampSamples().
  *
  *  The energy is worked out in LINEAR light.  The kernel's GS units are gamma
  *  encoded -- the PS2 added light in display space -- so a hit's value is
@@ -15048,16 +15107,20 @@ int TraceBounceGeneration(const BounceSample *parents, int parent_count,
  * trading places with its neighbours; a slot that has gone dark is seeded
  * afresh at the landing the others serve worst. */
 void ClusterBounceSamples(const BounceSample *samples, int count,
-                          const BounceSlot *slots, BouncePool *pools)
+                          const BounceSlot *slots, BouncePool *pools,
+                          int pool_count)
 {
-    if (count <= 0)
+    constexpr int kMaxPools = kLampPools > kBouncePools ? kLampPools
+                                                        : kBouncePools;
+    pool_count = std::min(std::max(pool_count, 0), kMaxPools);
+    if (count <= 0 || pool_count == 0)
     {
         return;
     }
-    float centre[kBouncePools][3] = {};
-    float facing[kBouncePools][3] = {};
-    bool seeded[kBouncePools] = {};
-    for (int k = 0; k < kBouncePools; k++)
+    float centre[kMaxPools][3] = {};
+    float facing[kMaxPools][3] = {};
+    bool seeded[kMaxPools] = {};
+    for (int k = 0; k < pool_count; k++)
     {
         if (!slots[k].live)
         {
@@ -15084,7 +15147,7 @@ void ClusterBounceSamples(const BounceSample *samples, int count,
         return d2 + facing_cost * turn;
     };
 
-    for (int k = 0; k < kBouncePools; k++)
+    for (int k = 0; k < pool_count; k++)
     {
         if (seeded[k])
         {
@@ -15095,7 +15158,7 @@ void ClusterBounceSamples(const BounceSample *samples, int count,
         for (int i = 0; i < count; i++)
         {
             float nearest = -1.0f;
-            for (int other = 0; other < kBouncePools; other++)
+            for (int other = 0; other < pool_count; other++)
             {
                 if (seeded[other])
                 {
@@ -15123,17 +15186,18 @@ void ClusterBounceSamples(const BounceSample *samples, int count,
         }
     }
 
-    int nearest_of[kBounceRays] = {};
+    static std::vector<int> nearest_of;
+    nearest_of.assign((size_t)count, 0);
     for (int round = 0; round < kBounceClusterRounds; round++)
     {
-        float weight[kBouncePools] = {};
-        float position[kBouncePools][3] = {};
-        float normal[kBouncePools][3] = {};
+        float weight[kMaxPools] = {};
+        float position[kMaxPools][3] = {};
+        float normal[kMaxPools][3] = {};
         for (int i = 0; i < count; i++)
         {
             int nearest = -1;
             float nearest_cost = 0.0f;
-            for (int k = 0; k < kBouncePools; k++)
+            for (int k = 0; k < pool_count; k++)
             {
                 if (!seeded[k])
                 {
@@ -15146,7 +15210,7 @@ void ClusterBounceSamples(const BounceSample *samples, int count,
                     nearest_cost = c;
                 }
             }
-            nearest_of[i] = nearest;
+            nearest_of[(size_t)i] = nearest;
             const float w = samples[i].weight;
             weight[nearest] += w;
             for (int a = 0; a < 3; a++)
@@ -15155,7 +15219,7 @@ void ClusterBounceSamples(const BounceSample *samples, int count,
                 normal[nearest][a] += samples[i].normal[a] * w;
             }
         }
-        for (int k = 0; k < kBouncePools; k++)
+        for (int k = 0; k < pool_count; k++)
         {
             if (!(weight[k] > 0.0f))
             {
@@ -15176,15 +15240,15 @@ void ClusterBounceSamples(const BounceSample *samples, int count,
     }
     for (int i = 0; i < count; i++)
     {
-        BouncePoolAdd(pools[nearest_of[i]], samples[i]);
+        BouncePoolAdd(pools[nearest_of[(size_t)i]], samples[i]);
     }
 }
 
 /* Pools to lights, eased against what each slot held last frame. */
 void SettleBounceSlots(const BouncePool *pools, BounceSlot *slots,
-                       float albedo)
+                       int pool_count, float albedo)
 {
-    for (int k = 0; k < kBouncePools; k++)
+    for (int k = 0; k < pool_count; k++)
     {
         const BouncePool &pool = pools[k];
         BounceSlot &slot = slots[k];
@@ -15258,6 +15322,341 @@ void SettleBounceSlots(const BouncePool *pools, BounceSlot *slots,
     }
 }
 
+/* ------------------------------------------------------------------------
+ *  Every lamp's bounce (MioPan_RendererSetLampBounce()).
+ *
+ *  The same idea as the flashlight's first bounce -- rays from the light,
+ *  where they land lit by the light's own law -- for every point and spot
+ *  light gra3dNoteLightSources() saw light a draw this frame.  Two things
+ *  differ, both because lamps mostly stay put and there can be a dozen:
+ *
+ *    - A lamp's rays are traced once and kept (LampCache): a fixed pattern
+ *      -- a Fibonacci sphere for a point light, a spiral over the cone for a
+ *      spot -- against the STATIC hierarchy only, so a passing character does
+ *      not leave a patch of bounce hanging in the air.  A few lamps a frame
+ *      are retraced (kLampRayBudget): new ones first, then any that moved or
+ *      that a new room hierarchy has outdated, then the longest unrefreshed.
+ *      What a lamp's colour and brightness do to its landings is worked out
+ *      afresh every frame, so a candle's flicker carries into its bounce.
+ *    - The landings have no beam pattern to pool by, so -- every lamp's
+ *      together -- they are clustered into kLampPools lights, as a further
+ *      bounce's are, and the further bounces leave from them too.
+ *
+ *  Each ray starts the shadow rays' light offset out from the lamp
+ *  (MioPanRayTracingSettings::light_offset), clear of its own lantern, and
+ *  stops at whatever it meets, front face or back.  The shadow rays let a
+ *  light through the back of a wall (MioPanRt::kTriTwoSided) because the
+ *  rooms are rigged with fill lights under the floor, behind the walls and
+ *  in the next room, aimed through them; their bounce must not come in the
+ *  same way.  Stopped at the back of the floor, a hidden light's patch faces
+ *  away from the room and lights nothing in it.
+ * --------------------------------------------------------------------- */
+constexpr int kLampRays = 64;
+/* Rays traced for lamps per frame: two lamps' worth. */
+constexpr int kLampRayBudget = 2 * kLampRays;
+/* A lamp is the same one within this distance of where it was... */
+constexpr float kLampMatchDistance = 50.0f;
+/* ...and is retraced once it has moved this far from where it was traced. */
+constexpr float kLampMoveDistance = 4.0f;
+constexpr uint64_t kLampRefreshFrames = 30;
+constexpr uint64_t kLampForgetFrames = 120;
+constexpr size_t kMaxLamps = 48;
+
+void TraceLamp(LampCache &lamp, const LightSource &source, int *rays,
+               int *hits)
+{
+    lamp.type = source.type;
+    std::memcpy(lamp.position, source.position, sizeof(lamp.position));
+    std::memcpy(lamp.direction, source.direction, sizeof(lamp.direction));
+    std::memcpy(lamp.params, source.params, sizeof(lamp.params));
+    lamp.samples.clear();
+    lamp.traced = true;
+    lamp.traced_frame = g_frame_index;
+    lamp.traced_build = g_rt_stats.static_builds;
+
+    const bool spot = lamp.type == 1;
+    float axis[3] = {lamp.direction[0], lamp.direction[1], lamp.direction[2]};
+    float u_axis[3] = {};
+    float v_axis[3] = {};
+    float sin_half = 0.0f;
+    if (spot)
+    {
+        const float len = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] +
+                                    axis[2] * axis[2]);
+        if (!(len > 1e-6f) || !(lamp.params[2] > 1.0f))
+        {
+            return;
+        }
+        for (float &a : axis)
+        {
+            a /= len;
+        }
+        BounceFrame(axis, u_axis, v_axis);
+        sin_half = 1.0f / std::sqrt(lamp.params[2]);
+    }
+    const float offset = std::max(g_rt_settings.light_offset, 0.0f);
+
+    for (int i = 0; i < kLampRays; i++)
+    {
+        float dir[3];
+        float solid;
+        float cone = 1.0f;
+        if (spot)
+        {
+            /* The beam's own spiral (TraceBeamBounce()), over the hard cone. */
+            const float x = std::sqrt(((float)i + 0.5f) / (float)kLampRays);
+            const float phi = std::fmod((float)i * kBounceGoldenAngle,
+                                        2.0f * kBouncePi);
+            const float sin_t = x * sin_half;
+            if (sin_t >= 0.995f)
+            {
+                continue;
+            }
+            const float cos_t = std::sqrt(1.0f - sin_t * sin_t);
+            const float cp = std::cos(phi) * sin_t;
+            const float sp = std::sin(phi) * sin_t;
+            for (int a = 0; a < 3; a++)
+            {
+                dir[a] = axis[a] * cos_t + u_axis[a] * cp + v_axis[a] * sp;
+            }
+            solid = kBouncePi * sin_half * sin_half / (float)kLampRays / cos_t;
+            cone = std::max(cos_t * cos_t - lamp.params[1], 0.0f) * lamp.params[2];
+        }
+        else
+        {
+            /* Fibonacci sphere: even, and fixed in the world. */
+            const float y = 1.0f - 2.0f * ((float)i + 0.5f) / (float)kLampRays;
+            const float r = std::sqrt(std::max(1.0f - y * y, 0.0f));
+            const float phi = std::fmod((float)i * kBounceGoldenAngle,
+                                        2.0f * kBouncePi);
+            dir[0] = r * std::cos(phi);
+            dir[1] = y;
+            dir[2] = r * std::sin(phi);
+            solid = 4.0f * kBouncePi / (float)kLampRays;
+        }
+        float origin[3];
+        for (int a = 0; a < 3; a++)
+        {
+            origin[a] = lamp.position[a] + dir[a] * offset;
+        }
+        (*rays)++;
+
+        MioPanRt::RayHit hit{};
+        if (!MioPanRt::TraceClosest(g_rt_static_bvh, origin, dir,
+                                    kBounceMaxDistance, kBounceSkip, true,
+                                    &hit))
+        {
+            continue;
+        }
+        (*hits)++;
+        const float cos_i = -(hit.normal[0] * dir[0] + hit.normal[1] * dir[1] +
+                              hit.normal[2] * dir[2]);
+        const float t = offset + hit.t;
+        if (cos_i <= 0.0f || !(t > 0.0f))
+        {
+            continue;
+        }
+        LampSample sample;
+        for (int a = 0; a < 3; a++)
+        {
+            sample.position[a] = origin[a] + dir[a] * hit.t;
+            sample.normal[a] = hit.normal[a];
+        }
+        sample.reach = cos_i / t;
+        sample.cone = cone;
+        sample.area = solid * t * t / std::max(cos_i, 0.2f);
+        lamp.samples.push_back(sample);
+    }
+}
+
+/* Match this frame's lamps to their caches, retrace what is due, and append
+ * every lit lamp's landings -- lit by its colour this frame -- to `out`. */
+void UpdateLampSamples(std::vector<BounceSample> &out, int *rays, int *hits,
+                       int *lamps)
+{
+    const uint64_t frame = g_frame_index;
+    for (LampCache &lamp : g_lamps)
+    {
+        lamp.source = -1;
+    }
+    for (int s = 0; s < (int)g_light_sources.size(); s++)
+    {
+        const LightSource &source = g_light_sources[(size_t)s];
+        LampCache *best = nullptr;
+        float best_d2 = kLampMatchDistance * kLampMatchDistance;
+        for (LampCache &lamp : g_lamps)
+        {
+            if (lamp.source >= 0 || lamp.type != source.type)
+            {
+                continue;
+            }
+            float d2 = 0.0f;
+            float facing = 0.0f;
+            for (int a = 0; a < 3; a++)
+            {
+                const float d = lamp.position[a] - source.position[a];
+                d2 += d * d;
+                facing += lamp.direction[a] * source.direction[a];
+            }
+            if (source.type == 1 && facing < 0.99f)
+            {
+                continue;
+            }
+            if (d2 < best_d2)
+            {
+                best_d2 = d2;
+                best = &lamp;
+            }
+        }
+        if (best == nullptr)
+        {
+            if (g_lamps.size() >= kMaxLamps)
+            {
+                /* Make room by forgetting the longest unseen. */
+                auto oldest = std::min_element(
+                    g_lamps.begin(), g_lamps.end(),
+                    [](const LampCache &l, const LampCache &r) {
+                        return (l.source >= 0 ? 1 : 0) < (r.source >= 0 ? 1 : 0) ||
+                               ((l.source >= 0) == (r.source >= 0) &&
+                                l.seen_frame < r.seen_frame);
+                    });
+                if (oldest == g_lamps.end() || oldest->source >= 0)
+                {
+                    continue;
+                }
+                *oldest = LampCache{};
+                best = &*oldest;
+            }
+            else
+            {
+                g_lamps.emplace_back();
+                best = &g_lamps.back();
+            }
+            best->type = source.type;
+            std::memcpy(best->position, source.position, sizeof(best->position));
+            std::memcpy(best->direction, source.direction,
+                        sizeof(best->direction));
+        }
+        best->source = s;
+        best->seen_frame = frame;
+    }
+
+    /* Retrace what is due, most due first, within the budget. */
+    struct Due
+    {
+        LampCache *lamp;
+        int priority;
+    };
+    static std::vector<Due> due;
+    due.clear();
+    for (LampCache &lamp : g_lamps)
+    {
+        if (lamp.source < 0)
+        {
+            continue;
+        }
+        const LightSource &source = g_light_sources[(size_t)lamp.source];
+        float moved = 0.0f;
+        float facing = 0.0f;
+        for (int a = 0; a < 3; a++)
+        {
+            const float d = lamp.position[a] - source.position[a];
+            moved += d * d;
+            facing += lamp.direction[a] * source.direction[a];
+        }
+        int priority = -1;
+        if (!lamp.traced)
+        {
+            priority = 0;
+        }
+        else if (moved > kLampMoveDistance * kLampMoveDistance ||
+                 (source.type == 1 &&
+                  (facing < 0.9999f ||
+                   std::fabs(source.params[1] - lamp.params[1]) > 1e-4f)) ||
+                 lamp.traced_build != g_rt_stats.static_builds)
+        {
+            priority = 1;
+        }
+        else if (frame - lamp.traced_frame >= kLampRefreshFrames)
+        {
+            priority = 2;
+        }
+        if (priority >= 0)
+        {
+            due.push_back(Due{&lamp, priority});
+        }
+    }
+    std::sort(due.begin(), due.end(), [](const Due &l, const Due &r) {
+        return l.priority != r.priority
+                   ? l.priority < r.priority
+                   : l.lamp->traced_frame < r.lamp->traced_frame;
+    });
+    int budget = kLampRayBudget;
+    for (const Due &d : due)
+    {
+        if (budget < kLampRays)
+        {
+            break;
+        }
+        TraceLamp(*d.lamp, g_light_sources[(size_t)d.lamp->source], rays,
+                  hits);
+        budget -= kLampRays;
+    }
+
+    /* Forget lamps long gone. */
+    g_lamps.erase(std::remove_if(g_lamps.begin(), g_lamps.end(),
+                                 [frame](const LampCache &lamp) {
+                                     return frame - lamp.seen_frame >
+                                            kLampForgetFrames;
+                                 }),
+                  g_lamps.end());
+
+    /* This frame's light on every kept landing, in the units the beam's
+     * samples carry (TraceBeamBounce()). */
+    for (const LampCache &lamp : g_lamps)
+    {
+        if (lamp.source < 0 || !lamp.traced)
+        {
+            continue;
+        }
+        const LightSource &source = g_light_sources[(size_t)lamp.source];
+        (*lamps)++;
+        for (const LampSample &ls : lamp.samples)
+        {
+            const float coefficient = std::min(ls.reach * source.params[0], 1.0f);
+            BounceSample sample;
+            for (int c = 0; c < 3; c++)
+            {
+                const float lit = std::min(
+                    std::max(source.colour[c], 0.0f) * coefficient * ls.cone,
+                    255.0f);
+                sample.flux[c] =
+                    std::pow(lit / 128.0f, 2.2f) * ls.area * g_lamp_bounce;
+                sample.position[c] = ls.position[c];
+                sample.normal[c] = ls.normal[c];
+            }
+            sample.area = ls.area;
+            sample.weight = BounceLuminance(sample.flux);
+            if (sample.weight > 0.0f && std::isfinite(sample.weight))
+            {
+                out.push_back(sample);
+            }
+        }
+    }
+}
+
+/* Where each pool's running lights live in g_bounce_slots: the beam's first
+ * bounce, the lamps' first bounce, then each further bounce. */
+BounceSlot *BounceSlotsOf(int bounce, bool lamps)
+{
+    if (bounce == 0)
+    {
+        return lamps ? g_bounce_slots + kBouncePools : g_bounce_slots;
+    }
+    return g_bounce_slots + kBouncePools + kLampPools +
+           (bounce - 1) * kBouncePools;
+}
+
 /* EndFrame, game thread, after both hierarchies are current for this frame
  * and before UploadRayTracingScene() publishes them. */
 void UpdateBounceLights()
@@ -15266,13 +15665,11 @@ void UpdateBounceLights()
     const FlashlightSource &src = g_flashlight_source;
     const int bounces = std::min(std::max(g_bounce_count, 1), kBounceMaxCount);
 
-    /* Each bounce's landings, alternately: the one being traced from and the
-     * one being traced to. */
-    static BounceSample samples[2][kBounceRays];
-    int current = 0;
-    int count = 0;
     int rays = 0;
     int hits = 0;
+    int lamp_rays = 0;
+    int lamp_hits = 0;
+    int lamp_count = 0;
 
     float axis[3] = {src.direction[0], src.direction[1], src.direction[2]};
     const float axis_len =
@@ -15280,37 +15677,79 @@ void UpdateBounceLights()
     const bool active = g_bounce_strength > 0.0f && src.valid &&
                         src.frame == g_frame_index && src.params[2] > 0.0f &&
                         axis_len > 1e-6f;
+    const bool lamps_active = g_bounce_strength > 0.0f && g_lamp_bounce > 0.0f;
     const bool two_sided = (g_rt_flags & MIOPAN_RT_TWO_SIDED) != 0;
     const float albedo = kBounceAlbedo * g_bounce_strength;
     const float reflect = std::min(albedo, kBounceMaxReflect);
 
-    for (int bounce = 0; bounce < kBounceMaxCount; bounce++)
+    /* The first bounce, the flashlight's: its beam's own pattern. */
+    static BounceSample beam[kBounceRays];
+    int beam_count = 0;
     {
         BouncePool pools[kBouncePools];
-        BounceSlot *slots = g_bounce_slots + bounce * kBouncePools;
-        if (!active || bounce >= bounces)
-        {
-            count = 0;
-        }
-        else if (bounce == 0)
+        if (active)
         {
             for (float &a : axis)
             {
                 a /= axis_len;
             }
-            count = TraceBeamBounce(src, axis, two_sided, pools,
-                                    samples[current], &rays, &hits);
-        }
-        else if (count > 0)
-        {
-            count = TraceBounceGeneration(samples[current], count, reflect,
-                                          bounce, two_sided,
-                                          samples[current ^ 1], &rays, &hits);
-            current ^= 1;
-            ClusterBounceSamples(samples[current], count, slots, pools);
+            beam_count = TraceBeamBounce(src, axis, two_sided, pools, beam,
+                                         &rays, &hits);
         }
         /* A bounce with nothing this frame -- or no longer wanted -- fades. */
-        SettleBounceSlots(pools, slots, albedo);
+        SettleBounceSlots(pools, BounceSlotsOf(0, false), kBouncePools, albedo);
+    }
+
+    /* The first bounce, every lamp's. */
+    static std::vector<BounceSample> lamp_samples;
+    lamp_samples.clear();
+    {
+        BouncePool pools[kLampPools];
+        BounceSlot *slots = BounceSlotsOf(0, true);
+        if (lamps_active)
+        {
+            UpdateLampSamples(lamp_samples, &lamp_rays, &lamp_hits,
+                              &lamp_count);
+            ClusterBounceSamples(lamp_samples.data(), (int)lamp_samples.size(),
+                                 slots, pools, kLampPools);
+        }
+        SettleBounceSlots(pools, slots, kLampPools, albedo);
+    }
+
+    /* Further bounces leave from both. */
+    static std::vector<BounceSample> parents;
+    parents.assign(beam, beam + beam_count);
+    parents.insert(parents.end(), lamp_samples.begin(), lamp_samples.end());
+    /* Each further bounce's landings, alternately written. */
+    static BounceSample landed[2][kBounceRays];
+    const BounceSample *from = parents.data();
+    int count = (int)parents.size();
+    int write = 0;
+    for (int bounce = 1; bounce < kBounceMaxCount; bounce++)
+    {
+        BouncePool pools[kBouncePools];
+        BounceSlot *slots = BounceSlotsOf(bounce, false);
+        if (bounce < bounces && count > 0)
+        {
+            count = TraceBounceGeneration(from, count, reflect, bounce,
+                                          two_sided, landed[write], &rays,
+                                          &hits);
+            from = landed[write];
+            write ^= 1;
+            ClusterBounceSamples(from, count, slots, pools, kBouncePools);
+        }
+        else
+        {
+            count = 0;
+        }
+        SettleBounceSlots(pools, slots, kBouncePools, albedo);
+    }
+
+    /* The lamps noted this frame are spent; the next frame notes afresh. */
+    g_light_sources.clear();
+    if (++g_light_source_epoch == 0)
+    {
+        g_light_source_epoch = 1;
     }
 
     BounceUniforms out{};
@@ -15333,9 +15772,11 @@ void UpdateBounceLights()
     out.info[0] = (float)live;
     g_bounce_pending = out;
 
-    g_rt_stats.bounce_rays = rays;
-    g_rt_stats.bounce_hits = hits;
+    g_rt_stats.bounce_rays = rays + lamp_rays;
+    g_rt_stats.bounce_hits = hits + lamp_hits;
     g_rt_stats.bounce_lights = live;
+    g_rt_stats.lamp_sources = lamp_count;
+    g_rt_stats.lamp_rays = lamp_rays;
     g_rt_stats.bounce_ms =
         (float)((double)(SDL_GetPerformanceCounter() - start) * 1000.0 /
                 (double)SDL_GetPerformanceFrequency());
@@ -17347,6 +17788,90 @@ void MioPan_RendererSetFlashlightBounceCount(int count)
 int MioPan_RendererGetFlashlightBounceCount(void)
 {
     return g_bounce_count;
+}
+
+void MioPan_RendererSetLampBounce(float strength)
+{
+    g_lamp_bounce = std::isfinite(strength)
+                        ? std::min(std::max(strength, 0.0f), 4.0f)
+                        : 0.0f;
+}
+
+float MioPan_RendererGetLampBounce(void)
+{
+    return g_lamp_bounce;
+}
+
+unsigned int MioPan_RendererLightSourceEpoch(void)
+{
+    const bool wanted = g_rt_enabled && !g_rt_shader_failed &&
+                        g_lamp_bounce > 0.0f && g_bounce_strength > 0.0f;
+    return wanted ? g_light_source_epoch : 0u;
+}
+
+void MioPan_RendererNoteLightSource(int type, const float *position,
+                                    const float *direction,
+                                    const float *colour, const float *params)
+{
+    if ((type != 1 && type != 2) || position == nullptr ||
+        direction == nullptr || colour == nullptr || params == nullptr)
+    {
+        return;
+    }
+    for (int a = 0; a < 3; a++)
+    {
+        if (!std::isfinite(position[a]) || !std::isfinite(direction[a]) ||
+            !std::isfinite(colour[a]))
+        {
+            return;
+        }
+    }
+    if (!(params[0] > 0.0f) || !std::isfinite(params[0]) ||
+        !(std::max(colour[0], std::max(colour[1], colour[2])) > 0.0f))
+    {
+        return;
+    }
+    for (LightSource &known : g_light_sources)
+    {
+        if (known.type != type)
+        {
+            continue;
+        }
+        float d2 = 0.0f;
+        float facing = 0.0f;
+        for (int a = 0; a < 3; a++)
+        {
+            const float d = known.position[a] - position[a];
+            d2 += d * d;
+            facing += known.direction[a] * direction[a];
+        }
+        if (d2 < 1.0f && (type == 2 || facing > 0.9999f))
+        {
+            /* The same lamp from another bank: keep the brighter reading. */
+            const float was = known.params[0] *
+                              std::max(known.colour[0],
+                                       std::max(known.colour[1], known.colour[2]));
+            const float now = params[0] *
+                              std::max(colour[0], std::max(colour[1], colour[2]));
+            if (now > was)
+            {
+                std::memcpy(known.colour, colour, sizeof(known.colour));
+                std::memcpy(known.params, params, sizeof(known.params));
+            }
+            return;
+        }
+    }
+    if (g_light_sources.size() >= kMaxLightSources)
+    {
+        return;
+    }
+    LightSource source;
+    source.type = type;
+    std::memcpy(source.position, position, sizeof(source.position));
+    std::memcpy(source.direction, direction, sizeof(source.direction));
+    std::memcpy(source.colour, colour, sizeof(source.colour));
+    std::memcpy(source.params, params, sizeof(source.params));
+    g_light_sources.push_back(source);
 }
 
 void MioPan_RendererSetFlashlightSource(const float *position,

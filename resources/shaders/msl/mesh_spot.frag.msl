@@ -94,9 +94,9 @@ struct type_MioPanFragmentLightBlock
 struct type_MioPanBounceBlock
 {
     float4 uBounceInfo;
-    float4 uBouncePos[32];
-    float4 uBounceNormal[32];
-    float4 uBounceColour[32];
+    float4 uBouncePos[48];
+    float4 uBounceNormal[48];
+    float4 uBounceColour[48];
 };
 
 struct main0_out
@@ -263,7 +263,7 @@ fragment main0_out main0(main0_in in [[stage_in]], constant type_MikuPanUniforms
         _435 = _373;
     }
     float3 _439 = precise::max(fast::clamp(_435, float3(0.0), MioPanFragmentLightBlock.uVu1.ambient.www), float3(0.0)) * 0.0078125;
-    int _443 = min(int(MioPanBounceBlock.uBounceInfo.x), 32);
+    int _443 = min(int(MioPanBounceBlock.uBounceInfo.x), 48);
     float3 _445;
     _445 = float3(0.0);
     for (int _448 = 0; _448 < _443; )

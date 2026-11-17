@@ -2886,6 +2886,95 @@ void gra3dPublishFlashlight(void)
 }
 
 /* --------------------------------------------------------------------------
+ *  gra3dNoteLightSources                                     [PORT ADDITION]
+ *
+ *  Hand every lamp in the bank -- the room's point and spot lights, its
+ *  candles and lanterns, and the point forms of Mio's light -- to the
+ *  renderer, for the bounce light of every source
+ *  (MioPan_RendererNoteLightSource).  Called as each per-pixel draw's lanes
+ *  are widened, because the bank is swapped per room, object and character
+ *  all through the frame: what lit a draw is what is installed while it is
+ *  built, not what is left at the end.
+ *
+ *  The same white-material derivation as gra3dPublishFlashlight() above.
+ *  Left out: the spot flashlight, which has a bounce path of its own, and the
+ *  self-reflection light, which only exists to light Mio herself.
+ *
+ *  A slot is handed over only when it differs from what was handed over for
+ *  it this epoch, so a bank that stays installed across many draws costs a
+ *  comparison per slot per draw.  `uiEpoch` is the renderer's
+ *  (MioPan_RendererLightSourceEpoch()); a new one starts afresh.
+ * ------------------------------------------------------------------------ */
+void gra3dNoteLightSources(unsigned int uiEpoch)
+{
+    static G3DLIGHT      s_aNoted[NUM_GRA3DLIGHTID];
+    static unsigned char s_abNoted[NUM_GRA3DLIGHTID];
+    static unsigned int  s_uiNotedEpoch = 0;
+    int                  i;
+
+    if (uiEpoch != s_uiNotedEpoch)
+    {
+        s_uiNotedEpoch = uiEpoch;
+        memset(s_abNoted, 0, sizeof(s_abNoted));
+    }
+
+    for (i = GRA3D_START_LIGHT_POINT; i < NUM_GRA3DLIGHTID; i = i + 1)
+    {
+        G3DLIGHT *pL;
+        float     vWork[4];
+        float     vColour[4];
+        float     vParams[4];
+        float     fDiv;
+        int       iType;
+
+        if (i == LID_POINT_SELFREFLECTION || i == LID_SPOT_FLASHLIGHT ||
+            gra3dIsLightEnable(i) == 0)
+        {
+            continue;
+        }
+
+        pL = &gra3dGetLightRef(i);
+        if (s_abNoted[i] != 0 &&
+            memcmp(pL, &s_aNoted[i], sizeof(G3DLIGHT)) == 0)
+        {
+            continue;
+        }
+        s_abNoted[i] = 1;
+        s_aNoted[i]  = *pL;
+
+        if (pL->Type == G3DLIGHT_SPOT)
+        {
+            iType      = 1;
+            vParams[1] = pL->afPad0[0];
+            vParams[2] = 1.0f / (1.0f - pL->afPad0[0]);
+        }
+        else if (pL->Type == G3DLIGHT_POINT)
+        {
+            iType      = 2;
+            vParams[1] = 0.0f;
+            vParams[2] = 0.0f;
+        }
+        else
+        {
+            continue;
+        }
+
+        /* A white, non-SGD material: diffuse 1 and the 255 scale. */
+        g3dxVu0CopyVector(vWork, pL->vDiffuse);
+        _MakeColorToMonotone(vWork);
+        sceVu0ScaleVector(vWork, vWork, 255.0f);
+        fDiv = SetMaxColor255(vColour, vWork);
+        vColour[3] = 0.0f;
+
+        vParams[0] = pL->fMaxRange * fDiv;
+        vParams[3] = 0.0f;
+
+        MioPan_RendererNoteLightSource(iType, pL->vPosition, pL->vDirection,
+                                       vColour, vParams);
+    }
+}
+
+/* --------------------------------------------------------------------------
  *  gra3dGetMaterialPrimType                                  [PORT ADDITION]
  *
  *  s_uiMaterialPrimType decides the 192/43 against 255/86 colour scales.  The

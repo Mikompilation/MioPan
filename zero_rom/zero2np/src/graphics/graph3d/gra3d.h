@@ -88,6 +88,9 @@ int   gra3dCalcVu1WideLanes(GRA3DVU1LANE *aLanes, int iMaxLanes,
 /* PORT ADDITION -- Mio's spot flashlight to the renderer's bounce light, once
  * a frame before MioPan_RendererEndFrame(). */
 void  gra3dPublishFlashlight(void);
+/* PORT ADDITION -- every lamp in the installed bank to the renderer's bounce
+ * light, as each per-pixel draw is built.  See the note on the definition. */
+void  gra3dNoteLightSources(unsigned int uiEpoch);
 unsigned int gra3dGetMaterialPrimType(void);
 
 void  gra3dCalcVu1VertexColor(float *vDest, const GRA3DVU1LIGHTSNAPSHOT *snap,

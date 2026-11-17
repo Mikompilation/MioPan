@@ -897,6 +897,22 @@ void DrawFlashlightMenu()
                           "round corners and onto walls that patch cannot see,\n"
                           "for a little more CPU time per frame.");
     }
+    float lamps = MioPan_RendererGetLampBounce();
+    ImGui::PushItemWidth(160.0f);
+    if (ImGui::SliderFloat("Lamp bounce", &lamps, 0.0f, 2.0f, "%.2f"))
+    {
+        MioPan_RendererSetLampBounce(lamps);
+    }
+    ImGui::PopItemWidth();
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Candles, lanterns and the room's own lights bounce\n"
+                          "off what they light too, with the bounce count above.\n"
+                          "1 is as strong as the flashlight's bounce; 0 is off.\n"
+                          "The rooms were lit by hand with that in mind, so 1\n"
+                          "brightens and flattens them -- try 0.5 for mood.\n"
+                          "Only lights the game places; baked-in light has none.");
+    }
     ImGui::PopItemWidth();
     if (MioPan_RendererGetRayTracing() == 0)
     {
@@ -1063,6 +1079,8 @@ void DrawRayTracingMenu()
     ImGui::TextDisabled("Bounce: %d lights, %d of %d rays hit (%.2f ms)",
                         stats.bounce_lights, stats.bounce_hits,
                         stats.bounce_rays, stats.bounce_ms);
+    ImGui::TextDisabled("Lamps: %d bouncing, %d rays retraced",
+                        stats.lamp_sources, stats.lamp_rays);
     ImGui::TextDisabled("Cut-outs: %d alpha-tested tris, %d masks (%d KB)",
                         stats.alpha_tris, stats.alpha_masks,
                         stats.alpha_mask_kb);

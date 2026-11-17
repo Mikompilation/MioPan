@@ -645,6 +645,10 @@ typedef struct MioPanRayTracingStats
     int bounce_hits;
     int bounce_lights;
     float bounce_ms;
+    /* Lamps bouncing this frame (MioPan_RendererSetLampBounce()), and the
+     * rays retraced for them -- included in bounce_rays too. */
+    int lamp_sources;
+    int lamp_rays;
     /* Cut-outs: triangles the rays alpha-test, in both hierarchies, and the
      * texture bitmasks they are tested against. */
     int alpha_tris;
@@ -721,6 +725,37 @@ float MioPan_RendererGetFlashlightBounce(void);
  * per-pixel lit surface.  Live. */
 void MioPan_RendererSetFlashlightBounceCount(int count);
 int  MioPan_RendererGetFlashlightBounceCount(void);
+/* Every lamp's bounce -- a port addition, riding on the flashlight's (its
+ * strength and count apply).
+ *
+ * The flashlight is not the only light in a room: candles, lanterns, the
+ * room's own point and spot lights.  With this on, each of them bounces too,
+ * off whatever it lights.  Their rays are traced a couple of lamps a frame
+ * and kept, since lamps mostly stay put, while their colour is applied
+ * afresh every frame, so a candle's flicker carries into its bounce.  Where
+ * they land becomes up to 16 more lights, and further bounces carry them on
+ * with the flashlight's.  Only lights the engine places -- a lamp that only
+ * exists in a room's baked lighting has nothing to bounce from.
+ *
+ * `strength` scales the lamps' share on top of the flashlight's strength: 1
+ * bounces them exactly as much as the flashlight, 0 is off.  The rooms were
+ * lit by hand with fill lights standing in for bounce, so at 1 a lamp-lit
+ * room comes out brighter and flatter than the PS2's.  Needs ray tracing.
+ * Live. */
+void  MioPan_RendererSetLampBounce(float strength);
+float MioPan_RendererGetLampBounce(void);
+/* One lamp that lit a per-pixel draw this frame, from gra3dNoteLightSources():
+ * type 1 spot / 2 point, world position, beam direction (spot), diffuse
+ * colour as a plain white material receives it (normalised to 255) and
+ * (bTimes, cos^2 of the half-angle, 1/sin^2, 0).  The same lamp may be handed
+ * over many times a frame; it is kept once. */
+void MioPan_RendererNoteLightSource(int type, const float *position,
+                                    const float *direction,
+                                    const float *colour, const float *params);
+/* Nonzero while lamps are wanted -- ray tracing on, both bounce strengths
+ * above 0 -- and different every frame: gra3dNoteLightSources()'s
+ * cue to hand every lamp over again. */
+unsigned int MioPan_RendererLightSourceEpoch(void);
 /* This frame's spot flashlight, from gra3dPublishFlashlight() just before
  * EndFrame -- its lane as a plain white material would receive it: world
  * position, beam direction, diffuse colour normalised to 255, and

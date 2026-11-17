@@ -26,11 +26,13 @@ cbuffer MioPanFragmentLightBlock : register(b1, MIKUPAN_UNIFORM_SPACE)
     MioPanVu1LightImage uVu1;
 };
 
-// Mio's flashlight bounce (port addition; MioPan_RendererSetFlashlightBounce).
-// Where the beam lands, gathered on the CPU into a few small area lights --
-// eight per bounce, up to four bounces.  Pushed once per pass, not per draw.
-// Mirrors BounceUniforms in miopan_renderer.cpp.
-#define MIOPAN_BOUNCE_LIGHTS 32
+// The bounce light (port addition; MioPan_RendererSetFlashlightBounce and
+// MioPan_RendererSetLampBounce).  Where the flashlight and every lamp land,
+// gathered on the CPU into small area lights -- eight for the beam, sixteen
+// for the lamps, eight more per further bounce, up to four bounces.  Pushed
+// once per pass, not per draw.  Mirrors BounceUniforms in
+// miopan_renderer.cpp.
+#define MIOPAN_BOUNCE_LIGHTS 48
 cbuffer MioPanBounceBlock : register(b3, MIKUPAN_UNIFORM_SPACE)
 {
     float4 uBounceInfo;                          // x = live lights

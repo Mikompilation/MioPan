@@ -932,6 +932,16 @@ int BuildFragmentLightState(MioPanLightState *state,
         }
     }
 
+    /* Every lamp this draw is lit by, for the bounce light of every source
+     * (MioPan_RendererNoteLightSource()); nothing unless it is wanted. */
+    {
+        const unsigned int epoch = MioPan_RendererLightSourceEpoch();
+        if (epoch != 0)
+        {
+            gra3dNoteLightSources(epoch);
+        }
+    }
+
     return terms;
 }
 
