@@ -10859,10 +10859,6 @@ struct LightSource
     float direction[3] = {};
     float colour[3] = {};
     float params[4] = {};
-    /* What the prelight bake reads of it: raw diffuse, max range,
-     * 1 / (max - min range), cos outside, 1 / (cos inside - cos outside), and
-     * 1 for one of Mio's own lights, which no room was baked with. */
-    float bake[8] = {};
 };
 std::vector<LightSource> g_light_sources;
 constexpr size_t kMaxLightSources = 64;
@@ -11400,21 +11396,23 @@ struct RtMaskLight
     uint32_t generation = 0;
 };
 
-/* Baked shadows (port addition).  The rooms' meshes get their lamps' light --
- * every point and spot light the room has, all but Mio's own -- from the
- * prelight bake, done on the CPU when a room loads: their light blocks carry
- * no point lanes at all, and no spot but her flashlight.  So no live lane's
- * shadow ever reaches them.  The mask pass estimates, per pixel, the fraction of the
- * bake's lamp light that still gets there: each frame it picks one of the
- * lamps below at random, weighted by what the bake gave the pixel from it,
- * traces one ray, and averages the answers over frames.  The forward shader
- * takes the blocked share out of the bake (MioPanRtShadowBake()).
+/* Baked shadows (port addition).  The rooms' meshes get their lights --
+ * every point, spot and directional light the room has, all but Mio's own --
+ * from the prelight bake, not live: their light blocks carry no point lanes at
+ * all, and no spot but her flashlight.  So no live lane's shadow ever reaches
+ * them.  The mask pass estimates, per pixel, the fraction of the bake's light
+ * that still gets there: each frame it picks one of the lights below at
+ * random, weighted by what the bake gave the pixel from it, traces one ray,
+ * and averages the answers over frames.  The forward shader takes the blocked
+ * share out of the bake (MioPanRtShadowBake()).
  *
- * One lamp as the bake read it (_ApplyLightPoint()/_ApplyLightSpot() in
- * g3dCore.c): position and max range, raw diffuse and 1 / (max - min range),
- * the beam's direction and cos of its outside angle, 1 / (cos inside - cos
- * outside) and 1 point / 2 spot.  Mirrors four rows of rt_shadow_mask.comp's
- * uBakeLamp. */
+ * One light as the bake read it (_ApplyLightDirectional()/_ApplyLightPoint()/
+ * _ApplyLightSpot() in g3dCore.c): position and max range, raw diffuse and
+ * 1 / (max - min range), the direction its light travels and cos of the
+ * outside angle, 1 / (cos inside - cos outside), 1 point / 2 spot /
+ * 3 directional, and 1 when its ray goes on past the lamp as far as a ray
+ * goes, as a character's directional lane does.  Mirrors four rows of
+ * rt_shadow_mask.comp's uBakeLamp. */
 constexpr int kRtBakeLamps = 16;
 struct RtBakeLamp
 {
@@ -11431,9 +11429,32 @@ int g_rt_bake_count = 0;
 bool g_rt_bake_live = false;
 bool g_rt_bake_history = false;
 
-/* This frame's baked lamps, the kRtBakeLamps that give Mio most light by the
- * bake's own law -- the floor round her is where a shadow is looked for.  Mio's
- * own lights are never baked. */
+/* The lights the loaded rooms were baked with, as MioPan_RendererNoteBakedLight()
+ * hands them over each frame; RtSelectBakeLamps() spends them. */
+struct BakedLight
+{
+    int type = 0; /* 1 spot, 2 point, 3 directional */
+    float position[3] = {};
+    float direction[3] = {};
+    /* Raw diffuse, max range, 1 / (max - min range), cos outside,
+     * 1 / (cos inside - cos outside), 1 for a light characters get as a
+     * directional. */
+    float bake[8] = {};
+};
+std::vector<BakedLight> g_baked_lights;
+constexpr size_t kMaxBakedLights = 128;
+
+/* This frame's baked lights, the kRtBakeLamps that give Mio most light by the
+ * bake's own law -- the floor round her is where a shadow is looked for.  A
+ * type whose shadows are switched off is left out, as its live lanes are.
+ *
+ * With directional shadows on, a lamp characters get as a directional is
+ * shadowed as one on the ground too, whatever its own type's switch says: its
+ * ray carries on past the lamp, exactly as their lane's does.  That is what
+ * lets the forest canopy dapple the moonlight on the ground -- its "moon" is
+ * points hung under the leaves, which a ray stopping at the lamp never
+ * reaches -- and it is also why indoors whatever a ray meets past the lamp
+ * then shadows the floor, as it already shadows Mio. */
 void RtSelectBakeLamps()
 {
     struct Pick
@@ -11444,36 +11465,50 @@ void RtSelectBakeLamps()
     static std::vector<Pick> picks;
     picks.clear();
     const float *sphere = g_rt_player_sphere_pending;
-    for (const LightSource &source : g_light_sources)
+    for (const BakedLight &light : g_baked_lights)
     {
-        const float *b = source.bake;
+        const float *b = light.bake;
         const float peak = std::max(b[0], std::max(b[1], b[2]));
-        const bool spot = source.type == 1;
-        if (b[7] > 0.5f || !(b[3] > 0.0f) || !(b[4] > 0.0f) ||
-            !(peak > 0.0f))
+        const bool spot = light.type == 1;
+        const bool directional = light.type == 3;
+        const unsigned int flag = spot          ? MIOPAN_RT_SPOT
+                                  : directional ? MIOPAN_RT_DIRECTIONAL
+                                                : MIOPAN_RT_POINT;
+        const bool distant = !directional && b[7] > 0.5f &&
+                             (g_rt_flags & MIOPAN_RT_DIRECTIONAL) != 0;
+        if ((!distant && (g_rt_flags & flag) == 0) || !(peak > 0.0f) ||
+            (!directional && (!(b[3] > 0.0f) || !(b[4] > 0.0f))))
         {
             continue;
         }
-        float dir[3] = {source.direction[0], source.direction[1],
-                        source.direction[2]};
+        float dir[3] = {light.direction[0], light.direction[1],
+                        light.direction[2]};
         const float dir_len =
             std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
-        if (spot && !(dir_len > 1e-6f))
+        if ((spot || directional) && !(dir_len > 1e-6f))
         {
             continue;
         }
         Pick pick{};
         for (int a = 0; a < 3; a++)
         {
-            pick.lamp.pos[a] = source.position[a];
+            pick.lamp.pos[a] = directional ? 0.0f : light.position[a];
             pick.lamp.colour[a] = b[a];
-            pick.lamp.dir[a] = spot ? dir[a] / dir_len : 0.0f;
+            pick.lamp.dir[a] = spot || directional ? dir[a] / dir_len : 0.0f;
         }
-        pick.lamp.pos[3] = b[3];
-        pick.lamp.colour[3] = b[4];
+        pick.lamp.pos[3] = directional ? 0.0f : b[3];
+        pick.lamp.colour[3] = directional ? 0.0f : b[4];
         pick.lamp.dir[3] = spot ? b[5] : 0.0f;
         pick.lamp.cone[0] = spot ? b[6] : 0.0f;
-        pick.lamp.cone[1] = spot ? 2.0f : 1.0f;
+        pick.lamp.cone[1] = (float)(spot ? 2 : directional ? 3 : 1);
+        pick.lamp.cone[2] = distant ? 1.0f : 0.0f;
+        if (directional)
+        {
+            /* Everywhere at once: no range, no cone. */
+            pick.score = peak;
+            picks.push_back(pick);
+            continue;
+        }
         float d = 0.0f;
         float cone = 1.0f;
         if (sphere[3] > 0.0f)
@@ -11481,7 +11516,7 @@ void RtSelectBakeLamps()
             float to_mio[3];
             for (int a = 0; a < 3; a++)
             {
-                to_mio[a] = sphere[a] - source.position[a];
+                to_mio[a] = sphere[a] - light.position[a];
                 d += to_mio[a] * to_mio[a];
             }
             d = std::sqrt(d);
@@ -11499,6 +11534,8 @@ void RtSelectBakeLamps()
         pick.score = peak * (ramp * cone + 0.05f * b[3] / std::max(d, 1.0f));
         picks.push_back(pick);
     }
+    /* Spent: the next frame's arrive with it. */
+    g_baked_lights.clear();
     std::sort(picks.begin(), picks.end(), [](const Pick &l, const Pick &r) {
         return l.score > r.score;
     });
@@ -12180,7 +12217,8 @@ void RecordShadowMaskPass(SDL_GPUCommandBuffer *cmd, Uint32 width,
         u.ao[2] = (float)kRtAoRaysWithoutHistory;
         u.ao[3] = g_rt_ao_history ? kRtAoFrames : 0.0f;
     }
-    const bool bake_on = g_rt_bake_count > 0 && (g_rt_flags & MIOPAN_RT_POINT) != 0;
+    /* RtSelectBakeLamps() has already left out a type whose shadows are off. */
+    const bool bake_on = g_rt_bake_count > 0;
     if (bake_on)
     {
         u.bake_info[0] = (float)g_rt_bake_count;
@@ -14975,6 +15013,7 @@ void RtResetScene()
     }
     g_light_sources.clear();
     g_lamps.clear();
+    g_baked_lights.clear();
     g_rt_bake_pending_count = 0;
     g_rt_bake_count = 0;
     g_rt_bake_live = false;
@@ -18335,12 +18374,10 @@ unsigned int MioPan_RendererLightSourceEpoch(void)
 
 void MioPan_RendererNoteLightSource(int type, const float *position,
                                     const float *direction,
-                                    const float *colour, const float *params,
-                                    const float *bake)
+                                    const float *colour, const float *params)
 {
     if ((type != 1 && type != 2) || position == nullptr ||
-        direction == nullptr || colour == nullptr || params == nullptr ||
-        bake == nullptr)
+        direction == nullptr || colour == nullptr || params == nullptr)
     {
         return;
     }
@@ -18383,7 +18420,6 @@ void MioPan_RendererNoteLightSource(int type, const float *position,
             {
                 std::memcpy(known.colour, colour, sizeof(known.colour));
                 std::memcpy(known.params, params, sizeof(known.params));
-                std::memcpy(known.bake, bake, sizeof(known.bake));
             }
             return;
         }
@@ -18398,16 +18434,64 @@ void MioPan_RendererNoteLightSource(int type, const float *position,
     std::memcpy(source.direction, direction, sizeof(source.direction));
     std::memcpy(source.colour, colour, sizeof(source.colour));
     std::memcpy(source.params, params, sizeof(source.params));
-    std::memcpy(source.bake, bake, sizeof(source.bake));
-    for (float value : source.bake)
+    g_light_sources.push_back(source);
+}
+
+void MioPan_RendererNoteBakedLight(int type, const float *position,
+                                   const float *direction, const float *bake)
+{
+    if (type < 1 || type > 3 || position == nullptr || direction == nullptr ||
+        bake == nullptr)
     {
-        if (!std::isfinite(value))
+        return;
+    }
+    for (int a = 0; a < 3; a++)
+    {
+        if ((type != 3 && !std::isfinite(position[a])) ||
+            !std::isfinite(direction[a]))
         {
-            std::fill(std::begin(source.bake), std::end(source.bake), 0.0f);
-            break;
+            return;
         }
     }
-    g_light_sources.push_back(source);
+    for (int k = 0; k < 8; k++)
+    {
+        if (!std::isfinite(bake[k]))
+        {
+            return;
+        }
+    }
+    /* A frame that draws nothing never spends the list, so the next one hands
+     * the same lights over again: keep each once, with its latest reading. */
+    for (BakedLight &known : g_baked_lights)
+    {
+        float d2 = 0.0f;
+        float facing = 0.0f;
+        for (int a = 0; a < 3; a++)
+        {
+            const float d = type == 3 ? 0.0f : known.position[a] - position[a];
+            d2 += d * d;
+            facing += known.direction[a] * direction[a];
+        }
+        const float dir2 = direction[0] * direction[0] +
+                           direction[1] * direction[1] +
+                           direction[2] * direction[2];
+        if (known.type == type && d2 < 1.0f &&
+            (type == 2 || facing > 0.9999f * dir2))
+        {
+            std::memcpy(known.bake, bake, sizeof(known.bake));
+            return;
+        }
+    }
+    if (g_baked_lights.size() >= kMaxBakedLights)
+    {
+        return;
+    }
+    BakedLight light;
+    light.type = type;
+    std::memcpy(light.position, position, sizeof(light.position));
+    std::memcpy(light.direction, direction, sizeof(light.direction));
+    std::memcpy(light.bake, bake, sizeof(light.bake));
+    g_baked_lights.push_back(light);
 }
 
 void MioPan_RendererSetFlashlightSource(const float *position,

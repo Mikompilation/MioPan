@@ -2918,13 +2918,12 @@ void gra3dPublishFlashlight(void)
  *  all through the frame: what lit a draw is what is installed while it is
  *  built, not what is left at the end.
  *
- *  The same white-material derivation as gra3dPublishFlashlight() above,
- *  and beside it what the room's prelight bake read of the light -- its raw
- *  colour, range and cone angles -- so a lamp that lights the room only
- *  through the bake can still shadow it (rt_shadow_mask.comp's baked
- *  estimate, and MioPanRtShadowBake() in miopan_vu1_lighting.hlsli).
+ *  The same white-material derivation as gra3dPublishFlashlight() above.
  *  Left out: the spot flashlight, which has a bounce path of its own, and
- *  the self-reflection light, which only exists to light Mio herself.
+ *  the self-reflection light, which only exists to light Mio herself.  The
+ *  baked shadows read their lamps from the rooms' own light records instead
+ *  (gra3dNoteBakedLights() below): a lamp the bank hands characters as a
+ *  directional never shows up here as itself.
  *
  *  A slot is handed over only when it differs from what was handed over for
  *  it this epoch, so a bank that stays installed across many draws costs a
@@ -2950,7 +2949,6 @@ void gra3dNoteLightSources(unsigned int uiEpoch)
         float     vWork[4];
         float     vColour[4];
         float     vParams[4];
-        float     vBake[8];
         float     fDiv;
         int       iType;
 
@@ -2996,10 +2994,77 @@ void gra3dNoteLightSources(unsigned int uiEpoch)
         vParams[0] = pL->fMaxRange * fDiv;
         vParams[3] = 0.0f;
 
-        /* The prelight's reading (_ApplyLightPoint/_ApplyLightSpot in
-         * g3dCore.c): the raw diffuse, the linear range ramp and the cone's
-         * inside/outside cosines.  Both of the ROM's divides are unguarded;
-         * these are not. */
+        MioPan_RendererNoteLightSource(iType, pL->vPosition, pL->vDirection,
+                                       vColour, vParams);
+    }
+}
+
+/* --------------------------------------------------------------------------
+ *  gra3dNoteBakedLights                                      [PORT ADDITION]
+ *
+ *  Hand the renderer every light in a room's light record, as the room's
+ *  prelight bake read it (_ApplyLightDirectional/_ApplyLightPoint/
+ *  _ApplyLightSpot in g3dCore.c): the raw diffuse, the linear range ramp and
+ *  the cone's inside/outside cosines.  The rooms' meshes get these lights
+ *  only through the bake, so this is what lets a light shadow them
+ *  (rt_shadow_mask.comp's baked estimate, MioPanRtShadowBake() in
+ *  miopan_vu1_lighting.hlsli).  Called once a frame for each loaded room by
+ *  MapDrawNoteBakedLights().
+ *
+ *  Read from the record rather than from the bank, because the bank never
+ *  holds some of these lights as themselves.  A light flagged to reach
+ *  characters as a directional (bEmulateToDirectionalLight) is folded into
+ *  the bank's directional slots for them -- the Chapter 1 forest's moonlight
+ *  is nine such points and a spot -- so nothing per-pixel ever draws under
+ *  it.
+ *
+ *  That flag rides along too, since the renderer can trace such a light the
+ *  way characters and objects receive it -- as a distant light, on past the
+ *  lamp -- so the canopy over the forest's moonlight shadows the ground as it
+ *  shadows Mio (MioPan_RendererNoteBakedLight()).
+ *
+ *  Mio's own lights are left out: they move with her, and no room was baked
+ *  with them.  Both of the ROM's divides are unguarded; these are not.
+ * ------------------------------------------------------------------------ */
+void gra3dNoteBakedLights(GRA3DLIGHTDATA *pLightData)
+{
+    int i;
+
+    if (pLightData == NULL || MioPan_RendererLightSourceEpoch() == 0)
+    {
+        return;
+    }
+
+    for (i = 0; i < NUM_GRA3DLIGHTID; i = i + 1)
+    {
+        G3DLIGHT *pL = &pLightData->aLight[i];
+        float     vBake[8];
+        int       iType;
+
+        if (pLightData->aStatus[i].bEnable == 0 ||
+            i == LID_POINT_FLASHLIGHT_0 || i == LID_POINT_FLASHLIGHT_1 ||
+            i == LID_POINT_SELFREFLECTION || i == LID_SPOT_FLASHLIGHT)
+        {
+            continue;
+        }
+
+        if (pL->Type == G3DLIGHT_SPOT)
+        {
+            iType = 1;
+        }
+        else if (pL->Type == G3DLIGHT_POINT)
+        {
+            iType = 2;
+        }
+        else if (pL->Type == G3DLIGHT_DIRECTIONAL)
+        {
+            iType = 3;
+        }
+        else
+        {
+            continue;
+        }
+
         vBake[0] = pL->vDiffuse[0];
         vBake[1] = pL->vDiffuse[1];
         vBake[2] = pL->vDiffuse[2];
@@ -3009,8 +3074,7 @@ void gra3dNoteLightSources(unsigned int uiEpoch)
                        : 0.0f;
         vBake[5] = 0.0f;
         vBake[6] = 0.0f;
-        /* Mio's point lights move with her; no room was baked with them. */
-        vBake[7] = (i == LID_POINT_FLASHLIGHT_0 || i == LID_POINT_FLASHLIGHT_1)
+        vBake[7] = pLightData->aStatus[i].bEmulateToDirectionalLight != 0
                        ? 1.0f
                        : 0.0f;
         if (iType == 1)
@@ -3024,8 +3088,8 @@ void gra3dNoteLightSources(unsigned int uiEpoch)
                            : 1.0e6f;
         }
 
-        MioPan_RendererNoteLightSource(iType, pL->vPosition, pL->vDirection,
-                                       vColour, vParams, vBake);
+        MioPan_RendererNoteBakedLight(iType, pL->vPosition, pL->vDirection,
+                                      vBake);
     }
 }
 

@@ -54,6 +54,7 @@
 #include "../../graphics/graph3d/gra3d.h" // gra3dPublishFlashlight
 #include "../pad/pad.h"             // InitPad / PadAnalog*
 #include "../../debug/zero2_debug.h" // DebugInit
+#include "../../ingame/map/MapDraw.h" // MapDrawNoteBakedLights
 #include "../../ingame/map/MapSave.h" // MapSavePushFirstDat
 #include "../../outgame/mission_sel.h" // MissionSelTblInit
 
@@ -9859,8 +9860,10 @@ void SendDMAMain(void)
     DrawPerformanceCounter2(draw_perf_count);
     vfunc();
     dmaVif1Kick();
-    /* PORT: the flashlight this frame was lit with, for the bounce light. */
+    /* PORT: the flashlight this frame was lit with, for the bounce light, and
+     * the lights the loaded rooms were baked with, for the shadows. */
     gra3dPublishFlashlight();
+    MapDrawNoteBakedLights();
     MioPan_RendererEndFrame();
     InitGraph2dEFrame();
 }

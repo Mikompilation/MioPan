@@ -800,19 +800,29 @@ void  MioPan_RendererSetLampBounce(float strength);
 float MioPan_RendererGetLampBounce(void);
 /* One lamp that lit a per-pixel draw this frame, from gra3dNoteLightSources():
  * type 1 spot / 2 point, world position, beam direction (spot), diffuse
- * colour as a plain white material receives it (normalised to 255),
- * (bTimes, cos^2 of the half-angle, 1/sin^2, 0), and what the room's prelight
- * bake reads of it: raw diffuse, max range, 1 / (max - min range), cos of
- * the outside angle, 1 / (cos inside - cos outside).  The same lamp may be
- * handed over many times a frame; it is kept once.
- *
- * Besides the bounce, the lamps feed the baked shadows: the rooms' meshes get
- * their lamps' light from the prelight bake rather than live, so a lamp the
- * shadow mask holds also darkens the baked light where it is blocked. */
+ * colour as a plain white material receives it (normalised to 255) and
+ * (bTimes, cos^2 of the half-angle, 1/sin^2, 0).  The same lamp may be
+ * handed over many times a frame; it is kept once. */
 void MioPan_RendererNoteLightSource(int type, const float *position,
                                     const float *direction,
-                                    const float *colour, const float *params,
-                                    const float *bake);
+                                    const float *colour, const float *params);
+/* One light a loaded room was baked with, from gra3dNoteBakedLights(), once a
+ * frame: type 1 spot / 2 point / 3 directional, world position (not read for
+ * a directional), the direction its light travels (spot, directional), and
+ * what the prelight bake reads of it: raw diffuse, max range,
+ * 1 / (max - min range), cos of the outside angle,
+ * 1 / (cos inside - cos outside), and 1 when the room hands the light to
+ * characters and objects as a directional (bEmulateToDirectionalLight).
+ *
+ * These feed the baked shadows: the rooms' meshes get their lights from the
+ * prelight bake rather than live, so the shadow mask estimates how much of
+ * that each pixel got from these and darkens it where they are blocked.
+ * With MIOPAN_RT_DIRECTIONAL on, a light characters get as a directional is
+ * traced as one here too -- on past the lamp, as far as a ray goes -- so the
+ * ground is shadowed the way Mio is: under the forest canopy the leaves
+ * dapple it, and indoors whatever a ray meets past the lamp shadows it. */
+void MioPan_RendererNoteBakedLight(int type, const float *position,
+                                   const float *direction, const float *bake);
 /* Nonzero while ray tracing is on, and different every frame:
  * gra3dNoteLightSources()'s cue to hand every lamp over again. */
 unsigned int MioPan_RendererLightSourceEpoch(void);

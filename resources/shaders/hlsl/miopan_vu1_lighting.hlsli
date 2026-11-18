@@ -461,14 +461,14 @@ float3 MioPanVu1Point(MioPanVu1LightImage img, float3 P, float3 N)
 }
 
 #ifdef MIOPAN_VU1_SHADOW_RAYS
-// Baked shadows (port addition).  The rooms' meshes get their lamps' light --
-// every point and spot light but Mio's own -- from the prelight bake, done on
-// the CPU when a room loads, not from a live lane: their light blocks carry no
-// point lanes at all, and no spot but her flashlight.  So a lane's shadow
-// never reaches them.  The mask pass estimates, per pixel, how much
-// light the bake's lamps gave it (gMioPanRtBakeTotal, GS 0..255, by the bake's
-// own law for a white material) and the fraction of that still getting
-// through (gMioPanRtBakeVis); see rt_shadow_mask.comp.
+// Baked shadows (port addition).  The rooms' meshes get their lights -- every
+// point, spot and directional light but Mio's own -- from the prelight bake,
+// not from a live lane: their light blocks carry no point lanes at all, and no
+// spot but her flashlight.  So a lane's shadow never reaches them.  The mask
+// pass estimates, per pixel, how much light the bake's lights gave it
+// (gMioPanRtBakeTotal, GS 0..255, by the bake's own law for a white material)
+// and the fraction of that still getting through (gMioPanRtBakeVis); see
+// rt_shadow_mask.comp.
 //
 // Where the bake holds at least that much, the blocked share comes straight
 // off.  Where it holds less -- a darker material than the estimate's white,

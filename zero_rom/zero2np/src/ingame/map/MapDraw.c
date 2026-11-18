@@ -390,6 +390,28 @@ void MapDrawPreLight(MLOAD_HEAD *hp)
 }                                                                       /* 363 */
 
 /* --------------------------------------------------------------------------
+ *  MapDrawNoteBakedLights                                     [PORT ADDITION]
+ *
+ *  Every loaded room's light record, as its prelight bake read it, for the
+ *  ray-traced shadows (gra3dNoteBakedLights()).  Once a frame, from
+ *  SendDMAMain().  The record is the one gra3dPrelightScene() bakes a room
+ *  with -- the raw per-buffer light, room origin folded in.  A Mei room is
+ *  left out, as gra3dPrelightScene() leaves it out: its light is animated.
+ * ------------------------------------------------------------------------ */
+void MapDrawNoteBakedLights(void)
+{
+    for (int i = 0; i < MAP_DRAW_BUFF_NUM; i++)
+    {
+        MLOAD_HEAD *hp = MapLoadGetHeadPtr(i);
+
+        if (hp != nullptr && hp->labelID >= 0 && MapMeiCheck(hp) == 0)
+        {
+            gra3dNoteBakedLights(&MapDrawPS2CoordLight[i]);
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
  *  Teardown
  * ------------------------------------------------------------------------ */
 

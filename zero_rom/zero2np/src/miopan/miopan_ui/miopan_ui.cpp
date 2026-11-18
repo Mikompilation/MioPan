@@ -1074,8 +1074,11 @@ void DrawRayTracingMenu()
               "Room spots and Mio's flashlight.");
     flag_item("Point lights", MIOPAN_RT_POINT, "Lanterns, candles, lamps.");
     flag_item("Directional lights", MIOPAN_RT_DIRECTIONAL,
-              "The engine's three fill lights.  They were never meant to be "
-              "blocked, so indoors this mostly darkens the room.");
+              "Characters get the room's lamps as three distant fill lights.\n"
+              "With this on, those lamps are shadowed as distant lights on\n"
+              "the ground too, so outdoors the leaves dapple the moonlight.\n"
+              "Indoors a lamp's shadow ray then carries on past it, so rooms\n"
+              "come out somewhat darker.");
     flag_item("Two-sided occluders", MIOPAN_RT_TWO_SIDED,
               "Let every triangle block light from both sides.\n"
               "Off matches a shadow map: the rooms hide fill lights under "

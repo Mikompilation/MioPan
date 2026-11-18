@@ -30,6 +30,9 @@ int             MapDrawRegistModel(MLOAD_HEAD *hp);
 int             MapDrawInitRoom(MLOAD_HEAD *hp);
 void            MapDrawInitFurn(MLOAD_HEAD *hp);
 void            MapDrawPreLight(MLOAD_HEAD *hp);
+/* PORT ADDITION -- the loaded rooms' baked lights to the ray-traced shadows,
+ * once a frame. */
+void            MapDrawNoteBakedLights(void);
 
 /* ---- teardown ---------------------------------------------------------- */
 void            MapDrawDelRegDatAll(MLOAD_HEAD *hp);

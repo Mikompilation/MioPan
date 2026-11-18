@@ -91,6 +91,9 @@ void  gra3dPublishFlashlight(void);
 /* PORT ADDITION -- every lamp in the installed bank to the renderer's bounce
  * light, as each per-pixel draw is built.  See the note on the definition. */
 void  gra3dNoteLightSources(unsigned int uiEpoch);
+/* PORT ADDITION -- every light in a room's light record, as its prelight bake
+ * read it, to the renderer's baked shadows.  See the note on the definition. */
+void  gra3dNoteBakedLights(GRA3DLIGHTDATA *pLightData);
 unsigned int gra3dGetMaterialPrimType(void);
 
 void  gra3dCalcVu1VertexColor(float *vDest, const GRA3DVU1LIGHTSNAPSHOT *snap,

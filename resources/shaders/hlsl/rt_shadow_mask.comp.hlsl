@@ -29,14 +29,14 @@
 // which have shadows of their own.
 //
 // The same texture's z and w carry the baked shadows (port addition): the
-// rooms' meshes get their lamps' light -- every point and spot light but Mio's
-// own -- from the prelight bake, not a live lane, so no lane's shadow reaches
-// them.  w is how much light the bake
-// gave this pixel from the lamps in uBakeLamp, by the bake's own law for a
-// white material, in GS 0..255; z the fraction of it still getting through.
-// Each frame one lamp is picked at random, weighted by its share of w, and
-// one ray traced to it, so the running average of the answers is that
-// fraction whatever the number of lamps.  See MioPanRtShadowBake().
+// rooms' meshes get their lights -- every point, spot and directional light
+// but Mio's own -- from the prelight bake, not a live lane, so no lane's
+// shadow reaches them.  w is how much light the bake gave this pixel from the
+// lights in uBakeLamp, by the bake's own law for a white material, in GS
+// 0..255; z the fraction of it still getting through.  Each frame one light
+// is picked at random, weighted by its share of w, and one ray traced to it,
+// so the running average of the answers is that fraction whatever the number
+// of lights.  See MioPanRtShadowBake().
 
 #define MIOPAN_RT_COMPUTE 1
 
@@ -64,9 +64,12 @@ cbuffer MioPanRtMaskUniforms : register(b0, space2)
     // Baked shadows: x = lamps (0 = off), y = 1 when last frame's estimate
     // can be blended into, z = this frame's weight.
     float4 uBakeInfo;
-    // Each lamp as the prelight bake read it, four rows: (position, max range),
-    // (raw diffuse, 1 / (max - min range)), (beam direction, cos outside),
-    // (1 / (cos inside - cos outside), 1 point / 2 spot, 0, 0).
+    // Each light as the prelight bake read it, four rows: (position, max
+    // range), (raw diffuse, 1 / (max - min range)), (the direction its light
+    // travels, cos outside), (1 / (cos inside - cos outside), 1 point / 2 spot
+    // / 3 directional, 1 when the ray goes on past the lamp as far as a ray
+    // goes -- a character's directional lane, as the room hands them the lamp
+    // -- 0).  A directional reads only the diffuse and the direction.
     float4 uBakeLamp[64];
 };
 
@@ -80,18 +83,27 @@ RWTexture2D<float4> uAoOut   : register(u1, space1);
 
 #include "miopan_rt.hlsli"
 
-// What the prelight bake gave P from lamp `l` (g3dCore.c's prelight form,
-// white material): raw diffuse * N.L times the linear range ramp and, for a
-// spot, the cone ramp -- a point outside the cone dropped, as the bake drops
-// it -- capped at full on its own as the bake caps each light, in GS 0..255,
-// brightest channel.
+// From P towards light `l`: the light's position less P, or for a
+// directional, back along the way its light travels.
+float3 BakedLampToLight(int l, float3 P)
+{
+    float4 s = uBakeLamp[l * 4 + 2];
+    float4 k = uBakeLamp[l * 4 + 3];
+    return k.y > 2.5 ? -s.xyz : uBakeLamp[l * 4].xyz - P;
+}
+
+// What the prelight bake gave P from light `l` (g3dCore.c's prelight form,
+// white material): raw diffuse * N.L, times -- but for a directional -- the
+// linear range ramp and, for a spot, the cone ramp, a point outside the cone
+// dropped as the bake drops it; capped at full on its own as the bake caps
+// each light, in GS 0..255, brightest channel.
 float BakedLampLight(int l, float3 P, float3 N)
 {
     float4 a = uBakeLamp[l * 4];
     float4 b = uBakeLamp[l * 4 + 1];
     float4 s = uBakeLamp[l * 4 + 2];
     float4 k = uBakeLamp[l * 4 + 3];
-    float3 L = a.xyz - P;
+    float3 L = BakedLampToLight(l, P);
     float d = length(L);
     if (!(d > 0.0))
     {
@@ -99,13 +111,14 @@ float BakedLampLight(int l, float3 P, float3 N)
     }
     float3 Ln = L / d;
     float ndl = dot(N, Ln);
-    float ramp = saturate((a.w - d) * b.w);
+    bool directional = k.y > 2.5;
+    float ramp = directional ? 1.0 : saturate((a.w - d) * b.w);
     if (ndl <= 0.0 || ramp <= 0.0)
     {
         return 0.0;
     }
     float cone = 1.0;
-    if (k.y > 1.5)
+    if (k.y > 1.5 && !directional)
     {
         cone = (dot(s.xyz, -Ln) - s.w) * k.x;
         if (cone <= 0.0)
@@ -213,8 +226,12 @@ void main(uint3 id : SV_DispatchThreadID)
                         break;
                     }
                 }
-                seen += MioPanRtVisibilityN(P, N, uBakeLamp[chosen * 4].xyz - P,
-                                            false, 1, true, false);
+                // A directional, or a lamp traced as one, has no end to its
+                // ray: MioPanRtVisibilityN() then traces as far as rays go.
+                float4 kind = uBakeLamp[chosen * 4 + 3];
+                seen += MioPanRtVisibilityN(P, N, BakedLampToLight(chosen, P),
+                                            kind.y > 2.5 || kind.z > 0.5,
+                                            1, true, false);
             }
             float vis = seen / (float)picks;
             ao.z = bakeHistory ? lerp(bakeOld, vis, uBakeInfo.z) : vis;
