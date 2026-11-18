@@ -746,15 +746,21 @@ void  MioPan_RendererSetLampBounce(float strength);
 float MioPan_RendererGetLampBounce(void);
 /* One lamp that lit a per-pixel draw this frame, from gra3dNoteLightSources():
  * type 1 spot / 2 point, world position, beam direction (spot), diffuse
- * colour as a plain white material receives it (normalised to 255) and
- * (bTimes, cos^2 of the half-angle, 1/sin^2, 0).  The same lamp may be handed
- * over many times a frame; it is kept once. */
+ * colour as a plain white material receives it (normalised to 255),
+ * (bTimes, cos^2 of the half-angle, 1/sin^2, 0), and what the room's prelight
+ * bake reads of it: raw diffuse, max range, 1 / (max - min range), cos of
+ * the outside angle, 1 / (cos inside - cos outside).  The same lamp may be
+ * handed over many times a frame; it is kept once.
+ *
+ * Besides the bounce, the lamps feed the baked shadows: the rooms' meshes get
+ * their lamps' light from the prelight bake rather than live, so a lamp the
+ * shadow mask holds also darkens the baked light where it is blocked. */
 void MioPan_RendererNoteLightSource(int type, const float *position,
                                     const float *direction,
-                                    const float *colour, const float *params);
-/* Nonzero while lamps are wanted -- ray tracing on, both bounce strengths
- * above 0 -- and different every frame: gra3dNoteLightSources()'s
- * cue to hand every lamp over again. */
+                                    const float *colour, const float *params,
+                                    const float *bake);
+/* Nonzero while ray tracing is on, and different every frame:
+ * gra3dNoteLightSources()'s cue to hand every lamp over again. */
 unsigned int MioPan_RendererLightSourceEpoch(void);
 /* This frame's spot flashlight, from gra3dPublishFlashlight() just before
  * EndFrame -- its lane as a plain white material would receive it: world
@@ -1598,13 +1604,15 @@ struct MioPanLightState
     float spot_specular[MIOPAN_VU1_MAX_LANES][4];
     /* x = bTimes (fMaxRange * SetMaxColor255's divisor),
      * y = cos^2(cone half-angle), z = 1 / sin^2, w = 1 for Mio's flashlight
-     * (a port tag for MioPan_RendererSetFlashlightBeam(); 0 otherwise). */
+     * (a port tag for MioPan_RendererSetFlashlightBeam() and the ray-traced
+     * shadows; 0 otherwise). */
     float spot_params[MIOPAN_VU1_MAX_LANES][4];
 
     float point_position[MIOPAN_VU1_MAX_LANES][4];
     float point_diffuse[MIOPAN_VU1_MAX_LANES][4];
     float point_specular[MIOPAN_VU1_MAX_LANES][4];
-    /* x = bTimes, yzw unused. */
+    /* x = bTimes, yz unused, w = 1 for one of Mio's own lights (a port tag:
+     * her own body never shadows it). */
     float point_params[MIOPAN_VU1_MAX_LANES][4];
 };
 

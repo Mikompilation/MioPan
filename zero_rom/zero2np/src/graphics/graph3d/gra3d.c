@@ -2820,10 +2820,18 @@ int gra3dCalcVu1WideLanes(GRA3DVU1LANE *aLanes, int iMaxLanes,
         /* bTimes carries fDiv back, which is what cancels the colour's
          * normalisation inside the kernel -- see the note on Vu1Coefficient. */
         pLane->vParams[0] = pL->fMaxRange * fDiv;
-        /* PORT: tag Mio's flashlight -- always the dedicated spot slot -- so
-         * the per-pixel shader can give its beam a soft edge and spill
-         * (MioPan_RendererSetFlashlightBeam).  Nothing reads w otherwise. */
-        pLane->vParams[3] = iId == LID_SPOT_FLASHLIGHT ? 1.0f : 0.0f;
+        /* PORT: tag Mio's own lights -- the spot flashlight, the point forms
+         * of her light and her self-reflection light, each in a slot of its
+         * own.  The spot's tag gives the per-pixel beam its soft edge and
+         * spill (MioPan_RendererSetFlashlightBeam); either tag keeps her own
+         * body from shadowing the light (the ray-traced shadows), which a
+         * test by distance from her got wrong for a candle she stood by. */
+        pLane->vParams[3] = (iId == LID_SPOT_FLASHLIGHT ||
+                             iId == LID_POINT_FLASHLIGHT_0 ||
+                             iId == LID_POINT_FLASHLIGHT_1 ||
+                             iId == LID_POINT_SELFREFLECTION)
+                                ? 1.0f
+                                : 0.0f;
 
         /* DIRCOLDIF[0].w is the vertex alpha and comes from the directional
          * block, not from here; leave the w lanes of the colours alone. */
@@ -2896,9 +2904,13 @@ void gra3dPublishFlashlight(void)
  *  all through the frame: what lit a draw is what is installed while it is
  *  built, not what is left at the end.
  *
- *  The same white-material derivation as gra3dPublishFlashlight() above.
- *  Left out: the spot flashlight, which has a bounce path of its own, and the
- *  self-reflection light, which only exists to light Mio herself.
+ *  The same white-material derivation as gra3dPublishFlashlight() above,
+ *  and beside it what the room's prelight bake read of the light -- its raw
+ *  colour, range and cone angles -- so a lamp that lights the room only
+ *  through the bake can still shadow it (rt_shadow_mask.comp's baked
+ *  estimate, and MioPanRtShadowBake() in miopan_vu1_lighting.hlsli).
+ *  Left out: the spot flashlight, which has a bounce path of its own, and
+ *  the self-reflection light, which only exists to light Mio herself.
  *
  *  A slot is handed over only when it differs from what was handed over for
  *  it this epoch, so a bank that stays installed across many draws costs a
@@ -2924,6 +2936,7 @@ void gra3dNoteLightSources(unsigned int uiEpoch)
         float     vWork[4];
         float     vColour[4];
         float     vParams[4];
+        float     vBake[8];
         float     fDiv;
         int       iType;
 
@@ -2969,8 +2982,36 @@ void gra3dNoteLightSources(unsigned int uiEpoch)
         vParams[0] = pL->fMaxRange * fDiv;
         vParams[3] = 0.0f;
 
+        /* The prelight's reading (_ApplyLightPoint/_ApplyLightSpot in
+         * g3dCore.c): the raw diffuse, the linear range ramp and the cone's
+         * inside/outside cosines.  Both of the ROM's divides are unguarded;
+         * these are not. */
+        vBake[0] = pL->vDiffuse[0];
+        vBake[1] = pL->vDiffuse[1];
+        vBake[2] = pL->vDiffuse[2];
+        vBake[3] = pL->fMaxRange;
+        vBake[4] = pL->fMaxRange > pL->fMinRange
+                       ? 1.0f / (pL->fMaxRange - pL->fMinRange)
+                       : 0.0f;
+        vBake[5] = 0.0f;
+        vBake[6] = 0.0f;
+        /* Mio's point lights move with her; no room was baked with them. */
+        vBake[7] = (i == LID_POINT_FLASHLIGHT_0 || i == LID_POINT_FLASHLIGHT_1)
+                       ? 1.0f
+                       : 0.0f;
+        if (iType == 1)
+        {
+            float fCosOutside = cosf(pL->fAngleOutside);
+            float fCosInside  = cosf(pL->fAngleInside);
+
+            vBake[5] = fCosOutside;
+            vBake[6] = fCosInside > fCosOutside
+                           ? 1.0f / (fCosInside - fCosOutside)
+                           : 1.0e6f;
+        }
+
         MioPan_RendererNoteLightSource(iType, pL->vPosition, pL->vDirection,
-                                       vColour, vParams);
+                                       vColour, vParams, vBake);
     }
 }
 

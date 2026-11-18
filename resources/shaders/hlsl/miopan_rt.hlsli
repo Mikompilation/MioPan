@@ -110,6 +110,13 @@ static float4 gMioPanRtMask = float4(1.0, 1.0, 1.0, 1.0);
 // What this pixel's ambient light is scaled by, already shaped for the GS's
 // gamma-encoded units (see MioPanRtLoadMask()).  1 where there is no answer.
 static float gMioPanRtAo = 1.0;
+// The baked shadows' estimate (rt_shadow_mask.comp): the fraction of the baked
+// lamps' light still reaching this pixel, and how much light that is, in GS
+// 0..255.  See MioPanRtShadowBake().
+static float gMioPanRtBakeVis = 1.0;
+static float gMioPanRtBakeTotal = 0.0;
+// The estimate above is this pixel's: see MioPanRtLoadMask().
+static bool gMioPanRtBakeOk = false;
 
 float4 MioPanRtNode(uint which, uint index)
 {
@@ -333,13 +340,6 @@ bool MioPanRtOccluded(float3 origin, float3 dir, float tmax, bool skipPlayer)
     return MioPanRtOccludedSides(origin, dir, tmax, skipPlayer, false);
 }
 
-// A light inside the sphere around Mio is one she carries.
-bool MioPanRtLightIsPlayers(float3 lightPos)
-{
-    float3 d = lightPos - uRtPlayer.xyz;
-    return uRtPlayer.w > 0.0 && dot(d, d) < uRtPlayer.w * uRtPlayer.w;
-}
-
 float MioPanRtNoise(float2 pixel)
 {
     // Interleaved gradient noise (Jimenez 2014).
@@ -353,9 +353,10 @@ float MioPanRtNoise(float2 pixel)
 // With a light radius the rays aim at points on a disc facing P.  `temporal`
 // moves those points every frame (gMioPanRtFrame) instead of fixing them per
 // pixel, so a single ray still gives a soft edge once the mask has averaged a
-// few frames of it.
+// few frames of it.  `players` is a light of Mio's own (the lane's tag, or the
+// mask channel's), which her own triangles never shadow.
 float MioPanRtVisibilityN(float3 P, float3 N, float3 toLight, bool directional,
-                          int samples, bool temporal)
+                          int samples, bool temporal, bool players)
 {
     float bias = uRtParams.x;
     float lenL = length(toLight);
@@ -373,7 +374,7 @@ float MioPanRtVisibilityN(float3 P, float3 N, float3 toLight, bool directional,
     {
         return MioPanRtOccluded(origin, dirL, kMioPanRtFar, false) ? 0.0 : 1.0;
     }
-    bool skipPlayer = MioPanRtLightIsPlayers(P + toLight);
+    bool skipPlayer = players;
 
     // The light's position relative to the new origin.
     float3 target = toLight - n * bias;
@@ -417,9 +418,11 @@ float MioPanRtVisibilityN(float3 P, float3 N, float3 toLight, bool directional,
     return lit / (float)samples;
 }
 
-float MioPanRtVisibility(float3 P, float3 N, float3 toLight, bool directional)
+float MioPanRtVisibility(float3 P, float3 N, float3 toLight, bool directional,
+                        bool players)
 {
-    return MioPanRtVisibilityN(P, N, toLight, directional, uRtFlags.w, false);
+    return MioPanRtVisibilityN(P, N, toLight, directional, uRtFlags.w, false,
+                               players);
 }
 
 // Ambient occlusion: the fraction of `samples` rays over the hemisphere around
@@ -465,6 +468,9 @@ void MioPanRtLoadMask(float2 pixel, float3 P, float3 N)
 {
     gMioPanRtMaskOk = false;
     gMioPanRtAo = 1.0;
+    gMioPanRtBakeVis = 1.0;
+    gMioPanRtBakeTotal = 0.0;
+    gMioPanRtBakeOk = false;
     if (uRtMaskFlags.x == 0)
     {
         return;
@@ -472,6 +478,19 @@ void MioPanRtLoadMask(float2 pixel, float3 P, float3 N)
     int2 base = (int2)pixel;
     float4 g = uRtGPos.Load(int3(base, 0));
     float3 d = g.xyz - P;
+    // The baked shadows' estimate is broad and soft, so a surface lying within
+    // a few units of the one the G-buffer saw shares its answer: a decal a
+    // hair off the floor -- a stain, a rug -- which is blended, never enters
+    // the G-buffer and fails the exact test below, would otherwise keep the
+    // floor's light where the floor round it goes dark.
+    if (uRtMaskFlags.z != 0 && g.w > 0.0 && abs(dot(d, N)) < 16.0 &&
+        dot(d, d) < 1024.0)
+    {
+        float4 own = uRtAoTex.Load(int3(base, 0));
+        gMioPanRtBakeVis = own.z;
+        gMioPanRtBakeTotal = own.w;
+        gMioPanRtBakeOk = true;
+    }
     // Both stages interpolate the same expression, so a match is near exact;
     // the slack covers float noise at room scale, about a millimetre.
     if (!(g.w > 0.0 && dot(d, d) < 0.25))
@@ -487,7 +506,9 @@ void MioPanRtLoadMask(float2 pixel, float3 P, float3 N)
     static const int2 kTaps[4] = {int2(-2, -1), int2(1, -2), int2(2, 1),
                                   int2(-1, 2)};
     float4 sum = uRtMask.Load(int3(base, 0));
-    float ao = uRtAoTex.Load(int3(base, 0)).x;
+    float4 aoTexel = uRtAoTex.Load(int3(base, 0));
+    float ao = aoTexel.x;
+    float2 bake = aoTexel.zw;
     float weight = 1.0;
     [unroll] for (int k = 0; k < 4; k++)
     {
@@ -497,11 +518,19 @@ void MioPanRtLoadMask(float2 pixel, float3 P, float3 N)
         if (gq.w > 0.0 && abs(dot(dq, N)) < 4.0 && dot(dq, dq) < 3600.0)
         {
             sum += uRtMask.Load(q);
-            ao += uRtAoTex.Load(q).x;
+            float4 aoq = uRtAoTex.Load(q);
+            ao += aoq.x;
+            bake += aoq.zw;
             weight += 1.0;
         }
     }
     gMioPanRtMask = sum / weight;
+    if (uRtMaskFlags.z != 0)
+    {
+        gMioPanRtBakeVis = bake.x / weight;
+        gMioPanRtBakeTotal = bake.y / weight;
+        gMioPanRtBakeOk = true;
+    }
 
     // Occlusion is a fraction of LIGHT, so it scales linear light; the
     // kernel's units are gamma encoded, where the same scaling is the
@@ -519,7 +548,8 @@ void MioPanRtLoadMask(float2 pixel, float3 P, float3 N)
 // the brightest channel the lane would add, in GS 0..255 units, so a lane too
 // faint to see never pays for a ray.
 float MioPanRtLaneVisibility(int type, float3 P, float3 N, float3 toLight,
-                             float contribution, bool directional)
+                             float contribution, bool directional,
+                             bool players)
 {
     if ((uRtFlags.x & type) == 0 || contribution < uRtParams.w)
     {
@@ -546,7 +576,7 @@ float MioPanRtLaneVisibility(int type, float3 P, float3 N, float3 toLight,
         }
     }
 #endif
-    float vis = MioPanRtVisibility(P, N, toLight, directional);
+    float vis = MioPanRtVisibility(P, N, toLight, directional, players);
     gMioPanRtTraced += 1.0;
     gMioPanRtShadowed += 1.0 - vis;
     return vis;

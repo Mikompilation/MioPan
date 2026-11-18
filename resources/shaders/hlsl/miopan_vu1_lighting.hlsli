@@ -91,13 +91,15 @@ struct MioPanVu1LightImage
     // x = SPOTBTIMES (fMaxRange * SetMaxColor255's divisor),
     // y = SPOTINTENS (cos^2 of the cone half-angle),
     // z = SPOTINTENSB (1 / sin^2),
-    // w = 1 for Mio's flashlight (port tag; see MioPanVu1SoftCone()).
+    // w = 1 for Mio's flashlight (port tag; see MioPanVu1SoftCone(), and her
+    // body never shadows it).
     float4 spotParams[MIOPAN_VU1_MAX_LANES];
 
     float4 pointPos[MIOPAN_VU1_MAX_LANES];
     float4 pointColDif[MIOPAN_VU1_MAX_LANES];
     float4 pointColSpc[MIOPAN_VU1_MAX_LANES];
-    // x = POINTBTIMES, yzw unused.
+    // x = POINTBTIMES, yz unused, w = 1 for one of Mio's own lights (port tag:
+    // her body never shadows it).
     float4 pointParams[MIOPAN_VU1_MAX_LANES];
 };
 
@@ -156,7 +158,7 @@ float3 MioPanVu1Directional(MioPanVu1LightImage img, float3 N)
         float vis = MioPanRtLaneVisibility(MIOPAN_RT_DIRECTIONAL,
                                            gMioPanRtPosition, N,
                                            img.dirLightDif[k].xyz,
-                                           contribution, true);
+                                           contribution, true, false);
         nd[k] *= vis;
         ns[k] *= vis;
     }
@@ -259,7 +261,8 @@ float3 MioPanVu1Spot(MioPanVu1LightImage img, float3 P, float3 N)
             float contribution = MioPanRtMax3(img.spotColDif[i].rgb * (c * cone) +
                                               img.spotColSpc[i].rgb * (cone * e8));
             cone *= MioPanRtLaneVisibility(MIOPAN_RT_SPOT, P, N, L,
-                                           contribution, false);
+                                           contribution, false,
+                                           img.spotParams[i].w > 0.5);
         }
 #endif
 
@@ -320,7 +323,8 @@ float3 MioPanVu1Point(MioPanVu1LightImage img, float3 P, float3 N)
             e4 = e4 * e4;
             float3 lane = img.pointColDif[i].rgb * c + img.pointColSpc[i].rgb * e4;
             result += lane * MioPanRtLaneVisibility(MIOPAN_RT_POINT, P, N, L,
-                                                    MioPanRtMax3(lane), false);
+                                                    MioPanRtMax3(lane), false,
+                                                    img.pointParams[i].w > 0.5);
             continue;
         }
 #endif
@@ -336,6 +340,39 @@ float3 MioPanVu1Point(MioPanVu1LightImage img, float3 P, float3 N)
 
     return result;
 }
+
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+// Baked shadows (port addition).  The rooms' meshes get their lamps' light --
+// every point and spot light but Mio's own -- from the prelight bake, done on
+// the CPU when a room loads, not from a live lane: their light blocks carry no
+// point lanes at all, and no spot but her flashlight.  So a lane's shadow
+// never reaches them.  The mask pass estimates, per pixel, how much
+// light the bake's lamps gave it (gMioPanRtBakeTotal, GS 0..255, by the bake's
+// own law for a white material) and the fraction of that still getting
+// through (gMioPanRtBakeVis); see rt_shadow_mask.comp.
+//
+// Where the bake holds at least that much, the blocked share comes straight
+// off.  Where it holds less -- a darker material than the estimate's white,
+// or the bake's own cap -- the bake is taken to be those lamps alone and
+// scaled by the fraction still lit, so it never goes below zero.  A
+// character's seed is black (it has no bake), so this leaves it alone.
+float3 MioPanRtShadowBake(float3 seed)
+{
+    if (!gMioPanRtBakeOk || uRtMaskFlags.z == 0 || MioPanRtMax3(seed) <= 0.0 ||
+        gMioPanRtBakeTotal < uRtParams.w)
+    {
+        return seed;
+    }
+    float total = gMioPanRtBakeTotal;
+    float vis = saturate(gMioPanRtBakeVis);
+    gMioPanRtTraced += 1.0;
+    gMioPanRtShadowed += 1.0 - vis;
+    gMioPanRtFromMask += 1.0;
+    float3 removed = seed - total * (1.0 - vis);
+    float3 scaled = seed * vis;
+    return max(lerp(scaled, removed, step(total.xxx, seed)), 0.0.xxx);
+}
+#endif
 
 // The whole light image, in GS 0..255 units, seeded from `seed255`.
 //
@@ -361,6 +398,8 @@ float3 MioPanVu1Evaluate(MioPanVu1LightImage img, float3 P, float3 N,
 
 #ifdef MIOPAN_VU1_SHADOW_RAYS
     gMioPanRtPosition = P;
+    // The seed is the prelight bake; its lamps' shadows come out of it here.
+    result = MioPanRtShadowBake(result);
 #endif
 
     if ((terms & MIOPAN_VU1_TERM_DIRECTIONAL) != 0)

@@ -114,14 +114,18 @@ cbuffer MikuPanUniforms : register(b0, MIKUPAN_UNIFORM_SPACE)
     // for the same reason as uAlphaTest.
     int4 uRtFlags;
     float4 uRtParams;
-    // xyz = centre, w = radius of the sphere around Mio inside which a light
-    // counts as hers (her flashlight, her reflection light); w = 0 when she is
-    // not drawn.  Her own triangles never shadow such a light.
+    // xyz = centre, w = radius of the sphere around Mio; w = 0 when she is not
+    // drawn.  No longer read: a light of hers is now told by its lane's tag
+    // (spotParams.w / pointParams.w), since a lamp she stood next to fell
+    // inside the sphere and lost her shadow.  Kept so the block's layout and
+    // its C++ mirror stay as they are.
     float4 uRtPlayer;
     // The screen-space shadow mask's four lights, by world position (w = 1 for
-    // a live channel), and x = 1 when the mask is bound this present.  A lane
-    // at one of these positions reads its visibility from the mask instead of
-    // tracing.  Appended for the same reason as uAlphaTest.
+    // a live channel), and x = 1 when the mask is bound this present, y = 1
+    // when the occlusion is, z = 1 when the baked shadows' estimate is
+    // (MioPanRtShadowBake()).  A lane at one of these positions reads its
+    // visibility from the mask instead of tracing.  Appended for the same
+    // reason as uAlphaTest.
     float4 uRtMaskLight[4];
     int4 uRtMaskFlags;
     // Mio's flashlight beam (port addition): x = edge softness 0..1 (0 is the
