@@ -56,6 +56,8 @@ struct type_MikuPanUniforms
     int4 uRtMaskFlags;
     float4 uFlashlight;
     float4 uRtAmbient;
+    float4 uFlashBeam;
+    float4 uFlashEye;
 };
 
 struct type_MaterialBlock
@@ -91,7 +93,7 @@ struct type_MioPanFragmentLightBlock
     MioPanVu1LightImage uVu1;
 };
 
-constant int _83 = {};
+constant int _103 = {};
 
 struct main0_out
 {
@@ -109,340 +111,436 @@ struct main0_in
 fragment main0_out main0(main0_in in [[stage_in]], constant type_MikuPanUniforms& MikuPanUniforms [[buffer(0)]], constant type_MioPanFragmentLightBlock& MioPanFragmentLightBlock [[buffer(1)]], texture2d<float> uTexture [[texture(0)]], sampler uTextureSampler [[sampler(0)]])
 {
     main0_out out = {};
-    float4 _93 = uTexture.sample(uTextureSampler, in.in_var_TEXCOORD0.xy);
-    float _94 = _93.w;
-    bool _101;
+    float4 _119 = uTexture.sample(uTextureSampler, in.in_var_TEXCOORD0.xy);
+    float _120 = _119.w;
+    bool _127;
     if (MikuPanUniforms.uAlphaSharpen.y > 0.0)
     {
-        _101 = _94 < MikuPanUniforms.uAlphaSharpen.y;
+        _127 = _120 < MikuPanUniforms.uAlphaSharpen.y;
     }
     else
     {
-        _101 = false;
+        _127 = false;
     }
-    if (_101)
+    if (_127)
     {
         discard_fragment();
     }
-    float _106 = _94 * in.in_var_TEXCOORD0.z;
-    bool _146;
+    float _132 = _120 * in.in_var_TEXCOORD0.z;
+    bool _172;
     do
     {
         if (MikuPanUniforms.uAlphaTest.x == 0.0)
         {
-            _146 = false;
+            _172 = false;
             break;
         }
-        int _116 = int(MikuPanUniforms.uAlphaTest.z);
-        if (_116 == 0)
+        int _142 = int(MikuPanUniforms.uAlphaTest.z);
+        if (_142 == 0)
         {
-            _146 = true;
+            _172 = true;
             break;
         }
-        if (_116 == 1)
+        if (_142 == 1)
         {
-            _146 = false;
+            _172 = false;
             break;
         }
-        if (_116 == 2)
+        if (_142 == 2)
         {
-            _146 = (isunordered(_106, MikuPanUniforms.uAlphaTest.y) || _106 >= MikuPanUniforms.uAlphaTest.y);
+            _172 = (isunordered(_132, MikuPanUniforms.uAlphaTest.y) || _132 >= MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_116 == 3)
+        if (_142 == 3)
         {
-            _146 = (isunordered(_106, MikuPanUniforms.uAlphaTest.y) || _106 > MikuPanUniforms.uAlphaTest.y);
+            _172 = (isunordered(_132, MikuPanUniforms.uAlphaTest.y) || _132 > MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_116 == 4)
+        if (_142 == 4)
         {
-            _146 = _106 != MikuPanUniforms.uAlphaTest.y;
+            _172 = _132 != MikuPanUniforms.uAlphaTest.y;
             break;
         }
-        if (_116 == 5)
+        if (_142 == 5)
         {
-            _146 = (isunordered(_106, MikuPanUniforms.uAlphaTest.y) || _106 < MikuPanUniforms.uAlphaTest.y);
+            _172 = (isunordered(_132, MikuPanUniforms.uAlphaTest.y) || _132 < MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        if (_116 == 6)
+        if (_142 == 6)
         {
-            _146 = (isunordered(_106, MikuPanUniforms.uAlphaTest.y) || _106 <= MikuPanUniforms.uAlphaTest.y);
+            _172 = (isunordered(_132, MikuPanUniforms.uAlphaTest.y) || _132 <= MikuPanUniforms.uAlphaTest.y);
             break;
         }
-        _146 = (isunordered(_106, MikuPanUniforms.uAlphaTest.y) || _106 == MikuPanUniforms.uAlphaTest.y);
+        _172 = (isunordered(_132, MikuPanUniforms.uAlphaTest.y) || _132 == MikuPanUniforms.uAlphaTest.y);
         break;
     } while(false);
-    bool _151;
-    if (!_146)
+    bool _177;
+    if (!_172)
     {
-        _151 = _106 <= 0.0;
+        _177 = _132 <= 0.0;
     }
     else
     {
-        _151 = true;
+        _177 = true;
     }
-    if (_151)
+    if (_177)
     {
         discard_fragment();
     }
-    float3 _155 = fast::normalize(in.in_var_TEXCOORD2.xyz);
-    bool _173;
+    float3 _181 = fast::normalize(in.in_var_TEXCOORD2.xyz);
+    bool _199;
     if ((MioPanFragmentLightBlock.uVu1.config.z & 2) != 0)
     {
-        _173 = (MioPanFragmentLightBlock.uVu1.config.x & 1) != 0;
+        _199 = (MioPanFragmentLightBlock.uVu1.config.x & 1) != 0;
     }
     else
     {
-        _173 = false;
+        _199 = false;
     }
-    bool _180;
-    if (_173)
+    bool _206;
+    if (_199)
     {
-        _180 = (MikuPanUniforms.uRtFlags.x & 1) != 0;
+        _206 = (MikuPanUniforms.uRtFlags.x & 1) != 0;
     }
     else
     {
-        _180 = false;
+        _206 = false;
     }
-    uint _329;
-    if (_180)
+    uint _500;
+    if (_206)
     {
-        int _185 = min(MioPanFragmentLightBlock.uVu1.counts.x, 16);
-        uint _190;
-        _190 = 0u;
-        int _188;
-        uint _191;
-        int _187;
-        for (int _192 = 0; _192 < _185; _187 = _188, _190 = _191, _192++)
+        int _211 = min(MioPanFragmentLightBlock.uVu1.counts.x, 16);
+        uint _216;
+        _216 = 0u;
+        int _214;
+        uint _217;
+        int _213;
+        for (int _218 = 0; _218 < _211; _213 = _214, _216 = _217, _218++)
         {
             do
             {
-                int _223;
-                bool _224;
-                int _203 = 0;
+                int _249;
+                bool _250;
+                int _229 = 0;
                 for (;;)
                 {
-                    if (_203 < 4)
+                    if (_229 < 4)
                     {
-                        float3 _212 = MioPanFragmentLightBlock.uVu1.spotPos[_192].xyz - MikuPanUniforms.uRtMaskLight[_203].xyz;
-                        bool _220;
-                        if (MikuPanUniforms.uRtMaskLight[_203].w > 0.0)
+                        float3 _238 = MioPanFragmentLightBlock.uVu1.spotPos[_218].xyz - MikuPanUniforms.uRtMaskLight[_229].xyz;
+                        bool _246;
+                        if (MikuPanUniforms.uRtMaskLight[_229].w > 0.0)
                         {
-                            _220 = dot(_212, _212) < 1.0;
+                            _246 = dot(_238, _238) < 1.0;
                         }
                         else
                         {
-                            _220 = false;
+                            _246 = false;
                         }
-                        if (_220)
+                        if (_246)
                         {
-                            _223 = _203;
-                            _224 = true;
+                            _249 = _229;
+                            _250 = true;
                             break;
                         }
-                        _203++;
+                        _229++;
                         continue;
                     }
                     else
                     {
-                        _223 = _187;
-                        _224 = false;
+                        _249 = _213;
+                        _250 = false;
                         break;
                     }
                 }
-                if (_224)
+                if (_250)
                 {
-                    _188 = _223;
+                    _214 = _249;
                     break;
                 }
-                _188 = -1;
+                _214 = -1;
                 break;
             } while(false);
-            if (_188 < 0)
+            if (_214 < 0)
             {
-                _191 = _190;
+                _217 = _216;
                 continue;
             }
-            float3 _229 = MioPanFragmentLightBlock.uVu1.spotPos[_192].xyz - in.in_var_TEXCOORD1.xyz;
-            float _230 = dot(_229, _229);
-            if (_230 <= 0.0)
+            float3 _255 = MioPanFragmentLightBlock.uVu1.spotPos[_218].xyz - in.in_var_TEXCOORD1.xyz;
+            float _256 = dot(_255, _255);
+            if (_256 <= 0.0)
             {
-                _191 = _190;
+                _217 = _216;
                 continue;
             }
-            float _234 = 1.0 / _230;
-            float _240 = precise::max(-dot(MioPanFragmentLightBlock.uVu1.spotDir[_192].xyz, _229), 0.0);
-            float _242 = (_240 * _240) * _234;
-            float _250 = precise::max(_242 - MioPanFragmentLightBlock.uVu1.spotParams[_192].y, 0.0) * MioPanFragmentLightBlock.uVu1.spotParams[_192].z;
-            float _294;
-            do
+            float _260 = 1.0 / _256;
+            bool _270;
+            if (MioPanFragmentLightBlock.uVu1.spotParams[_218].w > 0.5)
             {
-                bool _261;
-                if ((isunordered(MioPanFragmentLightBlock.uVu1.spotParams[_192].w, 0.5) || MioPanFragmentLightBlock.uVu1.spotParams[_192].w >= 0.5))
-                {
-                    _261 = MikuPanUniforms.uFlashlight.w < 0.5;
-                }
-                else
-                {
-                    _261 = true;
-                }
-                bool _266;
-                if (!_261)
-                {
-                    _266 = _240 <= 0.0;
-                }
-                else
-                {
-                    _266 = true;
-                }
-                if (_266)
-                {
-                    _294 = _250;
-                    break;
-                }
-                float _274 = sqrt(precise::max(1.0 - precise::min(_242, 1.0), 0.0) * MioPanFragmentLightBlock.uVu1.spotParams[_192].z);
-                float _277 = fast::clamp(MikuPanUniforms.uFlashlight.x, 0.0, 1.0);
-                _294 = mix(_250, 1.0 - smoothstep(0.0, 1.0 + (0.5 * _277), _274), fast::clamp(_277 * 2.0, 0.0, 1.0)) + (MikuPanUniforms.uFlashlight.y * (1.0 - smoothstep(0.0, precise::max(MikuPanUniforms.uFlashlight.z, 1.0), _274)));
-                break;
-            } while(false);
-            float _301 = precise::min((precise::max(dot(_155, _229), 0.0) * MioPanFragmentLightBlock.uVu1.spotParams[_192].x) * _234, 1.0);
-            float _302 = _301 * _301;
-            float _303 = _302 * _302;
-            float3 _315 = (MioPanFragmentLightBlock.uVu1.spotColDif[_192].xyz * (_301 * _294)) + (MioPanFragmentLightBlock.uVu1.spotColSpc[_192].xyz * (_294 * (_303 * _303)));
-            uint _328;
-            if (precise::max(_315.x, precise::max(_315.y, _315.z)) >= MikuPanUniforms.uRtParams.w)
-            {
-                _328 = _190 | (1u << (uint(_188) & 31u));
+                _270 = MikuPanUniforms.uFlashBeam.x > 0.5;
             }
             else
             {
-                _328 = _190;
+                _270 = false;
             }
-            _191 = _328;
+            if (_270)
+            {
+                float3 _388;
+                do
+                {
+                    float3 _278 = MioPanFragmentLightBlock.uVu1.spotPos[_218].xyz - in.in_var_TEXCOORD1.xyz;
+                    float _279 = dot(_278, _278);
+                    if ((isunordered(_279, 0.0) || _279 <= 0.0))
+                    {
+                        _388 = float3(0.0);
+                        break;
+                    }
+                    float3 _284 = _278 * rsqrt(_279);
+                    float _285 = dot(_181, _284);
+                    if (_285 <= 0.0)
+                    {
+                        _388 = float3(0.0);
+                        break;
+                    }
+                    float _292 = dot(MioPanFragmentLightBlock.uVu1.spotDir[_218].xyz, _284);
+                    float _302 = acos(fast::clamp(-_292, -1.0, 1.0)) / precise::max(acos(sqrt(fast::clamp(MioPanFragmentLightBlock.uVu1.spotParams[_218].y, 0.0, 1.0))), 0.001000000047497451305389404296875);
+                    float _306 = _302 / precise::max(MikuPanUniforms.uFlashBeam.z, 0.0500000007450580596923828125);
+                    float _324 = (((0.87999999523162841796875 * (1.0 - smoothstep(0.20000000298023223876953125, 0.75, _306))) + (0.119999997317790985107421875 * (1.0 - smoothstep(0.85000002384185791015625, 1.25, _306)))) + (MikuPanUniforms.uFlashBeam.w * exp(((-_302) * _302) * 0.25510203838348388671875))) * fast::clamp(_292 * (-10.0), 0.0, 1.0);
+                    if (_324 <= 0.0)
+                    {
+                        _388 = float3(0.0);
+                        break;
+                    }
+                    float _330 = 0.85000002384185791015625 * MioPanFragmentLightBlock.uVu1.spotParams[_218].w;
+                    float _342 = MioPanFragmentLightBlock.uVu1.spotParams[_218].x / (255.0 * MioPanFragmentLightBlock.uVu1.spotParams[_218].w);
+                    float3 _348 = powr(precise::max(MioPanFragmentLightBlock.uVu1.spotColDif[_218].xyz * _342, float3(0.0)), float3(2.2000000476837158203125));
+                    float3 _386;
+                    if (MikuPanUniforms.uFlashEye.w > 0.5)
+                    {
+                        float3 _357 = MikuPanUniforms.uFlashEye.xyz - in.in_var_TEXCOORD1.xyz;
+                        float _358 = dot(_357, _357);
+                        float3 _365;
+                        if (_358 > 0.0)
+                        {
+                            _365 = _357 * rsqrt(_358);
+                        }
+                        else
+                        {
+                            _365 = float3(0.0);
+                        }
+                        float3 _366 = _284 + _365;
+                        float _367 = dot(_366, _366);
+                        float3 _374;
+                        if (_367 > 0.0)
+                        {
+                            _374 = _366 * rsqrt(_367);
+                        }
+                        else
+                        {
+                            _374 = float3(0.0);
+                        }
+                        _386 = _348 + (powr(precise::max(MioPanFragmentLightBlock.uVu1.spotColSpc[_218].xyz * _342, float3(0.0)), float3(2.2000000476837158203125)) * powr(fast::clamp(dot(_181, _374), 0.0, 1.0), 24.0));
+                    }
+                    else
+                    {
+                        _386 = _348;
+                    }
+                    _388 = _386 * ((((MikuPanUniforms.uFlashBeam.y * _324) * _285) * (_330 * _330)) / (_279 + 100.0));
+                    break;
+                } while(false);
+                float _393 = precise::max(_388.x, precise::max(_388.y, _388.z));
+                float _400;
+                if (_393 > 0.0)
+                {
+                    _400 = 128.0 * powr(_393, 0.4545454680919647216796875);
+                }
+                else
+                {
+                    _400 = 0.0;
+                }
+                uint _408;
+                if (_400 >= MikuPanUniforms.uRtParams.w)
+                {
+                    _408 = _216 | (1u << (uint(_214) & 31u));
+                }
+                else
+                {
+                    _408 = _216;
+                }
+                _217 = _408;
+                continue;
+            }
+            float _414 = precise::max(-dot(MioPanFragmentLightBlock.uVu1.spotDir[_218].xyz, _255), 0.0);
+            float _416 = (_414 * _414) * _260;
+            float _423 = precise::max(_416 - MioPanFragmentLightBlock.uVu1.spotParams[_218].y, 0.0) * MioPanFragmentLightBlock.uVu1.spotParams[_218].z;
+            float _465;
+            do
+            {
+                bool _432;
+                if ((isunordered(MioPanFragmentLightBlock.uVu1.spotParams[_218].w, 0.5) || MioPanFragmentLightBlock.uVu1.spotParams[_218].w >= 0.5))
+                {
+                    _432 = MikuPanUniforms.uFlashlight.w < 0.5;
+                }
+                else
+                {
+                    _432 = true;
+                }
+                bool _437;
+                if (!_432)
+                {
+                    _437 = _414 <= 0.0;
+                }
+                else
+                {
+                    _437 = true;
+                }
+                if (_437)
+                {
+                    _465 = _423;
+                    break;
+                }
+                float _445 = sqrt(precise::max(1.0 - precise::min(_416, 1.0), 0.0) * MioPanFragmentLightBlock.uVu1.spotParams[_218].z);
+                float _448 = fast::clamp(MikuPanUniforms.uFlashlight.x, 0.0, 1.0);
+                _465 = mix(_423, 1.0 - smoothstep(0.0, 1.0 + (0.5 * _448), _445), fast::clamp(_448 * 2.0, 0.0, 1.0)) + (MikuPanUniforms.uFlashlight.y * (1.0 - smoothstep(0.0, precise::max(MikuPanUniforms.uFlashlight.z, 1.0), _445)));
+                break;
+            } while(false);
+            float _472 = precise::min((precise::max(dot(_181, _255), 0.0) * MioPanFragmentLightBlock.uVu1.spotParams[_218].x) * _260, 1.0);
+            float _473 = _472 * _472;
+            float _474 = _473 * _473;
+            float3 _486 = (MioPanFragmentLightBlock.uVu1.spotColDif[_218].xyz * (_472 * _465)) + (MioPanFragmentLightBlock.uVu1.spotColSpc[_218].xyz * (_465 * (_474 * _474)));
+            uint _499;
+            if (precise::max(_486.x, precise::max(_486.y, _486.z)) >= MikuPanUniforms.uRtParams.w)
+            {
+                _499 = _216 | (1u << (uint(_214) & 31u));
+            }
+            else
+            {
+                _499 = _216;
+            }
+            _217 = _499;
         }
-        _329 = _190;
+        _500 = _216;
     }
     else
     {
-        _329 = 0u;
+        _500 = 0u;
     }
-    bool _338;
+    bool _509;
     if ((MioPanFragmentLightBlock.uVu1.config.z & 4) != 0)
     {
-        _338 = (MioPanFragmentLightBlock.uVu1.config.x & 2) != 0;
+        _509 = (MioPanFragmentLightBlock.uVu1.config.x & 2) != 0;
     }
     else
     {
-        _338 = false;
+        _509 = false;
     }
-    bool _345;
-    if (_338)
+    bool _516;
+    if (_509)
     {
-        _345 = (MikuPanUniforms.uRtFlags.x & 2) != 0;
+        _516 = (MikuPanUniforms.uRtFlags.x & 2) != 0;
     }
     else
     {
-        _345 = false;
+        _516 = false;
     }
-    uint _441;
-    if (_345)
+    uint _612;
+    if (_516)
     {
-        int _350 = min(MioPanFragmentLightBlock.uVu1.counts.y, 16);
-        uint _355;
-        _355 = _329;
-        int _353;
-        uint _356;
-        int _352;
-        for (int _357 = 0; _357 < _350; _352 = _353, _355 = _356, _357++)
+        int _521 = min(MioPanFragmentLightBlock.uVu1.counts.y, 16);
+        uint _526;
+        _526 = _500;
+        int _524;
+        uint _527;
+        int _523;
+        for (int _528 = 0; _528 < _521; _523 = _524, _526 = _527, _528++)
         {
             do
             {
-                int _388;
-                bool _389;
-                int _368 = 0;
+                int _559;
+                bool _560;
+                int _539 = 0;
                 for (;;)
                 {
-                    if (_368 < 4)
+                    if (_539 < 4)
                     {
-                        float3 _377 = MioPanFragmentLightBlock.uVu1.pointPos[_357].xyz - MikuPanUniforms.uRtMaskLight[_368].xyz;
-                        bool _385;
-                        if (MikuPanUniforms.uRtMaskLight[_368].w > 0.0)
+                        float3 _548 = MioPanFragmentLightBlock.uVu1.pointPos[_528].xyz - MikuPanUniforms.uRtMaskLight[_539].xyz;
+                        bool _556;
+                        if (MikuPanUniforms.uRtMaskLight[_539].w > 0.0)
                         {
-                            _385 = dot(_377, _377) < 1.0;
+                            _556 = dot(_548, _548) < 1.0;
                         }
                         else
                         {
-                            _385 = false;
+                            _556 = false;
                         }
-                        if (_385)
+                        if (_556)
                         {
-                            _388 = _368;
-                            _389 = true;
+                            _559 = _539;
+                            _560 = true;
                             break;
                         }
-                        _368++;
+                        _539++;
                         continue;
                     }
                     else
                     {
-                        _388 = _352;
-                        _389 = false;
+                        _559 = _523;
+                        _560 = false;
                         break;
                     }
                 }
-                if (_389)
+                if (_560)
                 {
-                    _353 = _388;
+                    _524 = _559;
                     break;
                 }
-                _353 = -1;
+                _524 = -1;
                 break;
             } while(false);
-            if (_353 < 0)
+            if (_524 < 0)
             {
-                _356 = _355;
+                _527 = _526;
                 continue;
             }
-            float3 _394 = MioPanFragmentLightBlock.uVu1.pointPos[_357].xyz - in.in_var_TEXCOORD1.xyz;
-            float _395 = dot(_394, _394);
-            if (_395 <= 0.0)
+            float3 _565 = MioPanFragmentLightBlock.uVu1.pointPos[_528].xyz - in.in_var_TEXCOORD1.xyz;
+            float _566 = dot(_565, _565);
+            if (_566 <= 0.0)
             {
-                _356 = _355;
+                _527 = _526;
                 continue;
             }
-            float3 _409;
-            if ((_357 - 3 * (_357 / 3)) == 2)
+            float3 _580;
+            if ((_528 - 3 * (_528 / 3)) == 2)
             {
-                float3 _408 = _394;
-                _408.y = MioPanFragmentLightBlock.uVu1.pointPos[_357 - 1].y - in.in_var_TEXCOORD1.y;
-                _409 = _408;
+                float3 _579 = _565;
+                _579.y = MioPanFragmentLightBlock.uVu1.pointPos[_528 - 1].y - in.in_var_TEXCOORD1.y;
+                _580 = _579;
             }
             else
             {
-                _409 = _394;
+                _580 = _565;
             }
-            float _416 = precise::min((precise::max(dot(_155, _409), 0.0) * MioPanFragmentLightBlock.uVu1.pointParams[_357].x) * (1.0 / _395), 1.0);
-            float _417 = _416 * _416;
-            float3 _427 = (MioPanFragmentLightBlock.uVu1.pointColDif[_357].xyz * _416) + (MioPanFragmentLightBlock.uVu1.pointColSpc[_357].xyz * (_417 * _417));
-            uint _440;
-            if (precise::max(_427.x, precise::max(_427.y, _427.z)) >= MikuPanUniforms.uRtParams.w)
+            float _587 = precise::min((precise::max(dot(_181, _580), 0.0) * MioPanFragmentLightBlock.uVu1.pointParams[_528].x) * (1.0 / _566), 1.0);
+            float _588 = _587 * _587;
+            float3 _598 = (MioPanFragmentLightBlock.uVu1.pointColDif[_528].xyz * _587) + (MioPanFragmentLightBlock.uVu1.pointColSpc[_528].xyz * (_588 * _588));
+            uint _611;
+            if (precise::max(_598.x, precise::max(_598.y, _598.z)) >= MikuPanUniforms.uRtParams.w)
             {
-                _440 = _355 | (1u << (uint(_353) & 31u));
+                _611 = _526 | (1u << (uint(_524) & 31u));
             }
             else
             {
-                _440 = _355;
+                _611 = _526;
             }
-            _356 = _440;
+            _527 = _611;
         }
-        _441 = _355;
+        _612 = _526;
     }
     else
     {
-        _441 = _329;
+        _612 = _500;
     }
     out.out_var_SV_Target0 = float4(in.in_var_TEXCOORD1.xyz, 1.0);
-    out.out_var_SV_Target1 = float4(_155, float(_441));
+    out.out_var_SV_Target1 = float4(_181, float(_612));
     return out;
 }
 

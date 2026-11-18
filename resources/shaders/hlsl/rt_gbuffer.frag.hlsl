@@ -1,6 +1,6 @@
 #define MIKUPAN_CUSTOM_LIGHT_BLOCK
-// The same cone mesh_spot.frag uses, so the mask is traced wherever the
-// flashlight's softened beam reaches.
+// The same beam mesh_spot.frag uses -- the softened cone, or the physically lit
+// one -- so the mask is traced wherever the flashlight reaches.
 #define MIOPAN_VU1_SOFT_FLASHLIGHT 1
 #include "mikupan_common.hlsli"
 #include "miopan_vu1_lighting.hlsli"
@@ -89,6 +89,15 @@ uint MaskChannels(float3 P, float3 N)
                 continue;
             }
             float invLen2 = 1.0 / len2;
+            if (MioPanVu1FlashPhysical(uVu1.spotParams[i]))
+            {
+                float3 beam = MioPanVu1FlashBeam(uVu1, i, P, N);
+                if (MioPanVu1FlashContribution(beam) >= threshold)
+                {
+                    bits |= 1u << (uint)c;
+                }
+                continue;
+            }
             float coneDot = max(-dot(uVu1.spotDir[i].xyz, L), 0.0);
             float cone = max(coneDot * coneDot * invLen2 - uVu1.spotParams[i].y,
                              0.0) * uVu1.spotParams[i].z;

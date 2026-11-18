@@ -140,6 +140,15 @@ cbuffer MikuPanUniforms : register(b0, MIKUPAN_UNIFORM_SPACE)
     // by mesh_spot_rt.frag where uRtMaskFlags.y says the occlusion is bound.
     // Appended for the same reason as uAlphaTest.
     float4 uRtAmbient;
+    // Mio's flashlight lit physically (port addition; MioPanVu1FlashBeam()):
+    // x = 1 when on, in place of uFlashlight's cone; y = the LINEAR light a
+    // white surface square to the beam gets at the reference distance; z = the
+    // beam's width, 1 = ending where the PS2 cone did; w = the spill around
+    // it, as a fraction of the centre.  uFlashEye.xyz = the camera's position, for
+    // the beam's highlight, w = 1 when set.  Appended for the same reason as
+    // uAlphaTest.
+    float4 uFlashBeam;
+    float4 uFlashEye;
 };
 
 // GS alpha test.  Returns true when the fragment should be thrown away, which

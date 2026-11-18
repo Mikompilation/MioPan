@@ -650,6 +650,12 @@ struct SpriteUniformBlock
     /* Ray-traced ambient occlusion: x = strength / 2.2, the exponent in GS
      * units.  Mirrors `uRtAmbient`; see MioPan_RendererSetAmbientOcclusion(). */
     float rtAmbient[4];
+    /* Mio's flashlight lit physically: on, the LINEAR light at the reference
+     * distance, beam width, spill; and the camera's position, w = 1 when
+     * set.  Mirror `uFlashBeam` / `uFlashEye`; see
+     * MioPan_RendererSetFlashlightModel(). */
+    float flashBeam[4];
+    float flashEye[4];
 };
 
 static const ShaderFormatInfo kShaderFormats[] = {
@@ -10660,6 +10666,52 @@ float g_flashlight_spill = 0.06f;
 /* How far the spill reaches, in cone half-angles. */
 constexpr float kFlashlightSpillReach = 2.5f;
 
+/* Mio's flashlight lit physically (MioPan_RendererSetFlashlightModel()), in
+ * place of the cone above; see MioPanVu1FlashBeam() in
+ * miopan_vu1_lighting.hlsli for the law.  Brightness 1 gives a white surface
+ * square to the beam twice the GS's unity, in LINEAR light, at the reference
+ * distance: 0.85 of the beam's white bTimes, about 6 m indoors. */
+bool g_flash_physical = true;
+float g_flash_brightness = 1.0f;
+float g_flash_width = 1.0f;
+float g_flash_spill = 0.04f;
+constexpr float kFlashBrightnessUnit = 2.0f;
+/* MioPanVu1FlashBeam()'s kMioPanFlashRef and kMioPanFlashLens2. */
+constexpr float kFlashRef = 0.85f;
+constexpr float kFlashLens2 = 100.0f;
+
+/* MioPanVu1FlashProfile(), on the CPU, for the bounce: the beam's light at
+ * `cos_t` off its axis, 1 at the centre; `cos2_half` is SPOTINTENS. */
+float FlashProfile(float cos_t, float cos2_half)
+{
+    const float half = std::max(
+        std::acos(std::sqrt(std::min(std::max(cos2_half, 0.0f), 1.0f))),
+        1e-3f);
+    const float t = std::acos(std::min(std::max(cos_t, -1.0f), 1.0f)) / half;
+    const float u = t / std::max(g_flash_width, 0.05f);
+    auto smoothstep = [](float edge0, float edge1, float v) {
+        const float k =
+            std::min(std::max((v - edge0) / (edge1 - edge0), 0.0f), 1.0f);
+        return k * k * (3.0f - 2.0f * k);
+    };
+    const float hot = 1.0f - smoothstep(0.2f, 0.75f, u);
+    const float ring = 1.0f - smoothstep(0.85f, 1.25f, u);
+    const float spill =
+        g_flash_spill * std::exp(-t * t * (0.5f / (1.4f * 1.4f)));
+    return (0.88f * hot + 0.12f * ring + spill) *
+           std::min(std::max(cos_t * 10.0f, 0.0f), 1.0f);
+}
+
+/* MioPanFlashRoll() in mesh_spot_frag.hlsli, on the CPU: LINEAR light rolled
+ * off towards the kernel's ceiling, (255 / 128)^2.2, past unity. */
+float FlashRoll(float x)
+{
+    constexpr float kKnee = 1.0f;
+    constexpr float kRoom = 4.55f - kKnee;
+    const float over = std::max(x - kKnee, 0.0f);
+    return std::min(x, kKnee) + kRoom * (1.0f - std::exp(-over / kRoom));
+}
+
 void FillFlashlightUniforms()
 {
     g_uniforms.flashlight[0] = g_flashlight_softness;
@@ -10667,6 +10719,26 @@ void FillFlashlightUniforms()
     g_uniforms.flashlight[2] = kFlashlightSpillReach;
     g_uniforms.flashlight[3] =
         g_flashlight_softness > 0.0f || g_flashlight_spill > 0.0f ? 1.0f : 0.0f;
+
+    g_uniforms.flashBeam[0] = g_flash_physical ? 1.0f : 0.0f;
+    g_uniforms.flashBeam[1] = kFlashBrightnessUnit * g_flash_brightness;
+    g_uniforms.flashBeam[2] = g_flash_width;
+    g_uniforms.flashBeam[3] = g_flash_spill;
+    /* The frame's own camera: on the present thread that is the packet's. */
+    if (g_3d_camera_valid)
+    {
+        double eye[3];
+        ViewMatrixEye(g_3d_view, eye);
+        for (int a = 0; a < 3; a++)
+        {
+            g_uniforms.flashEye[a] = (float)eye[a];
+        }
+        g_uniforms.flashEye[3] = 1.0f;
+    }
+    else
+    {
+        g_uniforms.flashEye[3] = 0.0f;
+    }
 }
 
 /* Mio's flashlight bounce (MioPan_RendererSetFlashlightBounce()).  Built on
@@ -14890,7 +14962,9 @@ void RtResetScene()
  *  fraction of a per cent once decoded, nothing worth bouncing.  Each pool
  *  becomes one light: the
  *  energy-weighted centre and normal of its hits, their summed footprint as
- *  its area and their reflected light as its colour.
+ *  its area and their reflected light as its colour.  The physically lit
+ *  beam (MioPan_RendererSetFlashlightModel()) deals its rays out by its own
+ *  law instead; see TraceBeamBouncePhysical().
  *
  *  Further bounces (MioPan_RendererSetFlashlightBounceCount()) carry the
  *  light on: rays leave each bounce's hits in a diffuse spread, and where
@@ -15056,6 +15130,139 @@ float BounceCone(float cos2, const float params[4])
     return cone + (bell - cone) * k + spill;
 }
 
+/* TraceBeamBounce() for the physically lit beam (g_flash_physical), by its
+ * own law: MioPanVu1FlashBeam() against a white surface, in LINEAR light
+ * already.
+ *
+ * Its profile reaches well past the PS2 cone, faintly, so the rays are not
+ * spread evenly across it but dealt out by the light: ring i of the beam --
+ * between the angles off the axis where the light inside reaches i / N and
+ * (i + 1) / N of the whole -- gets ray i, at a golden-angle turn from the
+ * last.  Every ray then carries the same light, and the faint spill is
+ * covered by a few wide rings rather than by many rays carrying nothing.  The
+ * innermost fifth of the light, the hotspot, is the core pool. */
+int TraceBeamBouncePhysical(const FlashlightSource &src, const float axis[3],
+                            const float u_axis[3], const float v_axis[3],
+                            bool two_sided, BouncePool *pools,
+                            BounceSample *samples, int *rays, int *hits)
+{
+    const float cos2_half = src.params[1];
+    const float half = std::max(
+        std::acos(std::sqrt(std::min(std::max(cos2_half, 0.0f), 1.0f))),
+        1e-3f);
+    /* Past 3.5 half-angles the profile is below a thousandth; the lamp's own
+     * plane stops it anyway. */
+    const float theta_max = std::min(3.5f * half, 1.5533f);
+
+    /* The light inside each angle off the axis, summed outwards: the profile
+     * over the beam's rings, P(theta) sin(theta) dtheta (times 2 pi). */
+    constexpr int kSteps = 256;
+    float cdf[kSteps + 1];
+    cdf[0] = 0.0f;
+    const float step = theta_max / (float)kSteps;
+    for (int s = 0; s < kSteps; s++)
+    {
+        const float theta = ((float)s + 0.5f) * step;
+        cdf[s + 1] = cdf[s] + FlashProfile(std::cos(theta), cos2_half) *
+                                  std::sin(theta) * step;
+    }
+    const float total = cdf[kSteps];
+    if (!(total > 0.0f))
+    {
+        return 0;
+    }
+    /* The angle inside which `q` of the light falls. */
+    auto theta_at = [&](float q) {
+        const float target = q * total;
+        int s = 0;
+        while (s < kSteps - 1 && cdf[s + 1] < target)
+        {
+            s++;
+        }
+        const float span = cdf[s + 1] - cdf[s];
+        const float f =
+            span > 0.0f ? std::min(std::max((target - cdf[s]) / span, 0.0f), 1.0f)
+                        : 0.0f;
+        return ((float)s + f) * step;
+    };
+
+    const float ref = kFlashRef * src.params[0];
+    const float strength = kFlashBrightnessUnit * g_flash_brightness * ref * ref;
+    float tint[3];
+    for (int c = 0; c < 3; c++)
+    {
+        tint[c] = std::pow(std::max(src.colour[c], 0.0f) / 255.0f, 2.2f);
+    }
+
+    int kept = 0;
+    for (int i = 0; i < kBounceRays; i++)
+    {
+        const float lo = theta_at((float)i / (float)kBounceRays);
+        const float hi = theta_at((float)(i + 1) / (float)kBounceRays);
+        const float theta = theta_at(((float)i + 0.5f) / (float)kBounceRays);
+        /* The ring this ray stands for, as a solid angle. */
+        const float ring = 2.0f * kBouncePi * (std::cos(lo) - std::cos(hi));
+        const float phi = std::fmod((float)i * kBounceGoldenAngle,
+                                    2.0f * kBouncePi);
+        const float sin_t = std::sin(theta);
+        const float cos_t = std::cos(theta);
+        const float cp = std::cos(phi) * sin_t;
+        const float sp = std::sin(phi) * sin_t;
+        const float dir[3] = {
+            axis[0] * cos_t + u_axis[0] * cp + v_axis[0] * sp,
+            axis[1] * cos_t + u_axis[1] * cp + v_axis[1] * sp,
+            axis[2] * cos_t + u_axis[2] * cp + v_axis[2] * sp};
+        (*rays)++;
+
+        MioPanRt::RayHit hit{};
+        if (!BounceTrace(src.position, dir, two_sided, &hit))
+        {
+            continue;
+        }
+        (*hits)++;
+
+        const float cos_i = -(hit.normal[0] * dir[0] +
+                              hit.normal[1] * dir[1] +
+                              hit.normal[2] * dir[2]);
+        if (cos_i <= 0.0f)
+        {
+            continue;
+        }
+        const float light = strength * FlashProfile(cos_t, cos2_half) * cos_i /
+                            (hit.t * hit.t + kFlashLens2);
+        /* The ring's share of the surface, laid on it at this distance and
+         * tilt, as for the PS2 beam's rays. */
+        const float area = ring * hit.t * hit.t / std::max(cos_i, 0.2f);
+        BounceSample &sample = samples[kept];
+        for (int c = 0; c < 3; c++)
+        {
+            /* Rolled off as the screen rolls it off (MioPanFlashAdd()), so a
+             * wall a step away gives back what it is seen to: unrolled, the
+             * light that inverse square piles onto it would flood the room
+             * many times brighter than the wall itself looks. */
+            sample.flux[c] = FlashRoll(tint[c] * light) * area;
+            sample.position[c] = src.position[c] + dir[c] * hit.t;
+            sample.normal[c] = hit.normal[c];
+        }
+        sample.area = area;
+        sample.weight = BounceLuminance(sample.flux);
+        if (!(sample.weight > 0.0f))
+        {
+            continue;
+        }
+
+        const int sectors = kBouncePools - 1;
+        const int pool =
+            i < kBounceRays / 5
+                ? 0
+                : 1 + std::min((int)(phi / (2.0f * kBouncePi) * (float)sectors),
+                               sectors - 1);
+        BouncePoolAdd(pools[pool], sample);
+        kept++;
+    }
+    return kept;
+}
+
 /* The first bounce: the beam's own pattern of rays, pooled by where in the
  * beam each came from.  Every hit is also kept in `samples` for the next
  * bounce to leave from.  Returns how many were kept. */
@@ -15066,6 +15273,11 @@ int TraceBeamBounce(const FlashlightSource &src, const float axis[3],
     float u_axis[3];
     float v_axis[3];
     BounceFrame(axis, u_axis, v_axis);
+    if (g_flash_physical)
+    {
+        return TraceBeamBouncePhysical(src, axis, u_axis, v_axis, two_sided,
+                                       pools, samples, rays, hits);
+    }
 
     /* Distances across the beam are in cone half-angles, as the soft cone
      * measures them: x = sin(angle) / sin(half-angle). */
@@ -17903,6 +18115,36 @@ void MioPan_RendererGetFlashlightBeam(float *softness, float *spill)
     if (spill != nullptr)
     {
         *spill = g_flashlight_spill;
+    }
+}
+
+void MioPan_RendererSetFlashlightModel(int physical, float brightness,
+                                       float width, float spill)
+{
+    g_flash_physical = physical != 0;
+    g_flash_brightness = std::min(std::max(brightness, 0.1f), 8.0f);
+    g_flash_width = std::min(std::max(width, 0.25f), 2.0f);
+    g_flash_spill = std::min(std::max(spill, 0.0f), 0.5f);
+}
+
+void MioPan_RendererGetFlashlightModel(int *physical, float *brightness,
+                                       float *width, float *spill)
+{
+    if (physical != nullptr)
+    {
+        *physical = g_flash_physical ? 1 : 0;
+    }
+    if (brightness != nullptr)
+    {
+        *brightness = g_flash_brightness;
+    }
+    if (width != nullptr)
+    {
+        *width = g_flash_width;
+    }
+    if (spill != nullptr)
+    {
+        *spill = g_flash_spill;
     }
 }
 

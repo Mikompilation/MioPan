@@ -2825,13 +2825,27 @@ int gra3dCalcVu1WideLanes(GRA3DVU1LANE *aLanes, int iMaxLanes,
          * own.  The spot's tag gives the per-pixel beam its soft edge and
          * spill (MioPan_RendererSetFlashlightBeam); either tag keeps her own
          * body from shadowing the light (the ray-traced shadows), which a
-         * test by distance from her got wrong for a candle she stood by. */
-        pLane->vParams[3] = (iId == LID_SPOT_FLASHLIGHT ||
-                             iId == LID_POINT_FLASHLIGHT_0 ||
+         * test by distance from her got wrong for a candle she stood by.
+         * The spot's tag is its bTimes against a white material, at least 1,
+         * which is what the physically lit beam measures its reach by
+         * (MioPanVu1FlashBeam()) -- the same figure gra3dPublishFlashlight()
+         * hands over below. */
+        pLane->vParams[3] = (iId == LID_POINT_FLASHLIGHT_0 ||
                              iId == LID_POINT_FLASHLIGHT_1 ||
                              iId == LID_POINT_SELFREFLECTION)
                                 ? 1.0f
                                 : 0.0f;
+        if (iId == LID_SPOT_FLASHLIGHT)
+        {
+            float vWhite[4];
+            float fWhite;
+
+            g3dxVu0CopyVector(vWhite, pL->vDiffuse);
+            _MakeColorToMonotone(vWhite);
+            fWhite = pL->fMaxRange *
+                     std::max(vWhite[0], std::max(vWhite[1], vWhite[2]));
+            pLane->vParams[3] = fWhite > 1.0f ? fWhite : 1.0f;
+        }
 
         /* DIRCOLDIF[0].w is the vertex alpha and comes from the directional
          * block, not from here; leave the w lanes of the colours alone. */

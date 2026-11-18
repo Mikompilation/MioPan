@@ -63,6 +63,27 @@ float3 MioPanBounceLight(float3 P, float3 N)
     return sum;
 }
 
+// LINEAR light rolled off towards the kernel's ceiling (255, twice unity)
+// instead of clipped there: identity up to unity, then each further unit
+// counts for less.  FlashRoll() in miopan_renderer.cpp mirrors it for the
+// bounce.
+float3 MioPanFlashRoll(float3 x)
+{
+    const float knee = 1.0;
+    const float room = 4.55 - knee;     // (255 / 128)^2.2, less the knee
+    float3 over = max(x - knee.xxx, 0.0.xxx);
+    return min(x, knee.xxx) + room * (1.0.xxx - exp(-over / room));
+}
+
+// `base` with the physically lit flashlight added, both LINEAR.  A wall a
+// metre from the lamp gets many times the light of one across the room, and a
+// hard clip would flatten that back into the PS2's disc, so the beam is rolled
+// off instead.  `base` alone comes back exactly as it went in.
+float3 MioPanFlashAdd(float3 base, float3 flash)
+{
+    return base + MioPanFlashRoll(base + flash) - MioPanFlashRoll(base);
+}
+
 struct PSInput
 {
     float4 position : SV_Position;
@@ -113,9 +134,13 @@ float4 main(PSInput input) : SV_Target0
     // light, so undo the gamma shaping gMioPanRtAo carries.
     bounce *= pow(gMioPanRtAo, 2.2);
 #endif
-    if (any(bounce > 0.0))
+    // Mio's flashlight, when it is lit physically (MioPanVu1FlashBeam()):
+    // LINEAR as well, shadow included, and not in `lit`.
+    float3 flash = gMioPanFlashLinear;
+    if (any(bounce > 0.0) || any(flash > 0.0))
     {
-        float3 linearLit = pow(max(lit, 0.0.xxx), 2.2) + bounce;
+        float3 linearLit = MioPanFlashAdd(pow(max(lit, 0.0.xxx), 2.2) + bounce,
+                                          flash);
         lit = min(pow(linearLit, 1.0 / 2.2),
                   uVu1.ambient.www * kMioPanGsModulateUnity);
     }

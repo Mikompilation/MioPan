@@ -702,6 +702,25 @@ void MioPan_RendererRtEndPlayer(void);
 void MioPan_RendererSetFlashlightBeam(float softness, float spill);
 void MioPan_RendererGetFlashlightBeam(float *softness, float *spill);
 
+/* Mio's flashlight lit physically -- a port addition, and the default.
+ *
+ * In place of the cone above: light falling off with the square of the
+ * distance from a lamp the size of a torch's lens, Lambert's cosine, and a
+ * reflector's profile -- a hotspot, a dimmer ring ending about where the PS2
+ * cone did, and a faint wide spill past it -- worked in linear light, with a
+ * highlight off each material's specular colour.  With ray-traced shadows on
+ * it is shadowed, and its bounce (MioPan_RendererSetFlashlightBounce()) is
+ * worked from the same law.
+ *
+ * `brightness` (0.1..8, 1 = the default) scales it; `width` (0.25..2) is the
+ * beam's width against the PS2 cone's; `spill` (0..0.5) is the light around
+ * it as a fraction of the centre's.  `physical` 0 is the cone above.
+ * Per pixel only, like the cone's softening.  Live. */
+void MioPan_RendererSetFlashlightModel(int physical, float brightness,
+                                       float width, float spill);
+void MioPan_RendererGetFlashlightModel(int *physical, float *brightness,
+                                       float *width, float *spill);
+
 /* Mio's flashlight bounce -- a port addition, riding on ray tracing.
  *
  * A torch in a dark room lights the whole room a little, off whatever its
@@ -1603,9 +1622,10 @@ struct MioPanLightState
     float spot_diffuse[MIOPAN_VU1_MAX_LANES][4];
     float spot_specular[MIOPAN_VU1_MAX_LANES][4];
     /* x = bTimes (fMaxRange * SetMaxColor255's divisor),
-     * y = cos^2(cone half-angle), z = 1 / sin^2, w = 1 for Mio's flashlight
-     * (a port tag for MioPan_RendererSetFlashlightBeam() and the ray-traced
-     * shadows; 0 otherwise). */
+     * y = cos^2(cone half-angle), z = 1 / sin^2, w = for Mio's flashlight its
+     * bTimes against a white material, at least 1 (a port tag for
+     * MioPan_RendererSetFlashlightBeam(), MioPan_RendererSetFlashlightModel()
+     * and the ray-traced shadows; 0 otherwise). */
     float spot_params[MIOPAN_VU1_MAX_LANES][4];
 
     float point_position[MIOPAN_VU1_MAX_LANES][4];

@@ -91,8 +91,9 @@ struct MioPanVu1LightImage
     // x = SPOTBTIMES (fMaxRange * SetMaxColor255's divisor),
     // y = SPOTINTENS (cos^2 of the cone half-angle),
     // z = SPOTINTENSB (1 / sin^2),
-    // w = 1 for Mio's flashlight (port tag; see MioPanVu1SoftCone(), and her
-    // body never shadows it).
+    // w = 0, or for Mio's flashlight (port tag; see MioPanVu1SoftCone(), and
+    // her body never shadows it) its bTimes against a white material, at
+    // least 1 -- what MioPanVu1FlashBeam() measures the beam's reach by.
     float4 spotParams[MIOPAN_VU1_MAX_LANES];
 
     float4 pointPos[MIOPAN_VU1_MAX_LANES];
@@ -207,6 +208,108 @@ float MioPanVu1SoftCone(float coneDot, float invLen2, float4 params, float cone)
                   (1.0 - smoothstep(0.0, max(uFlashlight.z, 1.0), x));
     return lerp(cone, bell, saturate(softness * 2.0)) + spill;
 }
+
+// PORT ADDITION -- Mio's flashlight lit physically (uFlashBeam.x), in place of
+// the cone above.  Per-pixel stages only, like it.
+//
+// The PS2's beam is a flat disc.  Its coefficient, bTimes/|L| capped at 1,
+// stays saturated out to bTimes -- 3420 units, about 7 m, for a white wall
+// indoors -- so inside the cone a surface is at full brightness whatever its
+// distance or the way it faces, and only the cone's rim shapes the light.
+// Here the beam is a real lamp's, worked in LINEAR light:
+//
+//   E = brightness * profile(angle off the axis) * N.L * ref^2 / (d^2 + lens^2)
+//
+// Inverse square from a lamp the size of a torch's lens, Lambert's cosine,
+// and a reflector's profile (MioPanVu1FlashProfile()): a hotspot, a dimmer
+// ring ending about where the PS2 cone did, and a faint wide spill out to some
+// 2.5 cone half-angles.  `ref`, where a white surface square to the beam gets
+// `brightness`, is a fixed share of the lane's white-material bTimes
+// (spotParams.w), so the shorter outdoor beam stays shorter.  A material's
+// colours are read against white at the same distance and decoded, so a dark
+// plank stays dark.  The highlight is Blinn-Phong off the material's specular
+// colour, seen from the camera.
+//
+// None of it goes into the kernel's GS sum: gMioPanFlashLinear carries it,
+// shadow included, to mesh_spot_frag.hlsli, which adds it to the rest in
+// linear light as it does the bounce.  MioPanVu1FlashProfile() has a C++
+// mirror, FlashProfile() in miopan_renderer.cpp, for the bounce; keep them in
+// step.
+static const float kMioPanFlashRef = 0.85;      // `ref`, in white bTimes
+static const float kMioPanFlashLens2 = 100.0;   // lens^2: about 2 cm
+static const float kMioPanFlashGloss = 24.0;    // the highlight's exponent
+
+static float3 gMioPanFlashLinear = float3(0.0, 0.0, 0.0);
+
+bool MioPanVu1FlashPhysical(float4 params)
+{
+    return params.w > 0.5 && uFlashBeam.x > 0.5;
+}
+
+// The beam's light at `cosT` off its axis, 1 at the centre.  `cos2Half` is
+// SPOTINTENS, cos^2 of the PS2 cone's half-angle.  A torch's reflector throws
+// a hotspot, flat in the middle and gone by three quarters of the way out; a
+// dimmer ring round it, whose soft outer edge sits where the PS2 cone's rim
+// was (both scale with uFlashBeam.z); and a faint spill well past that.
+// Nothing behind the lamp.
+float MioPanVu1FlashProfile(float cosT, float cos2Half)
+{
+    float halfAngle = max(acos(sqrt(saturate(cos2Half))), 1e-3);
+    float t = acos(clamp(cosT, -1.0, 1.0)) / halfAngle;
+    float u = t / max(uFlashBeam.z, 0.05);
+    float hot = 1.0 - smoothstep(0.2, 0.75, u);
+    float ring = 1.0 - smoothstep(0.85, 1.25, u);
+    float spill = uFlashBeam.w * exp(-t * t * (0.5 / (1.4 * 1.4)));
+    return (0.88 * hot + 0.12 * ring + spill) * saturate(cosT * 10.0);
+}
+
+// Lane `i`'s light at P, LINEAR, before any shadow.
+float3 MioPanVu1FlashBeam(MioPanVu1LightImage img, int i, float3 P, float3 N)
+{
+    float3 L = img.spotPos[i].xyz - P;
+    float d2 = dot(L, L);
+    if (!(d2 > 0.0))
+    {
+        return 0.0.xxx;
+    }
+    float3 Ln = L * rsqrt(d2);
+    float ndl = dot(N, Ln);
+    if (ndl <= 0.0)
+    {
+        return 0.0.xxx;
+    }
+    // spotDir is the beam (see MioPanVu1Spot()), so the angle off it is
+    // measured from the lamp out to P.
+    float profile = MioPanVu1FlashProfile(-dot(img.spotDir[i].xyz, Ln),
+                                          img.spotParams[i].y);
+    if (profile <= 0.0)
+    {
+        return 0.0.xxx;
+    }
+    float white = img.spotParams[i].w;
+    float ref = kMioPanFlashRef * white;
+    float E = uFlashBeam.y * profile * ndl * (ref * ref) /
+              (d2 + kMioPanFlashLens2);
+    // colour * bTimes is the same at any material scale; over white's it is
+    // this material's share of the light, in the GS's gamma units.
+    float scale = img.spotParams[i].x / (255.0 * white);
+    float3 result = pow(max(img.spotColDif[i].rgb * scale, 0.0.xxx), 2.2);
+    if (uFlashEye.w > 0.5)
+    {
+        float3 V = MioPanVu1SafeNormalize(uFlashEye.xyz - P);
+        float3 H = MioPanVu1SafeNormalize(Ln + V);
+        result += pow(max(img.spotColSpc[i].rgb * scale, 0.0.xxx), 2.2) *
+                  pow(saturate(dot(N, H)), kMioPanFlashGloss);
+    }
+    return result * E;
+}
+
+// What the shadow rays' threshold compares: the beam's light as GS units.
+float MioPanVu1FlashContribution(float3 linearLight)
+{
+    float peak = max(linearLight.x, max(linearLight.y, linearLight.z));
+    return peak > 0.0 ? 128.0 * pow(peak, 1.0 / 2.2) : 0.0;
+}
 #endif
 
 // spot: CalcIntens 0x018-0x208, once per live lane.
@@ -231,6 +334,22 @@ float3 MioPanVu1Spot(MioPanVu1LightImage img, float3 P, float3 N)
             continue;
         }
         float invLen2 = 1.0 / len2;
+
+#ifdef MIOPAN_VU1_SOFT_FLASHLIGHT
+        // Mio's flashlight lit physically: none of the cone below, and its
+        // light goes out LINEAR instead of into the sum.
+        if (MioPanVu1FlashPhysical(img.spotParams[i]))
+        {
+            float3 beam = MioPanVu1FlashBeam(img, i, P, N);
+#ifdef MIOPAN_VU1_SHADOW_RAYS
+            beam *= MioPanRtLaneVisibility(MIOPAN_RT_SPOT, P, N, L,
+                                           MioPanVu1FlashContribution(beam),
+                                           false, true);
+#endif
+            gMioPanFlashLinear += beam;
+            continue;
+        }
+#endif
 
         // PORT DEVIATION, and the one place the spot convention is reconciled.
         // The microcode dots vDirection against `light - vertex`, so on

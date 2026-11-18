@@ -843,31 +843,94 @@ void DrawFlashlightMenu()
     {
         return;
     }
-    float softness = 0.0f;
-    float spill = 0.0f;
-    MioPan_RendererGetFlashlightBeam(&softness, &spill);
-    bool changed = false;
-    ImGui::PushItemWidth(160.0f);
-    changed |= ImGui::SliderFloat("Edge softness", &softness, 0.0f, 1.0f, "%.2f");
+    int physical = 0;
+    float brightness = 1.0f;
+    float width = 1.0f;
+    float beam_spill = 0.0f;
+    MioPan_RendererGetFlashlightModel(&physical, &brightness, &width,
+                                      &beam_spill);
+    bool lit = physical != 0;
+    bool model_changed = false;
+    if (ImGui::MenuItem("Physically lit beam", nullptr, &lit))
+    {
+        model_changed = true;
+    }
     if (ImGui::IsItemHovered())
     {
-        ImGui::SetTooltip("Fade the beam out smoothly past its rim instead of\n"
-                          "the PS2's hard edge.  0 is the original cone.");
+        ImGui::SetTooltip("Light the way a real torch does: bright close up and\n"
+                          "falling off with distance, shaded by the way each\n"
+                          "surface faces it, with a soft hotspot and a faint\n"
+                          "spill around it.  Shadowed and bounced by the ray\n"
+                          "tracing when that is on.  Off is the PS2's cone.");
     }
-    changed |= ImGui::SliderFloat("Spill", &spill, 0.0f, 0.3f, "%.2f");
-    if (ImGui::IsItemHovered())
+
+    if (lit)
     {
-        ImGui::SetTooltip("A faint halo of light around the beam, as a real\n"
-                          "torch's reflector throws.  0 is none.");
+        ImGui::PushItemWidth(160.0f);
+        model_changed |= ImGui::SliderFloat("Brightness", &brightness, 0.25f,
+                                            4.0f, "%.2f",
+                                            ImGuiSliderFlags_Logarithmic);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How bright the beam is.  1 is the default.");
+        }
+        model_changed |= ImGui::SliderFloat("Beam width", &width, 0.5f, 1.5f,
+                                            "%.2f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How wide the beam is.  1 ends it about where\n"
+                              "the PS2's cone ended.");
+        }
+        model_changed |= ImGui::SliderFloat("Spill##physical", &beam_spill,
+                                            0.0f, 0.15f, "%.3f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The faint light around the hotspot, as a\n"
+                              "fraction of its centre.  0 is none.");
+        }
+        ImGui::PopItemWidth();
+        if (ImGui::MenuItem("Default beam"))
+        {
+            brightness = 1.0f;
+            width = 1.0f;
+            beam_spill = 0.04f;
+            model_changed = true;
+        }
     }
-    ImGui::PopItemWidth();
-    if (changed)
+    else
     {
-        MioPan_RendererSetFlashlightBeam(softness, spill);
+        float softness = 0.0f;
+        float spill = 0.0f;
+        MioPan_RendererGetFlashlightBeam(&softness, &spill);
+        bool changed = false;
+        ImGui::PushItemWidth(160.0f);
+        changed |= ImGui::SliderFloat("Edge softness", &softness, 0.0f, 1.0f,
+                                      "%.2f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Fade the beam out smoothly past its rim instead of\n"
+                              "the PS2's hard edge.  0 is the original cone.");
+        }
+        changed |= ImGui::SliderFloat("Spill", &spill, 0.0f, 0.3f, "%.2f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("A faint halo of light around the beam, as a real\n"
+                              "torch's reflector throws.  0 is none.");
+        }
+        ImGui::PopItemWidth();
+        if (changed)
+        {
+            MioPan_RendererSetFlashlightBeam(softness, spill);
+        }
+        if (ImGui::MenuItem("PS2 beam"))
+        {
+            MioPan_RendererSetFlashlightBeam(0.0f, 0.0f);
+        }
     }
-    if (ImGui::MenuItem("PS2 beam"))
+    if (model_changed)
     {
-        MioPan_RendererSetFlashlightBeam(0.0f, 0.0f);
+        MioPan_RendererSetFlashlightModel(lit ? 1 : 0, brightness, width,
+                                          beam_spill);
     }
     ImGui::TextDisabled("Per-pixel lighting only: a Fragment mode,\n"
                         "or ray-traced shadows on.");
