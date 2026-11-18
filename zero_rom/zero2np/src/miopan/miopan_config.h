@@ -96,6 +96,9 @@ typedef struct MioPan_ConfigRenderer
     /* Hold the game while the window is in the background.  See the block
      * above MioPan_RendererSetMuteInBackground(). */
     int   pause_in_background;   /* 0 off, 1 on                              */
+    /* The graphics API, taken when the device is created.  See the block
+     * above MioPan_RendererSetGpuBackend(). */
+    int   gpu_backend;           /* MIOPAN_GPU_BACKEND_*                     */
 } MioPan_ConfigRenderer;
 
 /*
@@ -303,6 +306,12 @@ extern MioPan_Config miopan_config;
  * MioPan_ConfigSetDataFolder() does, and returns non-zero once it is on disk. */
 int MioPan_ConfigDebugMenuEnabled(void);
 int MioPan_ConfigSetDebugMenuEnabled(int enabled);
+
+/* [gpu] backend.  Hands the choice to the renderer, which keeps it for the
+ * next start, and persists at once: nothing changes until MioPan is started
+ * again, so quitting straight after choosing must not lose it.  Returns
+ * non-zero once it is on disk. */
+int MioPan_ConfigSetGpuBackend(int backend);
 
 /* Absolute path of the settings file, or NULL if the user directory could not be
  * created. */

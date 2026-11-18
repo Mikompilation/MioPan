@@ -2932,6 +2932,34 @@ SDL_GPUPresentMode g_present_mode = SDL_GPU_PRESENTMODE_VSYNC;
  * next vsync change, so asking again is how to retry it. */
 int g_present_mode_refused = -1;
 
+/* The player's MIOPAN_GPU_BACKEND_* choice, read once by EnsureRenderer() as
+ * it creates the device; see MioPan_RendererSetGpuBackend().  The probe
+ * cache is per backend: 0 not asked yet, 1 starts here, -1 does not. */
+int g_gpu_backend = MIOPAN_GPU_BACKEND_AUTO;
+int g_gpu_backend_probe[MIOPAN_GPU_BACKEND_COUNT];
+/* g_gpu_backend as it stood when the device was created, or -1 before. */
+int g_gpu_backend_at_start = -1;
+
+/* SDL's driver name for each MIOPAN_GPU_BACKEND_*, and the one the UI shows.
+ * AUTO has no driver name: a null one is SDL's "pick for me". */
+struct GpuBackendInfo
+{
+    const char *driver;
+    const char *label;
+};
+const GpuBackendInfo kGpuBackends[MIOPAN_GPU_BACKEND_COUNT] = {
+    {nullptr, "Auto"},
+    {"vulkan", "Vulkan"},
+    {"direct3d12", "Direct3D 12"},
+    {"metal", "Metal"},
+};
+
+/* Every shader format resources/shaders ships, which is what the device is
+ * asked for and what a backend probe is asked about. */
+constexpr SDL_GPUShaderFormat kDeviceShaderFormats =
+    SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL |
+    SDL_GPU_SHADERFORMAT_MSL;
+
 /* The background behaviours, and what the window was doing at the last pump.
  * g_background_muted is what was last handed to the voice engine, so the
  * mute is only pushed when it changes. */
@@ -9583,9 +9611,10 @@ void LogRendererBanner()
     SDL_GetWindowSize(g_window, &window_w, &window_h);
     SDL_GetWindowSizeInPixels(g_window, &pixel_w, &pixel_h);
 
-    SDL_Log("MioPan gpu: %s on %s%s%s",
+    SDL_Log("MioPan gpu: %s on %s%s%s (backend setting %s)",
             SDL_GetGPUDeviceDriver(g_device), adapter,
-            driver_version[0] != '\0' ? ", driver " : "", driver_version);
+            driver_version[0] != '\0' ? ", driver " : "", driver_version,
+            MioPan_RendererGpuBackendName(g_gpu_backend));
     SDL_Log("MioPan gpu: swapchain %s %s, present %s, scene %s",
             ColorFormatName(g_swapchain_format),
             HdrCompositionName(g_hdr_composition),
@@ -9649,10 +9678,27 @@ bool EnsureRenderer()
      * final size rather than at the windowed one and immediately resized. */
     ApplyWindowMode();
 
-    SDL_GPUShaderFormat formats = SDL_GPU_SHADERFORMAT_SPIRV |
-                                  SDL_GPU_SHADERFORMAT_DXIL |
-                                  SDL_GPU_SHADERFORMAT_MSL;
-    g_device = SDL_CreateGPUDevice(formats, false, nullptr);
+    /* The player's backend, else SDL's choice.  A named driver that will not
+     * start returns no device rather than another driver, so the fallback is
+     * here: a backend the machine has since lost -- a driver update, a moved
+     * install -- must cost the setting, not the window. */
+    g_gpu_backend_at_start = g_gpu_backend;
+    const char *driver = kGpuBackends[g_gpu_backend].driver;
+    if (driver != nullptr)
+    {
+        g_device = SDL_CreateGPUDevice(kDeviceShaderFormats, false, driver);
+        if (g_device == nullptr)
+        {
+            SDL_Log("MioPan SDL_GPU: %s backend did not start (%s); letting "
+                    "SDL choose",
+                    kGpuBackends[g_gpu_backend].label, SDL_GetError());
+            g_gpu_backend_probe[g_gpu_backend] = -1;
+        }
+    }
+    if (g_device == nullptr)
+    {
+        g_device = SDL_CreateGPUDevice(kDeviceShaderFormats, false, nullptr);
+    }
     if (g_device == nullptr)
     {
         LogSdlError("SDL_CreateGPUDevice");
@@ -17474,6 +17520,87 @@ int MioPan_RendererGetVsyncActive(void)
     default:
         return MIOPAN_VSYNC_ON;
     }
+}
+
+void MioPan_RendererSetGpuBackend(int backend)
+{
+    g_gpu_backend = (backend > MIOPAN_GPU_BACKEND_AUTO &&
+                     backend < MIOPAN_GPU_BACKEND_COUNT)
+                        ? backend
+                        : MIOPAN_GPU_BACKEND_AUTO;
+}
+
+int MioPan_RendererGetGpuBackend(void)
+{
+    return g_gpu_backend;
+}
+
+int MioPan_RendererGetGpuBackendActive(void)
+{
+    if (g_device == nullptr)
+    {
+        return MIOPAN_GPU_BACKEND_AUTO;
+    }
+    const char *driver = SDL_GetGPUDeviceDriver(g_device);
+    for (int i = MIOPAN_GPU_BACKEND_AUTO + 1; i < MIOPAN_GPU_BACKEND_COUNT; i++)
+    {
+        if (driver != nullptr && SDL_strcmp(driver, kGpuBackends[i].driver) == 0)
+        {
+            return i;
+        }
+    }
+    return MIOPAN_GPU_BACKEND_AUTO;
+}
+
+int MioPan_RendererGpuBackendAvailable(int backend)
+{
+    if (backend <= MIOPAN_GPU_BACKEND_AUTO || backend >= MIOPAN_GPU_BACKEND_COUNT)
+    {
+        return backend == MIOPAN_GPU_BACKEND_AUTO ? 1 : 0;
+    }
+    if (backend == MioPan_RendererGetGpuBackendActive())
+    {
+        return 1;
+    }
+
+    /* Probed rather than looked up: SDL lists every driver it was built with,
+     * and Vulkan on a machine without a Vulkan driver is in that list.  The
+     * probe starts the API and stops it again -- an instance, or a device --
+     * which takes a moment, so it is done once, on the first ask, and only for
+     * the backends not already running. */
+    int &probe = g_gpu_backend_probe[backend];
+    if (probe == 0)
+    {
+        /* SDL can only probe with its video subsystem up; asked any earlier,
+         * say no without remembering it. */
+        if (SDL_WasInit(SDL_INIT_VIDEO) == 0)
+        {
+            return 0;
+        }
+        probe = SDL_GPUSupportsShaderFormats(kDeviceShaderFormats,
+                                             kGpuBackends[backend].driver)
+                    ? 1
+                    : -1;
+        SDL_Log("MioPan SDL_GPU: %s backend %s", kGpuBackends[backend].label,
+                probe > 0 ? "available" : "not available here");
+    }
+    return probe > 0 ? 1 : 0;
+}
+
+int MioPan_RendererGpuBackendRestartPending(void)
+{
+    return g_gpu_backend_at_start >= 0 && g_gpu_backend != g_gpu_backend_at_start
+               ? 1
+               : 0;
+}
+
+const char *MioPan_RendererGpuBackendName(int backend)
+{
+    if (backend < 0 || backend >= MIOPAN_GPU_BACKEND_COUNT)
+    {
+        backend = MIOPAN_GPU_BACKEND_AUTO;
+    }
+    return kGpuBackends[backend].label;
 }
 
 void MioPan_RendererSetMuteInBackground(int enable)

@@ -128,6 +128,9 @@ MioPan_Config miopan_config = {
         /* Off: a game that stops by itself is a surprise the first time,
          * however welcome after that.  Mute is the gentler default. */
         /* .pause_in_background = */ 0,
+        /* Auto: SDL's own choice, which is what every build before this
+         * setting ran. */
+        /* .gpu_backend       = */ MIOPAN_GPU_BACKEND_AUTO,
     },
     /* .audio = */ {
         /* .volume            = */ 1.0f,
@@ -466,6 +469,18 @@ const EnumName kVsyncModes[] = {
     {"vsync", MIOPAN_VSYNC_ON},
     {"fifo", MIOPAN_VSYNC_ON},
     {"immediate", MIOPAN_VSYNC_OFF},
+    {nullptr, 0},
+};
+
+/* SDL's own driver names, so SDL_GPU_DRIVER and this key take the same text. */
+const EnumName kGpuBackendNames[] = {
+    {"auto", MIOPAN_GPU_BACKEND_AUTO},
+    {"vulkan", MIOPAN_GPU_BACKEND_VULKAN},
+    {"direct3d12", MIOPAN_GPU_BACKEND_D3D12},
+    {"metal", MIOPAN_GPU_BACKEND_METAL},
+    /* Accepted on read, never written: what someone would type by hand. */
+    {"d3d12", MIOPAN_GPU_BACKEND_D3D12},
+    {"dx12", MIOPAN_GPU_BACKEND_D3D12},
     {nullptr, 0},
 };
 
@@ -1834,6 +1849,7 @@ static void ConfigLoadOnce(void)
     ReadInt("window", "height", &r->window_height);
     ReadEnum("window", "vsync", kVsyncModes, &r->vsync);
     ReadInt("window", "pause_in_background", &r->pause_in_background);
+    ReadEnum("gpu", "backend", kGpuBackendNames, &r->gpu_backend);
     ReadFloat("audio", "volume", &miopan_config.audio.volume);
     ReadInt("audio", "mute_in_background",
             &miopan_config.audio.mute_in_background);
@@ -2019,6 +2035,15 @@ int MioPan_ConfigSave(void)
         "; Hold the game while the window is minimised or in the background\n"
         ";   -- audio, movies and all -- until it is brought back.  0 off, 1 on.\n"
         "pause_in_background = %d\n"
+        "\n"
+        "[gpu]\n"
+        "; The graphics API: auto | vulkan | direct3d12 | metal.  auto is\n"
+        ";   SDL's choice -- Metal, then Direct3D 12, then Vulkan, whichever\n"
+        ";   starts first.  Taken at startup, so a change applies the next\n"
+        ";   time MioPan starts; one that will not start here falls back to\n"
+        ";   auto, with a line in the log.  SDL_GPU_DRIVER overrides it for\n"
+        ";   one run.\n"
+        "backend = %s\n"
         "\n"
         "[audio]\n"
         "; Master volume, 0..1, applied to everything the game plays, movies\n"
@@ -2246,6 +2271,7 @@ int MioPan_ConfigSave(void)
         r->window_height,
         EnumToName(kVsyncModes, r->vsync),
         r->pause_in_background,
+        EnumToName(kGpuBackendNames, r->gpu_backend),
         (double)miopan_config.audio.volume,
         miopan_config.audio.mute_in_background,
         miopan_config.audio.japanese_voices,
@@ -2368,6 +2394,16 @@ int MioPan_ConfigSetDebugMenuEnabled(int enabled)
      * not a slider the debounce in miopan_ui.cpp exists to coalesce, and that
      * debounce only watches the renderer, audio and ui structs anyway. */
     return MioPan_ConfigSave();
+}
+
+int MioPan_ConfigSetGpuBackend(int backend)
+{
+    /* Through the renderer, whose setter is the one clamp, and then captured
+     * with everything else: the debounced save in miopan_ui.cpp would get to
+     * it too, but SDL_EVENT_QUIT exits without waiting for that, and this
+     * setting has no effect at all before the next start. */
+    MioPan_RendererSetGpuBackend(backend);
+    return MioPan_ConfigCaptureAndSave();
 }
 
 void MioPan_ConfigTitleSceneDefault(MioPan_ConfigTitleScene *scene)
@@ -2493,6 +2529,9 @@ void MioPan_ConfigApply(void)
     /* Before the device exists, like the HDR mode, so the swapchain is
      * created in the right present mode rather than switched into it. */
     MioPan_RendererSetVsync(vsync);
+    /* Likewise before the device: it is the device.  After that the renderer
+     * only holds it for the next start. */
+    MioPan_RendererSetGpuBackend(r->gpu_backend);
     MioPan_RendererSetPauseInBackground(r->pause_in_background);
     MioPan_RendererSetMuteInBackground(miopan_config.audio.mute_in_background);
     MioPan_UndubSetEnabled(miopan_config.audio.japanese_voices);
@@ -2541,6 +2580,8 @@ void MioPan_ConfigCapture(void)
     /* The requested mode, not the granted one, for the same reason as MSAA:
      * a driver without MAILBOX must not rewrite the player's choice. */
     r->vsync = MioPan_RendererGetVsync();
+    /* The choice, not the running backend: a fallback must not overwrite it. */
+    r->gpu_backend = MioPan_RendererGetGpuBackend();
     r->pause_in_background = MioPan_RendererGetPauseInBackground();
 
     miopan_config.audio.volume = MioPan_VoiceGetOutputVolume();

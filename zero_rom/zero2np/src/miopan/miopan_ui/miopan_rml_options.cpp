@@ -438,6 +438,35 @@ std::string HdrHelp()
     return text;
 }
 
+/* What the Graphics backend row steps through: Auto, every backend that
+ * starts on this machine, and the one chosen even when it does not, so the
+ * row never shows something other than what miopan.ini says. */
+std::vector<int> GpuBackendChoices()
+{
+    std::vector<int> list{MIOPAN_GPU_BACKEND_AUTO};
+    const int chosen = MioPan_RendererGetGpuBackend();
+    for (int backend = MIOPAN_GPU_BACKEND_AUTO + 1;
+         backend < MIOPAN_GPU_BACKEND_COUNT; backend++)
+    {
+        if (backend == chosen || MioPan_RendererGpuBackendAvailable(backend) != 0)
+        {
+            list.push_back(backend);
+        }
+    }
+    return list;
+}
+
+std::string GpuBackendHelp()
+{
+    std::string text = "The graphics API the game is drawn with; Auto lets SDL "
+                       "choose. Applies the next time MioPan starts. Running ";
+    text += MioPan_RendererGpuBackendName(MioPan_RendererGetGpuBackendActive());
+    text += MioPan_RendererGpuBackendRestartPending() != 0
+                ? " now; restart to switch."
+                : ".";
+    return text;
+}
+
 Page DisplayPage()
 {
     Page page{"display", "Display", {}};
@@ -469,6 +498,43 @@ Page DisplayPage()
                 return 0;
             },
             [](int index) { MioPan_RendererSetVsync(kModes[index]); }));
+    }
+    {
+        Row backend = Choice("Graphics backend", GpuBackendHelp, {},
+                             [] {
+                                 const std::vector<int> list = GpuBackendChoices();
+                                 const int chosen = MioPan_RendererGetGpuBackend();
+                                 for (int i = 0; i < (int)list.size(); i++)
+                                 {
+                                     if (list[i] == chosen)
+                                     {
+                                         return i;
+                                     }
+                                 }
+                                 return 0;
+                             },
+                             [](int index) {
+                                 const std::vector<int> list = GpuBackendChoices();
+                                 if (index >= 0 && index < (int)list.size())
+                                 {
+                                     MioPan_ConfigSetGpuBackend(list[index]);
+                                 }
+                             });
+        backend.count_of = [] { return (int)GpuBackendChoices().size(); };
+        backend.name_of = [](int index) -> std::string {
+            const std::vector<int> list = GpuBackendChoices();
+            if (index < 0 || index >= (int)list.size())
+            {
+                return "";
+            }
+            std::string name = MioPan_RendererGpuBackendName(list[index]);
+            if (MioPan_RendererGpuBackendAvailable(list[index]) == 0)
+            {
+                name += " (unavailable)";
+            }
+            return name;
+        };
+        rows.push_back(std::move(backend));
     }
     rows.push_back(Choice(
         "Aspect ratio",
