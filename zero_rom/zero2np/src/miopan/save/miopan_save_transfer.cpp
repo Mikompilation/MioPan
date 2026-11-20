@@ -2,6 +2,9 @@
 #include "miopan/io/miopan_paths.h"
 #include "miopan_memory_card.h"
 #include "miopan_save_paths.h"
+#include "miopan/io/miopan_fileload.h"
+#include "system/eeiop/cddat.h"
+#include "system/mc/prg/mc_set_data.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -109,8 +112,46 @@ Bytes ConvertSystem(Bytes data, SaveVersion version)
 Folder Fresh(const Folder &source, bool ps2, SaveRegion region)
 {
     Folder out;
-    for (auto name : {"Zero2System", "icon.sys", Icon})
-        out.files[name] = source.files.at(name);
+    out.files["Zero2System"] = source.files.at("Zero2System");
+    const auto descriptor = source.files.find("icon.sys");
+    if (descriptor != source.files.end() && descriptor->second.size() == 964
+        && std::memcmp(descriptor->second.data(), "PS2D", 4) == 0)
+        out.files["icon.sys"] = descriptor->second;
+    else
+    {
+        const auto icon = MemoryCardSetIconSysData(0);
+        const auto *data = reinterpret_cast<const uint8_t *>(&icon);
+        out.files["icon.sys"] = Bytes(data, data + sizeof(icon));
+    }
+    const auto model = source.files.find(Icon);
+    if (model != source.files.end() && !model->second.empty())
+        out.files[Icon] = model->second;
+    else
+    {
+        const int file = GetIconDataLabel(0, 0);
+        if (file < 0 || file >= GetFileNum())
+            throw std::runtime_error("PS2 browser icon asset is unavailable.");
+        const unsigned size = GetFileSize(file);
+        if (!size || size > 1024 * 1024)
+            throw std::runtime_error("Invalid PS2 browser icon asset size.");
+        char path[256];
+        GetFileNameBuffer(file, path);
+        MioPan_FileLoadReq request{};
+        request.request_size = int(cddatIsCmpFile(file) ? GetFileCmpSize(file) : size);
+        request.start_sector = GetFileStartSector(file);
+        request.cmp_file_name = path;
+        request.raw_file_name = path;
+        request.raw_size = size;
+        request.wrk_size = request.request_size;
+        request.is_cmp = cddatIsCmpFile(file);
+        request.file_no = file;
+        Bytes data(size);
+        int read = 0;
+        if (!MioPan_FileLoadReadData(&request, data.data(), &read)
+            || read != request.request_size)
+            throw std::runtime_error("Cannot read PS2 browser icon from the game assets.");
+        out.files[Icon] = std::move(data);
+    }
     out.region = region;
     out.files[RegionFolder(region)] = Bytes(HeadSize, 0);
     Seal(out.files[RegionFolder(region)]);
@@ -162,7 +203,7 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
         for (auto candidate : {SaveRegion::EU, SaveRegion::US, SaveRegion::JP})
             if (files.count(RegionFolder(candidate))) { region = candidate; ++regions; }
         if (regions != 1) throw std::runtime_error("Choose a save with one supported FF2 region.");
-        for (auto name : {RegionFolder(region), "Zero2System", "icon.sys", Icon})
+        for (auto name : {RegionFolder(region), "Zero2System"})
             if (!files.count(name))
                 throw std::runtime_error(std::string("Missing game file: ") + name);
         Folder result;
@@ -170,7 +211,6 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
         result.region = region;
         const auto &head = result.files.at(RegionFolder(region));
         const auto &sys = result.files.at("Zero2System");
-        const auto &icon = result.files.at("icon.sys");
         if (head.size() != HeadSize || !Checksum(head))
             throw std::runtime_error("Invalid FF2 save header or checksum.");
         if ((sys.size() != 44 && sys.size() != 48) || (region != SaveRegion::EU && sys.size() != 44))
@@ -189,9 +229,15 @@ bool InspectFiles(const SaveFiles &files, bool native_allowed, Folder &folder, s
                     Validate(files.at(Name(i)), detail, SaveVersion::Retail))
                     result.version = SaveVersion::Retail;
         }
-        if (icon.size() != 964 || std::memcmp(icon.data(), "PS2D", 4) != 0 ||
-            result.files.at(Icon).empty())
-            throw std::runtime_error("Missing or invalid PS2 save icons.");
+        if (!native_allowed)
+        {
+            if (!files.count("icon.sys") || !files.count(Icon))
+                throw std::runtime_error("Missing PS2 save icons.");
+            const auto &icon = files.at("icon.sys");
+            if (icon.size() != 964 || std::memcmp(icon.data(), "PS2D", 4) != 0 ||
+                result.files.at(Icon).empty())
+                throw std::runtime_error("Missing or invalid PS2 save icons.");
+        }
         for (int i = 0; i < 5; ++i)
         {
             auto &slot = result.slots[i];
